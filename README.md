@@ -27,7 +27,7 @@ Use `--verbose` when you want startup and runtime-selection diagnostics on stder
 
 Streaming is enabled by default. While streaming, response text chunks stream on stdout. Diagnostics such as `warning: ...`, `error: ...`, `reasoning: ...`, and `tool: ...` are printed to stderr only when `--verbose` is set. There is no `data: [DONE]` marker. Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.
 
-Runtime settings can be supplied on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
+Runtime settings can be supplied on the command line or through environment defaults. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
 
 ### Agent Files
 
@@ -54,7 +54,7 @@ Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL
 The CLI parser accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
 Provider credentials still come from environment variables.
-Precedence is: command-line flags, then `LLM_PROVIDER` and `LLM_MODEL`.
+Precedence is: command-line flags, then `LLM_*` environment defaults.
 
 Set runtime environment variables before running the CLI:
 
@@ -62,6 +62,13 @@ Use `./.env.example` as a template for local setup.
 
 - `LLM_PROVIDER` defaults to `openai`
 - `LLM_MODEL` defaults to `gpt-5` for `openai` and is required for other providers unless provider-specific defaults apply
+- `LLM_TEMPERATURE` sets the request temperature
+- `LLM_MAX_TOKENS` sets the max output tokens per turn
+- `LLM_TOOL_PERMISSION` sets the default tool mode: `auto`, `ask`, or `read`
+- `LLM_REASONING_EFFORT` sets the reasoning level: `default`, `none`, `low`, `medium`, or `high`
+- `LLM_PAST_MESSAGES` sets how many persisted messages are loaded as history
+- `LLM_STREAM_TRACE` controls whether stream trace events are persisted: `true` or `false`
+- `LLM_WEB_SEARCH` enables or configures web search: `true`, `false`, `low`, `medium`, or `high`
 - Provider credentials depend on `LLM_PROVIDER`
 
 Supported provider env vars:
@@ -72,7 +79,7 @@ Supported provider env vars:
 - `xai`: `XAI_API_KEY`
 - `openai-compatible`: `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL`
 - `ollama`: `OLLAMA_BASE_URL`
-- `azure`: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_RESOURCE_NAME`, `AZURE_OPENAI_DEPLOYMENT_NAME` (or legacy `AZURE_OPENAI_DEPLOYMENT`), optional `AZURE_OPENAI_API_VERSION`
+- `azure`: `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_RESOURCE_NAME`, `AZURE_OPENAI_DEPLOYMENT_NAME`, optional `AZURE_OPENAI_API_VERSION`
 
 ### Tests
 

@@ -33,6 +33,13 @@ const rootsToClean = [];
 const CLI_ENVIRONMENT_KEYS = [
   'LLM_PROVIDER',
   'LLM_MODEL',
+  'LLM_TEMPERATURE',
+  'LLM_MAX_TOKENS',
+  'LLM_TOOL_PERMISSION',
+  'LLM_REASONING_EFFORT',
+  'LLM_PAST_MESSAGES',
+  'LLM_STREAM_TRACE',
+  'LLM_WEB_SEARCH',
   'GOOGLE_API_KEY',
   'OPENAI_API_KEY',
   'AGENT_CLI_ROOT',
@@ -189,6 +196,60 @@ describe('agent-cli entrypoint', () => {
     });
   });
 
+  it('loads runtime defaults from environment and lets CLI flags override them', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+
+    process.env.LLM_PROVIDER = 'openai';
+    process.env.LLM_MODEL = 'gpt-5';
+    process.env.LLM_TEMPERATURE = '0.4';
+    process.env.LLM_MAX_TOKENS = '1024';
+    process.env.LLM_TOOL_PERMISSION = 'ask';
+    process.env.LLM_REASONING_EFFORT = 'medium';
+    process.env.LLM_PAST_MESSAGES = '3';
+    process.env.LLM_STREAM_TRACE = 'true';
+    process.env.LLM_WEB_SEARCH = 'low';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockResolvedValue({
+      assistantText: 'ok',
+      messages: [
+        { role: 'user', content: 'Inspect status' },
+        { role: 'assistant', content: 'ok' },
+      ],
+      streamEvents: [],
+    });
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn,
+      validateRuntimeEnvironment: vi.fn(() => ({
+        provider: 'openai',
+        model: 'gpt-5',
+        providers: { openai: { apiKey: 'test-openai-key' } },
+      })),
+    });
+
+    await main(['--temperature', '0.1', 'Inspect', 'status'], createIoCapture());
+
+    expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+        temperature: 0.1,
+        maxTokens: 1024,
+        toolPermission: 'ask',
+        reasoningEffort: 'medium',
+        pastMessages: 3,
+        streamTrace: true,
+        webSearch: {
+          searchContextSize: 'low',
+        },
+      },
+    }));
+  });
+
   it('treats a symlinked bin path as the CLI entrypoint', async () => {
     const { isCliEntrypoint } = await loadCliModule();
     const cliPath = fileURLToPath(new URL('../../bin/agent-cli.js', import.meta.url));
@@ -223,6 +284,35 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain('Missing user message.');
     expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('prints help even when environment runtime defaults are malformed', async () => {
+    process.env.LLM_MAX_TOKENS = 'not-a-number';
+
+    const { main } = await loadCliModule();
+    const io = createIoCapture();
+
+    await expect(main(['--help'], io)).resolves.toBeNull();
+    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+  });
+
+  it('reports missing messages before validating malformed environment runtime defaults', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    process.env.LLM_MAX_TOKENS = 'not-a-number';
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli([], io);
+
+    expect(io.getStderr()).toContain('Missing user message.');
+    expect(io.getStderr()).not.toContain('Invalid agent config value for maxTokens');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;

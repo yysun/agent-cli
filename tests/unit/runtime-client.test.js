@@ -67,7 +67,6 @@ afterEach(async () => {
   delete process.env.AZURE_OPENAI_API_KEY;
   delete process.env.AZURE_OPENAI_RESOURCE_NAME;
   delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
-  delete process.env.AZURE_OPENAI_DEPLOYMENT;
 
   while (rootsToClean.length > 0) {
     await removeTestRoot(rootsToClean.pop());
@@ -95,7 +94,6 @@ describe('runtime-client', () => {
     process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
     process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'test-deployment';
-    delete process.env.AZURE_OPENAI_DEPLOYMENT;
 
     const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
     const runtimeSettings = validateRuntimeEnvironment();
@@ -122,7 +120,6 @@ describe('runtime-client', () => {
     process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
     process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'test-deployment';
-    delete process.env.AZURE_OPENAI_DEPLOYMENT;
 
     const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
     const runtimeSettings = validateRuntimeEnvironment();
@@ -150,6 +147,21 @@ describe('runtime-client', () => {
       provider: 'openai',
       model: 'gpt-5-mini',
     });
+  });
+
+  it('fails when azure deployment name is missing', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    process.env.LLM_PROVIDER = 'azure';
+    process.env.LLM_MODEL = 'gpt-5.4';
+    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
+    process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
+    delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+
+    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+
+    expect(() => validateRuntimeEnvironment()).toThrow('Missing environment variable: AZURE_OPENAI_DEPLOYMENT_NAME');
   });
 
   it('uses agent config provider and model when environment values are absent', async () => {

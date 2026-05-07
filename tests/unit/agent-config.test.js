@@ -71,6 +71,32 @@ describe('agent-config', () => {
     });
   });
 
+  it('normalizes environment-style runtime settings', () => {
+    expect(normalizeAgentConfig({
+      LLM_PROVIDER: 'google',
+      LLM_MODEL: 'gemini-2.5-pro',
+      LLM_TEMPERATURE: '0.2',
+      LLM_MAX_TOKENS: '3072',
+      LLM_TOOL_PERMISSION: 'read',
+      LLM_REASONING_EFFORT: 'low',
+      LLM_PAST_MESSAGES: '9',
+      LLM_STREAM_TRACE: 'true',
+      LLM_WEB_SEARCH: 'medium',
+    })).toEqual({
+      provider: 'google',
+      model: 'gemini-2.5-pro',
+      temperature: 0.2,
+      maxTokens: 3072,
+      toolPermission: 'read',
+      reasoningEffort: 'low',
+      pastMessages: 9,
+      streamTrace: true,
+      webSearch: {
+        searchContextSize: 'medium',
+      },
+    });
+  });
+
   it('fails clearly for invalid enum values', () => {
     expect(() => normalizeAgentConfig({
       permissions: 'write',
@@ -81,5 +107,11 @@ describe('agent-config', () => {
     expect(() => normalizeAgentConfig({
       streamTrace: 'maybe',
     })).toThrow('Invalid agent config value for streamTrace: expected true or false.');
+  });
+
+  it('fails clearly for invalid environment-style numeric values', () => {
+    expect(() => normalizeAgentConfig({
+      LLM_MAX_TOKENS: 'many',
+    })).toThrow('Invalid agent config value for maxTokens: expected a positive integer.');
   });
 });

@@ -310,7 +310,21 @@ export async function main(
   options = {},
 ) {
   const { help, newChat, runtimeOverrides, streamOff, verbose, message } = parseArguments(argv);
-  const baseAgentConfig = options.agentConfig ?? {};
+
+  if (help) {
+    io.stdout.write(`${usageText()}\n`);
+    return null;
+  }
+
+  if (!message) {
+    throw new Error(`Missing user message.\n\n${usageText()}`);
+  }
+
+  const environmentAgentConfig = normalizeAgentConfig(process.env);
+  const baseAgentConfig = {
+    ...environmentAgentConfig,
+    ...(options.agentConfig ?? {}),
+  };
   const agentConfig = {
     ...baseAgentConfig,
     ...runtimeOverrides,
@@ -322,15 +336,6 @@ export async function main(
   /** @type {string | null} */
   let lastStreamType = null;
   let wroteTextChunk = false;
-
-  if (help) {
-    io.stdout.write(`${usageText()}\n`);
-    return null;
-  }
-
-  if (!message) {
-    throw new Error(`Missing user message.\n\n${usageText()}`);
-  }
 
   validateRuntimeEnvironment(process.env, agentConfig);
 
