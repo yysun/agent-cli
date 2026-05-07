@@ -57,8 +57,8 @@ Supported provider env vars:
 
 - `npm test`: syntax checks plus all Vitest suites
 - `npm run test:unit`: targeted module tests
-- `npm run test:e2e`: end-to-end CLI flows; live LLM-backed cases run only when `AGENT_CLI_ENABLE_LIVE_E2E=1`
+- `npm run test:e2e`: end-to-end CLI flows against a real LLM provider
 
 The repo now uses package-level ESM via `"type": "module"`, so local modules use `.js` files instead of `.mjs`.
 
-The e2e suite uses the same runtime validation path as the CLI. When `AGENT_CLI_ENABLE_LIVE_E2E=1` is set, it prefers the configured provider when that configuration is complete, otherwise it falls back to another available live provider for the test process when possible. Live LLM-backed tests are skipped when opt-in is disabled or when no usable provider configuration is available.
+The e2e suite uses the same runtime validation path as the CLI and always expects a usable live provider configuration. It prefers the configured provider when that configuration is complete; otherwise it falls back to another available live provider for the test process when possible. If no usable provider configuration is available, `npm run test:e2e` fails fast instead of skipping.

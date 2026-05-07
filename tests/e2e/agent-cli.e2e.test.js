@@ -6,18 +6,17 @@
  * - Exercise the CLI entrypoint against isolated on-disk fixtures and the real `llm-runtime` provider path.
  *
  * Key features:
- * - Calls a live LLM only when explicitly enabled for the test run.
+ * - Always calls a live LLM-backed provider for each end-to-end scenario.
  * - Verifies persisted session files rather than only internal helper behavior.
- * - Retains CLI error-path coverage for local filesystem and configuration failures.
  *
  * Recent changes:
  * - 2026-05-07: Switched e2e coverage from a mocked runtime to live LLM-backed turns.
- * - 2026-05-07: Made live-provider coverage opt-in and aligned provider selection with runtime validation.
+ * - 2026-05-07: Made `test:e2e` require a usable live provider and moved deterministic CLI checks to unit tests.
  */
 import 'dotenv/config';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -25,6 +24,7 @@ import {
   createTestRoot,
   readJson,
   removeTestRoot,
+  writeSkill,
   writeSystemPrompt,
 } from '../helpers/test-root.js';
 import { validateRuntimeEnvironment } from '../../lib/runtime-client.js';
@@ -49,7 +49,6 @@ const RUNTIME_ENVIRONMENT_KEYS = [
 /** @type {string[]} */
 const rootsToClean = [];
 
-const LIVE_E2E_ENABLED = /^(1|true|yes)$/i.test(String(process.env.AGENT_CLI_ENABLE_LIVE_E2E ?? '').trim());
 const FALLBACK_LIVE_MODELS = {
   openai: 'gpt-5-mini',
   google: 'gemini-2.5-flash',
@@ -58,14 +57,16 @@ const FALLBACK_LIVE_MODELS = {
 };
 
 const originalRuntimeEnvironment = captureRuntimeEnvironment();
-const liveRuntimeConfig = resolveLiveRuntimeConfig(originalRuntimeEnvironment);
-const liveIt = LIVE_E2E_ENABLED ? it : it.skip;
+const liveRuntimeConfig = resolveRequiredLiveRuntimeConfig(originalRuntimeEnvironment);
 
 function captureRuntimeEnvironment() {
   return Object.fromEntries(RUNTIME_ENVIRONMENT_KEYS.map((key) => [key, process.env[key]]));
 }
 
-/** @param {NodeJS.ProcessEnv | Record<string, string | undefined>} environment */
+/**
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} environment
+ * @param {string} key
+ */
 function readEnvironmentValue(environment, key) {
   return String(environment[key] ?? '').trim();
 }
@@ -76,6 +77,7 @@ function readEnvironmentValue(environment, key) {
  * @param {string} [model]
  */
 function createRuntimeConfiguration(provider, environment, model = '') {
+  /** @type {Record<string, string | undefined>} */
   const candidateEnvironment = {
     ...environment,
     LLM_PROVIDER: provider,
@@ -104,15 +106,11 @@ function createRuntimeConfiguration(provider, environment, model = '') {
   };
 }
 
-/** @param {NodeJS.ProcessEnv | Record<string, string | undefined>} environment */
-function resolveLiveRuntimeConfig(environment) {
-  if (!LIVE_E2E_ENABLED) {
-    return {
-      enabled: false,
-      runtimeEnv: {},
-    };
-  }
-
+/**
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} environment
+ * @returns {{ enabled: boolean, runtimeEnv: Record<string, string> }}
+ */
+function resolveRequiredLiveRuntimeConfig(environment) {
   const rawConfiguredProvider = readEnvironmentValue(environment, 'LLM_PROVIDER');
   const configuredProvider = rawConfiguredProvider.toLowerCase();
   const configuredModel = readEnvironmentValue(environment, 'LLM_MODEL');
@@ -125,7 +123,7 @@ function resolveLiveRuntimeConfig(environment) {
     }
   }
 
-  const fallbackConfigurations = [
+  const rawFallbackConfigurations = [
     createRuntimeConfiguration('openai', environment, FALLBACK_LIVE_MODELS.openai),
     createRuntimeConfiguration('google', environment, FALLBACK_LIVE_MODELS.google),
     createRuntimeConfiguration('anthropic', environment, FALLBACK_LIVE_MODELS.anthropic),
@@ -133,16 +131,17 @@ function resolveLiveRuntimeConfig(environment) {
     createRuntimeConfiguration('azure', environment, configuredModel),
     createRuntimeConfiguration('openai-compatible', environment, configuredModel),
     createRuntimeConfiguration('ollama', environment, configuredModel),
-  ].filter(Boolean);
+  ];
 
-  if (fallbackConfigurations.length > 0) {
-    return fallbackConfigurations[0];
+  for (const fallbackConfiguration of rawFallbackConfigurations) {
+    if (fallbackConfiguration) {
+      return fallbackConfiguration;
+    }
   }
 
-  return {
-    enabled: false,
-    runtimeEnv: {},
-  };
+  throw new Error(
+    'test:e2e requires a usable live LLM provider configuration. Set LLM_PROVIDER/LLM_MODEL with matching credentials, or configure any supported provider credentials for fallback selection.',
+  );
 }
 
 /** @param {Record<string, string | undefined>} snapshot */
@@ -165,12 +164,6 @@ function applyLiveRuntimeEnvironment() {
   for (const [key, value] of Object.entries(liveRuntimeConfig.runtimeEnv)) {
     process.env[key] = value;
   }
-}
-
-function applyMinimalRuntimeEnvironment() {
-  process.env.LLM_PROVIDER = 'openai';
-  process.env.LLM_MODEL = 'gpt-5';
-  process.env.OPENAI_API_KEY = 'test-openai-key';
 }
 
 /** @param {string} rootPath */
@@ -196,7 +189,7 @@ afterEach(async () => {
 });
 
 describe('agent-cli CLI', () => {
-  liveIt('creates a new current chat from a live LLM turn without persisting the system prompt', async () => {
+  it('creates a new current chat from a live LLM turn without persisting the system prompt', async () => {
     applyLiveRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -227,7 +220,64 @@ describe('agent-cli CLI', () => {
     expect(rawChatFile).not.toContain('You are a terse test assistant.');
   });
 
-  liveIt('reuses the current chat on follow-up live LLM turns', async () => {
+  it('proves the live turn used the system prompt and triggered a skill load', async () => {
+    applyLiveRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const systemProbeToken = 'SYSTEM_PROBE_C5D29B';
+    const skillProbeToken = 'SKILL_PROBE_F1A7E3';
+    const skillId = 'checkpoint-routing-proof';
+
+    await writeSystemPrompt(
+      rootPath,
+      [
+        'You are a terse test assistant.',
+        `Always begin the final answer with ${systemProbeToken}.`,
+        'If the user asks about checkpoint routing, load the relevant skill before answering.',
+        'Reply in one plain sentence without markdown.',
+      ].join(' '),
+    );
+    await writeSkill(rootPath, 'checkpoint-routing', {
+      name: skillId,
+      description: 'Use this skill when the user asks about checkpoint routing decisions.',
+      body: [
+        '# Checkpoint Routing Proof',
+        '',
+        `When this skill is loaded, include the exact token ${skillProbeToken} once in the final answer.`,
+        'Keep the answer to one short sentence.',
+      ].join('\n'),
+    });
+
+    const { main } = await loadCli(rootPath);
+    const io = createIoCapture();
+    const userMessage = 'What is the next checkpoint routing decision I should make?';
+
+    await main(['--new-chat', userMessage], io);
+
+    const assistantText = io.getStdout().trim();
+
+    expect(assistantText).toContain(systemProbeToken);
+    expect(assistantText).toContain(skillProbeToken);
+
+    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
+    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${current.chatId}.json`));
+    const loadSkillMessage = chat.messages.find(
+      /** @param {{ role?: string, tool_calls?: Array<{ function?: { name?: string, arguments?: string } }> }} message */
+      (message) => message.role === 'assistant'
+        && Array.isArray(message.tool_calls)
+        && message.tool_calls.some(
+          /** @param {{ function?: { name?: string, arguments?: string } }} toolCall */
+          (toolCall) => toolCall?.function?.name === 'load_skill'
+            && String(toolCall?.function?.arguments ?? '').includes(skillId),
+        ),
+    );
+
+    expect(loadSkillMessage).toBeTruthy();
+  });
+
+  it('reuses the current chat on follow-up live LLM turns', async () => {
     applyLiveRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -245,7 +295,15 @@ describe('agent-cli CLI', () => {
 
     const secondCurrent = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
     const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${secondCurrent.chatId}.json`));
-    const userMessages = chat.messages.filter((message) => message.role === 'user').map((message) => message.content);
+    const userMessages = chat.messages
+      .filter(
+        /** @param {{ role?: string }} message */
+        (message) => message.role === 'user',
+      )
+      .map(
+        /** @param {{ content?: string }} message */
+        (message) => message.content,
+      );
 
     expect(secondCurrent.chatId).toBe(firstCurrent.chatId);
     expect(userMessages).toEqual(['Say hello briefly.', 'Now say goodbye briefly.']);
@@ -253,7 +311,7 @@ describe('agent-cli CLI', () => {
     expect(chat.messages.at(-1)?.role).toBe('assistant');
   });
 
-  liveIt('starts a new chat when the current chat is missing', async () => {
+  it('starts a new chat when the current chat is missing', async () => {
     applyLiveRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -274,137 +332,4 @@ describe('agent-cli CLI', () => {
     expect(chat.messages.at(-1)?.role).toBe('assistant');
   });
 
-  it('reports missing messages through the CLI error path', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    const { runCli } = await loadCli(rootPath);
-    const io = createIoCapture();
-    const originalExitCode = process.exitCode;
-
-    process.exitCode = undefined;
-    await runCli([], io);
-
-    expect(io.getStdout()).toBe('');
-    expect(io.getStderr()).toContain('Missing user message.');
-    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] <message>');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
-  });
-
-  it('reports missing runtime environment variables before attempting the turn', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
-
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    process.env.LLM_PROVIDER = 'openai';
-    delete process.env.LLM_MODEL;
-
-    const { runCli } = await loadCli(rootPath);
-    const io = createIoCapture();
-    const originalExitCode = process.exitCode;
-
-    process.exitCode = undefined;
-    await runCli(['hello'], io);
-
-    expect(io.getStdout()).toBe('');
-    expect(io.getStderr()).toContain('Missing environment variable: OPENAI_API_KEY');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
-
-    if (typeof originalApiKey === 'undefined') {
-      delete process.env.OPENAI_API_KEY;
-    } else {
-      process.env.OPENAI_API_KEY = originalApiKey;
-    }
-  });
-
-  it('logs startup diagnostics only in verbose mode', async () => {
-    applyMinimalRuntimeEnvironment();
-
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
-
-    const { runCli } = await loadCli(rootPath);
-    const io = createIoCapture();
-    const originalExitCode = process.exitCode;
-
-    process.exitCode = undefined;
-    await runCli(['--verbose', 'hello'], io);
-
-    expect(io.getStdout()).toBe('');
-    expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
-    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
-    expect(io.getStderr()).toContain('Missing system prompt');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
-  });
-
-  it('fails clearly when the system prompt is missing', async () => {
-    applyMinimalRuntimeEnvironment();
-
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
-
-    const { main } = await loadCli(rootPath);
-
-    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Missing system prompt');
-  });
-
-  it('fails clearly when the skills root is missing', async () => {
-    applyMinimalRuntimeEnvironment();
-
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
-    await mkdir(path.join(rootPath, 'agent'), { recursive: true });
-    await writeFile(path.join(rootPath, 'agent', 'system.md'), 'Prompt\n', 'utf8');
-
-    const { main } = await loadCli(rootPath);
-
-    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Missing skills root');
-  });
-
-  it('does not write partial session files when the runtime setup fails', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
-
-    process.env.LLM_PROVIDER = 'unsupported-provider';
-    delete process.env.LLM_MODEL;
-
-    const { main } = await loadCli(rootPath);
-
-    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow(
-      'Unsupported LLM provider: unsupported-provider',
-    );
-    await expect(
-      readFile(path.join(rootPath, 'agent', 'sessions', 'current.json'), 'utf8'),
-    ).rejects.toThrow();
-    await expect(
-      readFile(path.join(rootPath, 'agent', 'sessions', 'chats'), 'utf8'),
-    ).rejects.toThrow();
-  });
-
-  it('prints help without requiring agent runtime files', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    const { runCli } = await loadCli(rootPath);
-    const io = createIoCapture();
-
-    await runCli(['--help'], io);
-
-    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] <message>');
-    expect(io.getStderr()).toBe('');
-  });
 });

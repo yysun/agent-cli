@@ -14,20 +14,73 @@
  * - 2026-05-07: Added flag coverage for the verbose CLI diagnostics mode.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import {
+  createIoCapture,
+  createTestRoot,
+  removeTestRoot,
+  writeSystemPrompt,
+} from '../helpers/test-root.js';
+
 /** @type {string[]} */
 const tempPathsToClean = [];
+/** @type {string[]} */
+const rootsToClean = [];
+const CLI_ENVIRONMENT_KEYS = [
+  'LLM_PROVIDER',
+  'LLM_MODEL',
+  'OPENAI_API_KEY',
+  'AGENT_CLI_ROOT',
+];
+const originalCliEnvironment = Object.fromEntries(CLI_ENVIRONMENT_KEYS.map((key) => [key, process.env[key]]));
 
-async function loadCliModule() {
+/** @param {Record<string, string | undefined>} snapshot */
+function restoreCliEnvironment(snapshot) {
+  for (const key of CLI_ENVIRONMENT_KEYS) {
+    const value = snapshot[key];
+
+    if (typeof value === 'undefined') {
+      delete process.env[key];
+      continue;
+    }
+
+    process.env[key] = value;
+  }
+}
+
+function applyMinimalRuntimeEnvironment() {
+  process.env.LLM_PROVIDER = 'openai';
+  process.env.LLM_MODEL = 'gpt-5';
+  process.env.OPENAI_API_KEY = 'test-openai-key';
+}
+
+/** @param {string} [rootPath] */
+async function loadCliModule(rootPath) {
+  if (rootPath) {
+    process.env.AGENT_CLI_ROOT = rootPath;
+  }
+
   vi.resetModules();
   return await import('../../bin/agent-cli.js');
 }
 
 afterEach(async () => {
+  restoreCliEnvironment(originalCliEnvironment);
+
+  while (rootsToClean.length > 0) {
+    const rootPath = rootsToClean.pop();
+
+    if (!rootPath) {
+      break;
+    }
+
+    await removeTestRoot(rootPath);
+  }
+
   while (tempPathsToClean.length > 0) {
     const tempPath = tempPathsToClean.pop();
 
@@ -81,5 +134,130 @@ describe('agent-cli entrypoint', () => {
     const otherPath = fileURLToPath(new URL('../../package.json', import.meta.url));
 
     expect(isCliEntrypoint(otherPath, pathToFileURL(cliPath).href)).toBe(false);
+  });
+
+  it('reports missing messages through the CLI error path', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli([], io);
+
+    expect(io.getStdout()).toBe('');
+    expect(io.getStderr()).toContain('Missing user message.');
+    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] <message>');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('reports missing runtime environment variables before attempting the turn', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+
+    delete process.env.OPENAI_API_KEY;
+    process.env.LLM_PROVIDER = 'openai';
+    delete process.env.LLM_MODEL;
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['hello'], io);
+
+    expect(io.getStdout()).toBe('');
+    expect(io.getStderr()).toContain('Missing environment variable: OPENAI_API_KEY');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('logs startup diagnostics only in verbose mode', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['--verbose', 'hello'], io);
+
+    expect(io.getStdout()).toBe('');
+    expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
+    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).toContain('Missing system prompt');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('fails clearly when the system prompt is missing', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+
+    const { main } = await loadCliModule(rootPath);
+
+    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Missing system prompt');
+  });
+
+  it('fails clearly when the skills root is missing', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath);
+
+    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Missing skills root');
+  });
+
+  it('does not write partial session files when the runtime setup fails', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+
+    process.env.LLM_PROVIDER = 'unsupported-provider';
+    delete process.env.LLM_MODEL;
+
+    const { main } = await loadCliModule(rootPath);
+
+    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow(
+      'Unsupported LLM provider: unsupported-provider',
+    );
+    await expect(
+      readFile(path.join(rootPath, 'agent', 'sessions', 'current.json'), 'utf8'),
+    ).rejects.toThrow();
+    await expect(
+      readFile(path.join(rootPath, 'agent', 'sessions', 'chats'), 'utf8'),
+    ).rejects.toThrow();
+  });
+
+  it('prints help without requiring agent runtime files', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+
+    await runCli(['--help'], io);
+
+    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] <message>');
+    expect(io.getStderr()).toBe('');
   });
 });
