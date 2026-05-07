@@ -23,6 +23,7 @@ import {
   createIoCapture,
   createTestRoot,
   removeTestRoot,
+  writeAgentConfig,
   writeSystemPrompt,
 } from '../helpers/test-root.js';
 
@@ -58,18 +59,39 @@ function applyMinimalRuntimeEnvironment() {
   process.env.OPENAI_API_KEY = 'test-openai-key';
 }
 
-/** @param {string} [rootPath] */
-async function loadCliModule(rootPath) {
+/**
+ * @param {string} [rootPath]
+ * @param {Record<string, unknown> | ((actual: Record<string, unknown>) => Record<string, unknown>)} [runtimeClientOverrides]
+ */
+async function loadCliModule(rootPath, runtimeClientOverrides) {
   if (rootPath) {
     process.env.AGENT_CLI_ROOT = rootPath;
   }
 
   vi.resetModules();
+
+  if (runtimeClientOverrides) {
+    vi.doMock('../../lib/runtime-client.js', async () => {
+      const actual = /** @type {Record<string, unknown>} */ (await vi.importActual('../../lib/runtime-client.js'));
+      const overrides = typeof runtimeClientOverrides === 'function'
+        ? runtimeClientOverrides(actual)
+        : runtimeClientOverrides;
+
+      return {
+        ...actual,
+        ...overrides,
+      };
+    });
+  } else {
+    vi.doUnmock('../../lib/runtime-client.js');
+  }
+
   return await import('../../bin/agent-cli.js');
 }
 
 afterEach(async () => {
   restoreCliEnvironment(originalCliEnvironment);
+  vi.doUnmock('../../lib/runtime-client.js');
 
   while (rootsToClean.length > 0) {
     const rootPath = rootsToClean.pop();
@@ -185,8 +207,11 @@ describe('agent-cli entrypoint', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
 
-    const { runCli } = await loadCliModule(rootPath);
+    const { runCli } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+    });
     const io = createIoCapture();
     const originalExitCode = process.exitCode;
 
@@ -196,34 +221,41 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
     expect(io.getStderr()).toContain('provider=openai model=gpt-5');
-    expect(io.getStderr()).toContain('Missing system prompt');
+    expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
   });
 
-  it('fails clearly when the system prompt is missing', async () => {
-    applyMinimalRuntimeEnvironment();
+  it('loads provider and model from agent/config.json for verbose diagnostics', async () => {
+    delete process.env.LLM_PROVIDER;
+    delete process.env.LLM_MODEL;
+    process.env.OPENAI_API_KEY = 'test-openai-key';
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
+    await writeAgentConfig(rootPath, {
+      provider: 'openai',
+      modal: 'gpt-5-mini',
+    });
     await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
-
-    const { main } = await loadCliModule(rootPath);
-
-    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Missing system prompt');
-  });
-
-  it('fails clearly when the skills root is missing', async () => {
-    applyMinimalRuntimeEnvironment();
-
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
 
-    const { main } = await loadCliModule(rootPath);
+    const { runCli } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
 
-    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Missing skills root');
+    process.exitCode = undefined;
+    await runCli(['--verbose', 'hello'], io);
+
+    expect(io.getStdout()).toBe('');
+    expect(io.getStderr()).toContain('provider=openai model=gpt-5-mini');
+    expect(io.getStderr()).toContain('Synthetic turn failure');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
   });
 
   it('does not write partial session files when the runtime setup fails', async () => {

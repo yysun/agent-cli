@@ -40,6 +40,15 @@ export async function writeSystemPrompt(rootPath, content = 'System prompt') {
   await writeFile(path.join(rootPath, 'agent', 'system.md'), `${content}\n`, 'utf8');
 }
 
+/**
+ * @param {string} rootPath
+ * @param {Record<string, unknown>} config
+ */
+export async function writeAgentConfig(rootPath, config) {
+  await ensureAgentRoot(rootPath);
+  await writeFile(path.join(rootPath, 'agent', 'config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
 /** @param {string} rootPath */
 export async function ensureSkillsRoot(rootPath) {
   await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });

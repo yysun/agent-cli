@@ -133,6 +133,44 @@ describe('runtime-client', () => {
     });
   });
 
+  it('prefers agent config provider and model when both config and environment are present', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    process.env.LLM_PROVIDER = 'OpenAI';
+    process.env.LLM_MODEL = 'gpt-5';
+
+    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+    const runtimeSettings = validateRuntimeEnvironment(process.env, {
+      provider: 'openai',
+      model: 'gpt-5-mini',
+    });
+
+    expect(runtimeSettings).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5-mini',
+    });
+  });
+
+  it('uses agent config provider and model when environment values are absent', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    delete process.env.LLM_PROVIDER;
+    delete process.env.LLM_MODEL;
+
+    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+    const runtimeSettings = validateRuntimeEnvironment(process.env, {
+      provider: 'openai',
+      model: 'gpt-5-mini',
+    });
+
+    expect(runtimeSettings).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5-mini',
+    });
+  });
+
   it('executes a tool-capable turn and returns the completed conversation', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -209,6 +247,15 @@ describe('runtime-client', () => {
           description: 'Core Agent CLI framing.',
         },
       ],
+      agentConfig: {
+        temperature: 0.25,
+        maxTokens: 512,
+        reasoningEffort: 'medium',
+        toolPermission: 'ask',
+        webSearch: {
+          searchContextSize: 'high',
+        },
+      },
     });
 
     expect(result.assistantText).toBe('Final answer');
@@ -221,7 +268,36 @@ describe('runtime-client', () => {
     expect(result.messages[2].content).toContain('agent-cli-core');
     expect(runtimeMock.createLLMEnvironment).toHaveBeenCalledWith(
       expect.objectContaining({
+        defaults: {
+          reasoningEffort: 'medium',
+          toolPermission: 'ask',
+        },
         skillRoots: [expect.stringMatching(/agent[\\/]skills$/)],
+      }),
+    );
+    expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRequest: expect.objectContaining({
+          temperature: 0.25,
+          maxTokens: 512,
+          webSearch: {
+            searchContextSize: 'high',
+          },
+          context: expect.objectContaining({
+            workingDirectory: rootPath,
+            reasoningEffort: 'medium',
+            toolPermission: 'ask',
+          }),
+        }),
+      }),
+    );
+    expect(runtimeMock.loadSkillExecute).toHaveBeenCalledWith(
+      { skillId: 'agent-cli-core' },
+      expect.objectContaining({
+        workingDirectory: rootPath,
+        reasoningEffort: 'medium',
+        toolPermission: 'ask',
+        toolCallId: 'tool-call-1',
       }),
     );
     expect(runtimeMock.disposeLLMEnvironment).toHaveBeenCalledTimes(1);

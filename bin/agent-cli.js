@@ -22,6 +22,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { loadAgentConfig } from '../lib/agent-config.js';
 import { loadSkillInventory, loadSystemPrompt } from '../lib/agent-files.js';
 import { loadRequestedChat, persistCompletedChat } from '../lib/session-store.js';
 import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
@@ -107,9 +108,11 @@ export function parseArguments(argv) {
 /**
  * @param {string[]} [argv]
  * @param {{ stdout: { write(chunk: string): void } }} [io]
+ * @param {{ agentConfig?: Record<string, unknown> }} [options]
  */
-export async function main(argv = process.argv.slice(2), io = { stdout: process.stdout }) {
+export async function main(argv = process.argv.slice(2), io = { stdout: process.stdout }, options = {}) {
   const { help, newChat, message } = parseArguments(argv);
+  const agentConfig = options.agentConfig ?? await loadAgentConfig();
 
   if (help) {
     io.stdout.write(`${usageText()}\n`);
@@ -120,7 +123,7 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
     throw new Error(`Missing user message.\n\n${usageText()}`);
   }
 
-  validateRuntimeEnvironment();
+  validateRuntimeEnvironment(process.env, agentConfig);
 
   const [systemPrompt, skillInventory, chat] = await Promise.all([
     loadSystemPrompt(),
@@ -133,6 +136,7 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
     userMessage: message,
     systemPrompt,
     skillInventory,
+    agentConfig,
   });
 
   await persistCompletedChat({
@@ -151,16 +155,17 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
 export async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
     const parsed = parseArguments(argv);
+    const agentConfig = parsed.help ? {} : await loadAgentConfig();
 
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}\n`);
 
       if (parsed.message) {
-        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment())}\n`);
+        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}\n`);
       }
     }
 
-    await main(argv, io);
+    await main(argv, io, { agentConfig });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     io.stderr.write(`${message.trim()}\n`);

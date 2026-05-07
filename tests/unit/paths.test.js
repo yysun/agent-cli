@@ -39,6 +39,7 @@ describe('paths', () => {
     const paths = await import('../../lib/paths.js');
 
     expect(paths.REPO_ROOT).toBe(overrideRoot);
+    expect(paths.AGENT_CONFIG_PATH).toBe(path.join(overrideRoot, 'agent', 'config.json'));
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'agent', 'system.md'));
   });
 });

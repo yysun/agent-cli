@@ -30,6 +30,7 @@ async function loadAgentFiles(rootPath) {
 
 afterEach(async () => {
   delete process.env.AGENT_CLI_ROOT;
+  vi.doUnmock('node:fs');
 
   while (rootsToClean.length > 0) {
     await removeTestRoot(rootsToClean.pop());
@@ -72,6 +73,46 @@ describe('agent-files', () => {
     ]);
   });
 
+  it('falls back to the default system prompt when system.md is missing', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { DEFAULT_SYSTEM_PROMPT, loadSystemPrompt } = await loadAgentFiles(rootPath);
+
+    await expect(loadSystemPrompt()).resolves.toBe(DEFAULT_SYSTEM_PROMPT);
+  });
+
+  it('preserves non-missing filesystem errors when loading system.md', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    vi.resetModules();
+    vi.doMock('node:fs', async () => {
+      const actual = /** @type {typeof import('node:fs')} */ (await vi.importActual('node:fs'));
+
+      return {
+        ...actual,
+        promises: {
+          ...actual.promises,
+          stat: vi.fn(async (targetPath) => {
+            if (String(targetPath).endsWith('/agent/system.md')) {
+              const error = new Error('Permission denied');
+              // @ts-expect-error Test-only error shape.
+              error.code = 'EACCES';
+              throw error;
+            }
+
+            return actual.promises.stat(targetPath);
+          }),
+        },
+      };
+    });
+
+    const { loadSystemPrompt } = await loadAgentFiles(rootPath);
+
+    await expect(loadSystemPrompt()).rejects.toThrow('Permission denied');
+  });
+
   it('builds a load_skill inventory hint only when skills are available', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -90,14 +131,46 @@ describe('agent-files', () => {
     ).toContain('agent-cli-core');
   });
 
-  it('fails clearly when the skills root is missing', async () => {
+  it('returns an empty inventory when the skills root is missing', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { loadSkillInventory } = await loadAgentFiles(rootPath);
 
-    await expect(loadSkillInventory()).rejects.toThrow('Missing skills root');
+    await expect(loadSkillInventory()).resolves.toEqual([]);
+  });
+
+  it('preserves non-missing filesystem errors when loading the skills root', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    vi.resetModules();
+    vi.doMock('node:fs', async () => {
+      const actual = /** @type {typeof import('node:fs')} */ (await vi.importActual('node:fs'));
+
+      return {
+        ...actual,
+        promises: {
+          ...actual.promises,
+          stat: vi.fn(async (targetPath) => {
+            if (String(targetPath).endsWith('/agent/skills')) {
+              const error = new Error('Permission denied');
+              // @ts-expect-error Test-only error shape.
+              error.code = 'EACCES';
+              throw error;
+            }
+
+            return actual.promises.stat(targetPath);
+          }),
+        },
+      };
+    });
+
+    const { loadSkillInventory } = await loadAgentFiles(rootPath);
+
+    await expect(loadSkillInventory()).rejects.toThrow('Permission denied');
   });
 
   it('accepts an existing but empty skills root', async () => {

@@ -28,8 +28,13 @@ Use `--verbose` when you want startup and runtime-selection diagnostics on stder
 ### Agent Files
 
 - System prompt: `./agent/system.md`
+- Agent config: `./agent/config.json`
 - Skills root: `./agent/skills/`
 - Sessions: `./agent/sessions/`
+
+`./agent/config.json` is optional.
+If `./agent/system.md` is missing or empty, the CLI falls back to a built-in default system prompt.
+If `./agent/skills/` is missing, the CLI continues with an empty skill inventory.
 
 The CLI treats the current working directory as the project root by default. Run it from the folder that contains `./agent`, or set `AGENT_CLI_ROOT` to point at a different project root.
 
@@ -37,10 +42,31 @@ Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL
 
 ### Runtime Configuration
 
+Optional non-secret runtime defaults can live in `./agent/config.json`:
+
+```json
+{
+	"provider": "openai",
+	"model": "gpt-5",
+	"maxTokens": 2048,
+	"temperature": 0.2,
+	"toolPermission": "ask",
+	"reasoningEffort": "medium",
+	"webSearch": {
+		"searchContextSize": "high"
+	}
+}
+```
+
+The loader also accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
+
+Provider credentials still come from environment variables.
+When both are set, `./agent/config.json` takes precedence over `LLM_PROVIDER` and `LLM_MODEL`.
+
 Set runtime environment variables before running the CLI:
 
-- `LLM_PROVIDER` defaults to `openai`
-- `LLM_MODEL` defaults to `gpt-5` for `openai` and is required for other providers
+- `LLM_PROVIDER` defaults to `openai`, but `./agent/config.json` overrides it when present
+- `LLM_MODEL` defaults to `gpt-5` for `openai` and is required for other providers unless `./agent/config.json` supplies one
 - Provider credentials depend on `LLM_PROVIDER`
 
 Supported provider env vars:
