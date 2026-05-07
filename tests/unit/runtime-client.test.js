@@ -274,7 +274,7 @@ describe('runtime-client', () => {
           reasoningEffort: 'medium',
           toolPermission: 'ask',
         },
-        skillRoots: [expect.stringMatching(/agent[\\/]skills$/)],
+        skillRoots: [expect.stringMatching(/\.agents[\\/]skills$/)],
       }),
     );
     expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(

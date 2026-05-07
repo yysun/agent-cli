@@ -51,9 +51,9 @@ describe('agent-files', () => {
       name: 'alpha-skill',
       description: 'Loaded first.',
     });
-    await mkdir(path.join(rootPath, 'agent', 'skills', 'invalid'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills', 'invalid'), { recursive: true });
     await writeFile(
-      path.join(rootPath, 'agent', 'skills', 'invalid', 'SKILL.md'),
+      path.join(rootPath, '.agents', 'skills', 'invalid', 'SKILL.md'),
       '# Missing front matter\n',
       'utf8',
     );
@@ -73,7 +73,7 @@ describe('agent-files', () => {
     ]);
   });
 
-  it('falls back to the default system prompt when system.md is missing', async () => {
+  it('falls back to the default system prompt when AGENTS.md is missing', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -82,7 +82,7 @@ describe('agent-files', () => {
     await expect(loadSystemPrompt()).resolves.toBe(DEFAULT_SYSTEM_PROMPT);
   });
 
-  it('preserves non-missing filesystem errors when loading system.md', async () => {
+  it('preserves non-missing filesystem errors when loading AGENTS.md', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -95,7 +95,7 @@ describe('agent-files', () => {
         promises: {
           ...actual.promises,
           stat: vi.fn(async (targetPath) => {
-            if (String(targetPath).endsWith('/agent/system.md')) {
+            if (String(targetPath).endsWith('/AGENTS.md')) {
               const error = new Error('Permission denied');
               // @ts-expect-error Test-only error shape.
               error.code = 'EACCES';
@@ -155,7 +155,7 @@ describe('agent-files', () => {
         promises: {
           ...actual.promises,
           stat: vi.fn(async (targetPath) => {
-            if (String(targetPath).endsWith('/agent/skills')) {
+            if (String(targetPath).endsWith('/.agents/skills')) {
               const error = new Error('Permission denied');
               // @ts-expect-error Test-only error shape.
               error.code = 'EACCES';

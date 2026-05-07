@@ -2,8 +2,15 @@
 
 - Story slug: `llm-runtime-cli`
 - Created: `2026-05-07`
-- Status: Reviewed
+- Status: Superseded
 - Related requirement: `./.docs/reqs/2026/05/07/req-llm-runtime-cli.md`
+- Superseded by: `./.docs/plans/2026/05/07/plan-codex-copilot-convention.md`
+
+## Supersession Note
+
+This plan describes the original `./agent/*` structure.
+Current implementation conventions are tracked in `plan-codex-copilot-convention`.
+Keep this plan for historical traceability only.
 
 ## Goal
 

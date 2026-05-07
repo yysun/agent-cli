@@ -2,7 +2,14 @@
 
 - Story slug: `llm-runtime-cli`
 - Created: `2026-05-07`
-- Status: Reviewed
+- Status: Superseded
+- Superseded by: `./.docs/reqs/2026/05/07/req-codex-copilot-convention.md`
+
+## Supersession Note
+
+This requirement captured the initial `./agent/*` layout.
+Current repository conventions are defined by `codex-copilot-convention` (`AGENTS.md`, `./.agents/skills/`, and `./.chats/`).
+Use this document as historical context only.
 
 ## Summary
 

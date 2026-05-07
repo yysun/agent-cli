@@ -28,7 +28,9 @@ describe('paths', () => {
     const paths = await import('../../lib/paths.js');
 
     expect(paths.REPO_ROOT).toBe(cwdRoot);
-    expect(paths.AGENT_DIR).toBe(path.join(cwdRoot, 'agent'));
+    expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(cwdRoot, 'AGENTS.md'));
+    expect(paths.SKILLS_ROOT).toBe(path.join(cwdRoot, '.agents', 'skills'));
+    expect(paths.SESSIONS_ROOT).toBe(path.join(cwdRoot, '.chats'));
   });
 
   it('prefers AGENT_CLI_ROOT over the current working directory', async () => {
@@ -39,7 +41,8 @@ describe('paths', () => {
     const paths = await import('../../lib/paths.js');
 
     expect(paths.REPO_ROOT).toBe(overrideRoot);
-    expect(paths.AGENT_CONFIG_PATH).toBe(path.join(overrideRoot, 'agent', 'config.json'));
-    expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'agent', 'system.md'));
+    expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'AGENTS.md'));
+    expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agents', 'skills'));
+    expect(paths.CURRENT_CHAT_PATH).toBe(path.join(overrideRoot, '.chats', 'current.json'));
   });
 });

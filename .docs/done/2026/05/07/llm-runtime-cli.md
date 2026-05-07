@@ -2,9 +2,15 @@
 
 - Story slug: `llm-runtime-cli`
 - Completed: `2026-05-07`
-- Status: Done
+- Status: Superseded
 - Related requirement: `./.docs/reqs/2026/05/07/req-llm-runtime-cli.md`
 - Related plan: `./.docs/plans/2026/05/07/plan-llm-runtime-cli.md`
+- Superseded by: `./.docs/done/2026/05/07/codex-copilot-convention.md`
+
+## Supersession Note
+
+This completion record reflects the initial implementation before codex/copilot convention migration.
+For current canonical runtime paths/config behavior, use `codex-copilot-convention.md`.
 
 ## Outcome
 

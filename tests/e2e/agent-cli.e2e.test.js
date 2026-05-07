@@ -253,7 +253,7 @@ describe('agent-cli CLI', () => {
       rootPath,
       'You are a terse test assistant. Reply in a single plain sentence without markdown.',
     );
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
 
     const { main } = await loadCli(rootPath);
     const io = createIoCapture();
@@ -265,8 +265,8 @@ describe('agent-cli CLI', () => {
 
     expect(assistantText.length).toBeGreaterThan(0);
 
-    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chatFilePath = path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'messages.json');
+    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
+    const chatFilePath = path.join(rootPath, '.chats', current.chatId, 'messages.json');
     const chat = await readJson(chatFilePath);
     const rawChatFile = await readFile(chatFilePath, 'utf8');
 
@@ -316,8 +316,8 @@ describe('agent-cli CLI', () => {
     expect(assistantText).toContain(systemProbeToken);
     expect(assistantText).toContain(skillProbeToken);
 
-    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'messages.json'));
+    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
+    const chat = await readJson(path.join(rootPath, '.chats', current.chatId, 'messages.json'));
     const loadSkillMessage = chat.messages.find(
       /** @param {{ role?: string, tool_calls?: Array<{ function?: { name?: string, arguments?: string } }> }} message */
       (message) => message.role === 'assistant'
@@ -338,18 +338,18 @@ describe('agent-cli CLI', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Keep responses under 20 words.');
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
 
     const { main } = await loadCli(rootPath);
 
     await main(['--new-chat', 'Say hello briefly.'], createIoCapture());
-    const firstCurrent = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
+    const firstCurrent = await readJson(path.join(rootPath, '.chats', 'current.json'));
 
     const secondIo = createIoCapture();
     await main(['Now say goodbye briefly.'], secondIo);
 
-    const secondCurrent = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', secondCurrent.chatId, 'messages.json'));
+    const secondCurrent = await readJson(path.join(rootPath, '.chats', 'current.json'));
+    const chat = await readJson(path.join(rootPath, '.chats', secondCurrent.chatId, 'messages.json'));
     const secondAssistantText = extractAssistantTextFromCliStdout(secondIo.getStdout());
     const userMessages = chat.messages
       .filter(
@@ -373,15 +373,15 @@ describe('agent-cli CLI', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Reply in one short sentence.');
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
 
     const { main } = await loadCli(rootPath);
     const io = createIoCapture();
 
     await main(['follow up'], io);
 
-    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'messages.json'));
+    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
+    const chat = await readJson(path.join(rootPath, '.chats', current.chatId, 'messages.json'));
     const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);

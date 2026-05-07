@@ -27,59 +27,41 @@ Use `--verbose` when you want startup and runtime-selection diagnostics on stder
 
 Streaming is enabled by default. While streaming, response text chunks stream on stdout. Diagnostics such as `warning: ...`, `error: ...`, `reasoning: ...`, and `tool: ...` are printed to stderr only when `--verbose` is set. There is no `data: [DONE]` marker. Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.
 
-Runtime settings can also be supplied on the command line. These values override `./agent/config.json` when both are present. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
+Runtime settings can be supplied on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
 
 ### Agent Files
 
-- System prompt: `./agent/system.md`
-- Agent config: `./agent/config.json`
-- Skills root: `./agent/skills/`
-- Sessions: `./agent/sessions/`
+- System prompt: `./AGENTS.md`
+- Skills root: `./.agents/skills/`
+- Sessions: `./.chats/`
 
-Session chats are stored under `./agent/sessions/chats/{chatId}/` with:
+Session chats are stored under `./.chats/{chatId}/` with:
 - `messages.json`: persisted chat messages
 - `events.json`: optional stream trace when enabled
 
-`./agent/config.json` is optional.
-If `./agent/system.md` is missing or empty, the CLI falls back to a built-in default system prompt.
-If `./agent/skills/` is missing, the CLI continues with an empty skill inventory.
+If `./AGENTS.md` is missing or empty, the CLI falls back to a built-in default system prompt.
+If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
 
-The CLI treats the current working directory as the project root by default. Run it from the folder that contains `./agent`, or set `AGENT_CLI_ROOT` to point at a different project root.
+The CLI treats the current working directory as the project root by default. Run it from the folder that contains `./AGENTS.md`, or set `AGENT_CLI_ROOT` to point at a different project root.
 
-Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./agent/skills/`.
+Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agents/skills/`.
 
 ### Runtime Configuration
-
-Optional non-secret runtime defaults can live in `./agent/config.json`:
-
-```json
-{
-	"provider": "openai",
-	"model": "gpt-5",
-	"maxTokens": 2048,
-	"temperature": 0.2,
-	"pastMessages": 20,
-	"streamTrace": true,
-	"toolPermission": "ask",
-	"reasoningEffort": "medium",
-	"webSearch": {
-		"searchContextSize": "high"
-	}
-}
-```
 
 `pastMessages` controls how many previous persisted chat messages are loaded into each LLM request. If it is not defined, the CLI loads `0` past messages by default.
 `streamTrace` accepts `true` or `false`. When set to `true`, the CLI writes per-turn streaming events (`warning`, `error`, `reasoning`, `tool`, and `text`) to `events.json` under the active chat directory.
 
-The loader also accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
+The CLI parser accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
 Provider credentials still come from environment variables.
-Precedence is: command-line flags, then `./agent/config.json`, then `LLM_PROVIDER` and `LLM_MODEL`.
+Precedence is: command-line flags, then `LLM_PROVIDER` and `LLM_MODEL`.
 
 Set runtime environment variables before running the CLI:
 
-- `LLM_PROVIDER` defaults to `openai`, but `./agent/config.json` overrides it when present
-- `LLM_MODEL` defaults to `gpt-5` for `openai` and is required for other providers unless `./agent/config.json` supplies one
+Use `./.env.example` as a template for local setup.
+
+- `LLM_PROVIDER` defaults to `openai`
+- `LLM_MODEL` defaults to `gpt-5` for `openai` and is required for other providers unless provider-specific defaults apply
 - Provider credentials depend on `LLM_PROVIDER`
 
 Supported provider env vars:

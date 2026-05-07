@@ -1,5 +1,13 @@
 # AT: llm-runtime-cli
 
+- Status: Superseded
+- Superseded by: `./.docs/tests/test-codex-copilot-convention.md`
+
+## Supersession Note
+
+This test spec targets the original `./agent/*` layout and is retained for historical context.
+Use `test-codex-copilot-convention.md` for current path/configuration expectations.
+
 ## Goal
 
 Validate that the Agent CLI follows the `llm-runtime` convention for prompt and skill loading, persists chat sessions, and routes each invocation into the current chat unless `--new-chat` is requested.

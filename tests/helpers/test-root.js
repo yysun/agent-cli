@@ -6,7 +6,7 @@
  * - Build temporary repo-like fixtures for isolated Vitest runs.
  *
  * Key features:
- * - Creates temporary Agent CLI roots with agent and session folders on demand.
+ * - Creates temporary Agent CLI roots with AGENTS/.agents fixtures on demand.
  * - Provides JSON and stdout helpers used by both unit and e2e suites.
  *
  * Recent changes:
@@ -26,32 +26,17 @@ export async function removeTestRoot(rootPath) {
   await rm(rootPath, { recursive: true, force: true });
 }
 
-/** @param {string} rootPath */
-export async function ensureAgentRoot(rootPath) {
-  await mkdir(path.join(rootPath, 'agent'), { recursive: true });
-}
-
 /**
  * @param {string} rootPath
  * @param {string} [content]
  */
 export async function writeSystemPrompt(rootPath, content = 'System prompt') {
-  await ensureAgentRoot(rootPath);
-  await writeFile(path.join(rootPath, 'agent', 'system.md'), `${content}\n`, 'utf8');
-}
-
-/**
- * @param {string} rootPath
- * @param {Record<string, unknown>} config
- */
-export async function writeAgentConfig(rootPath, config) {
-  await ensureAgentRoot(rootPath);
-  await writeFile(path.join(rootPath, 'agent', 'config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(rootPath, 'AGENTS.md'), `${content}\n`, 'utf8');
 }
 
 /** @param {string} rootPath */
 export async function ensureSkillsRoot(rootPath) {
-  await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+  await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
 }
 
 /**
@@ -60,7 +45,7 @@ export async function ensureSkillsRoot(rootPath) {
  * @param {{ name: string, description: string, body?: string }} skill
  */
 export async function writeSkill(rootPath, relativeDirectory, { name, description, body = '# Skill\n' }) {
-  const directoryPath = path.join(rootPath, 'agent', 'skills', relativeDirectory);
+  const directoryPath = path.join(rootPath, '.agents', 'skills', relativeDirectory);
   await mkdir(directoryPath, { recursive: true });
   const fileContent = [
     '---',

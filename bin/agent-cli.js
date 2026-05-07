@@ -8,8 +8,8 @@
  *
  * Key features:
  * - Supports current-chat reuse and `--new-chat` creation.
- * - Loads prompt and skills from `./agent` using `llm-runtime` conventions.
- * - Persists completed turns under `./agent/sessions`.
+ * - Loads prompt and skills from codex/copilot paths using `llm-runtime` conventions.
+ * - Persists completed turns under `./.chats`.
  *
  * Recent changes:
  * - 2026-05-07: Added the initial `llm-runtime`-backed CLI implementation.
@@ -22,7 +22,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { loadAgentConfig, normalizeAgentConfig } from '../lib/agent-config.js';
+import { normalizeAgentConfig } from '../lib/agent-config.js';
 import { loadSkillInventory, loadSystemPrompt } from '../lib/agent-files.js';
 import { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } from '../lib/session-store.js';
 import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
@@ -31,7 +31,7 @@ export function usageText() {
   return [
     'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
     '',
-    'Runtime options override agent/config.json when provided:',
+    'Runtime options override environment defaults when provided:',
     '  --provider <name>                 --model <name>',
     '  --temperature <number>            --max-tokens <number>',
     '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
@@ -310,7 +310,7 @@ export async function main(
   options = {},
 ) {
   const { help, newChat, runtimeOverrides, streamOff, verbose, message } = parseArguments(argv);
-  const baseAgentConfig = options.agentConfig ?? await loadAgentConfig();
+  const baseAgentConfig = options.agentConfig ?? {};
   const agentConfig = {
     ...baseAgentConfig,
     ...runtimeOverrides,
@@ -520,11 +520,7 @@ export async function main(
 export async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
     const parsed = parseArguments(argv);
-    const fileAgentConfig = parsed.help ? {} : await loadAgentConfig();
-    const agentConfig = {
-      ...fileAgentConfig,
-      ...parsed.runtimeOverrides,
-    };
+    const agentConfig = parsed.runtimeOverrides;
 
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}\n`);

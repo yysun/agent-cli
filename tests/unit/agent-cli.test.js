@@ -23,7 +23,6 @@ import {
   createIoCapture,
   createTestRoot,
   removeTestRoot,
-  writeAgentConfig,
   writeSystemPrompt,
 } from '../helpers/test-root.js';
 
@@ -233,7 +232,7 @@ describe('agent-cli entrypoint', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
 
     delete process.env.OPENAI_API_KEY;
     process.env.LLM_PROVIDER = 'openai';
@@ -258,7 +257,7 @@ describe('agent-cli entrypoint', () => {
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { runCli } = await loadCliModule(rootPath, {
@@ -279,18 +278,11 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('prefers CLI runtime overrides over agent/config.json', async () => {
+  it('applies CLI runtime overrides over environment defaults', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
-    await writeAgentConfig(rootPath, {
-      provider: 'openai',
-      model: 'gpt-5-mini',
-      pastMessages: 2,
-      streamTrace: false,
-    });
-
     delete process.env.OPENAI_API_KEY;
     process.env.GOOGLE_API_KEY = 'test-google-key';
 
@@ -332,7 +324,7 @@ describe('agent-cli entrypoint', () => {
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
@@ -379,7 +371,7 @@ describe('agent-cli entrypoint', () => {
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
@@ -413,7 +405,7 @@ describe('agent-cli entrypoint', () => {
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
@@ -437,10 +429,7 @@ describe('agent-cli entrypoint', () => {
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
-      streamTrace: true,
-    });
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
@@ -461,11 +450,11 @@ describe('agent-cli entrypoint', () => {
       }),
     });
 
-    await main(['--new-chat', 'hello'], createIoCapture());
+    await main(['--new-chat', '--stream-trace', 'hello'], createIoCapture());
 
-    const current = JSON.parse(await readFile(path.join(rootPath, 'agent', 'sessions', 'current.json'), 'utf8'));
+    const current = JSON.parse(await readFile(path.join(rootPath, '.chats', 'current.json'), 'utf8'));
     const eventsData = JSON.parse(await readFile(
-      path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'events.json'),
+      path.join(rootPath, '.chats', current.chatId, 'events.json'),
       'utf8',
     ));
 
@@ -483,23 +472,20 @@ describe('agent-cli entrypoint', () => {
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
-      streamTrace: true,
-    });
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
       runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
     });
 
-    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Synthetic turn failure');
+    await expect(main(['--new-chat', '--stream-trace', 'hello'], createIoCapture())).rejects.toThrow('Synthetic turn failure');
 
-    const chatRoots = await readdir(path.join(rootPath, 'agent', 'sessions', 'chats'));
+    const chatRoots = await readdir(path.join(rootPath, '.chats'));
     expect(chatRoots.length).toBe(1);
 
     const eventsData = JSON.parse(await readFile(
-      path.join(rootPath, 'agent', 'sessions', 'chats', chatRoots[0], 'events.json'),
+      path.join(rootPath, '.chats', chatRoots[0], 'events.json'),
       'utf8',
     ));
 
@@ -507,43 +493,12 @@ describe('agent-cli entrypoint', () => {
     expect(eventsData.events.some((event) => String(event.text).includes('Synthetic turn failure'))).toBe(true);
   });
 
-  it('loads provider and model from agent/config.json for verbose diagnostics', async () => {
-    delete process.env.LLM_PROVIDER;
-    delete process.env.LLM_MODEL;
-    process.env.OPENAI_API_KEY = 'test-openai-key';
-
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
-      provider: 'openai',
-      modal: 'gpt-5-mini',
-    });
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
-    await writeSystemPrompt(rootPath, 'Prompt');
-
-    const { runCli } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
-    });
-    const io = createIoCapture();
-    const originalExitCode = process.exitCode;
-
-    process.exitCode = undefined;
-    await runCli(['--verbose', 'hello'], io);
-
-    expect(io.getStdout()).toBe('');
-    expect(io.getStderr()).toContain('provider=openai model=gpt-5-mini');
-    expect(io.getStderr()).toContain('Synthetic turn failure');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
-  });
-
   it('defaults to loading zero past messages when config does not define pastMessages', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const runChatTurnMock = vi.fn().mockResolvedValue({
@@ -567,15 +522,12 @@ describe('agent-cli entrypoint', () => {
     );
   });
 
-  it('loads configured number of past messages from agent/config.json', async () => {
+  it('applies --past-messages when provided on the command line', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
-      pastMessages: 7,
-    });
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const runChatTurnMock = vi.fn().mockResolvedValue({
@@ -590,7 +542,7 @@ describe('agent-cli entrypoint', () => {
       runChatTurn: runChatTurnMock,
     });
 
-    await main(['--new-chat', 'hello'], createIoCapture());
+    await main(['--new-chat', '--past-messages', '7', 'hello'], createIoCapture());
 
     expect(runChatTurnMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -603,7 +555,7 @@ describe('agent-cli entrypoint', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
-    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
 
     process.env.LLM_PROVIDER = 'unsupported-provider';
     delete process.env.LLM_MODEL;
@@ -614,10 +566,10 @@ describe('agent-cli entrypoint', () => {
       'Unsupported LLM provider: unsupported-provider',
     );
     await expect(
-      readFile(path.join(rootPath, 'agent', 'sessions', 'current.json'), 'utf8'),
+      readFile(path.join(rootPath, '.chats', 'current.json'), 'utf8'),
     ).rejects.toThrow();
     await expect(
-      readFile(path.join(rootPath, 'agent', 'sessions', 'chats'), 'utf8'),
+      readFile(path.join(rootPath, '.chats'), 'utf8'),
     ).rejects.toThrow();
   });
 

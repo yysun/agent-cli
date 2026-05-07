@@ -3,41 +3,18 @@
  * Agent CLI Agent Config Unit Tests
  *
  * Purpose:
- * - Validate optional `./agent/config.json` loading and normalization.
+ * - Validate runtime override normalization used by CLI flags.
  *
  * Key features:
  * - Covers common field aliases such as `modal`, `tokens`, and `permissions`.
- * - Verifies invalid config values fail early with clear messages.
+ * - Verifies invalid override values fail early with clear messages.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { createTestRoot, removeTestRoot, writeAgentConfig } from '../helpers/test-root.js';
-
-/** @type {string[]} */
-const rootsToClean = [];
-
-/** @param {string} rootPath */
-async function loadAgentConfigModule(rootPath) {
-  process.env.AGENT_CLI_ROOT = rootPath;
-  vi.resetModules();
-  return await import('../../lib/agent-config.js');
-}
-
-afterEach(async () => {
-  delete process.env.AGENT_CLI_ROOT;
-
-  while (rootsToClean.length > 0) {
-    await removeTestRoot(rootsToClean.pop());
-  }
-});
+import { normalizeAgentConfig } from '../../lib/agent-config.js';
 
 describe('agent-config', () => {
-  it('normalizes CLI-style runtime override keys', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    const { normalizeAgentConfig } = await loadAgentConfigModule(rootPath);
-
+  it('normalizes CLI-style runtime override keys', () => {
     expect(normalizeAgentConfig({
       provider: 'google',
       model: 'gemini-2.5-pro',
@@ -63,19 +40,8 @@ describe('agent-config', () => {
     });
   });
 
-  it('returns an empty config when agent/config.json is missing', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    const { loadAgentConfig } = await loadAgentConfigModule(rootPath);
-
-    await expect(loadAgentConfig()).resolves.toEqual({});
-  });
-
-  it('normalizes aliased runtime settings from agent/config.json', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
+  it('normalizes aliased runtime settings', () => {
+    expect(normalizeAgentConfig({
       provider: 'openai',
       modal: 'gpt-5-mini',
       temperature: '0.25',
@@ -90,11 +56,7 @@ describe('agent-config', () => {
         enabled: true,
         size: 'high',
       },
-    });
-
-    const { loadAgentConfig } = await loadAgentConfigModule(rootPath);
-
-    await expect(loadAgentConfig()).resolves.toEqual({
+    })).toEqual({
       provider: 'openai',
       model: 'gpt-5-mini',
       temperature: 0.25,
@@ -109,31 +71,15 @@ describe('agent-config', () => {
     });
   });
 
-  it('fails clearly for invalid enum values', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
+  it('fails clearly for invalid enum values', () => {
+    expect(() => normalizeAgentConfig({
       permissions: 'write',
-    });
-
-    const { loadAgentConfig } = await loadAgentConfigModule(rootPath);
-
-    await expect(loadAgentConfig()).rejects.toThrow(
-      'Invalid agent config value for permissions: expected one of auto, ask, read.',
-    );
+    })).toThrow('Invalid agent config value for permissions: expected one of auto, ask, read.');
   });
 
-  it('fails clearly for invalid streamTrace values', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeAgentConfig(rootPath, {
+  it('fails clearly for invalid streamTrace values', () => {
+    expect(() => normalizeAgentConfig({
       streamTrace: 'maybe',
-    });
-
-    const { loadAgentConfig } = await loadAgentConfigModule(rootPath);
-
-    await expect(loadAgentConfig()).rejects.toThrow(
-      'Invalid agent config value for streamTrace: expected true or false.',
-    );
+    })).toThrow('Invalid agent config value for streamTrace: expected true or false.');
   });
 });

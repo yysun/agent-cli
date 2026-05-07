@@ -81,11 +81,11 @@ describe('session-store', () => {
       ],
     });
 
-    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
+    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
     expect(current).toEqual({ chatId: chat.id });
 
     const storedChat = await readJson(
-      path.join(rootPath, 'agent', 'sessions', 'chats', chat.id, 'messages.json'),
+      path.join(rootPath, '.chats', chat.id, 'messages.json'),
     );
     expect(storedChat.id).toBe(chat.id);
 
@@ -127,8 +127,8 @@ describe('session-store', () => {
       ],
     });
 
-    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    await removeTestRoot(path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId));
+    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
+    await removeTestRoot(path.join(rootPath, '.chats', current.chatId));
 
     const recoveredChat = await loadRequestedChat({ newChat: false });
 
@@ -173,7 +173,7 @@ describe('session-store', () => {
       ],
     });
 
-    const eventsPath = path.join(rootPath, 'agent', 'sessions', 'chats', chat.id, 'events.json');
+    const eventsPath = path.join(rootPath, '.chats', chat.id, 'events.json');
     const eventsData = JSON.parse(await readFile(eventsPath, 'utf8'));
 
     expect(eventsData.chatId).toBe(chat.id);

@@ -8,6 +8,9 @@ release/
 
 # Environment variables
 .env
+.chats/
+agent/config.json
+agent/sessions/
 
 # Logs
 logs/
@@ -34,5 +37,3 @@ tmp/
 temp/
 
 .wiki/
-
-agent/
