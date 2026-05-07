@@ -166,6 +166,50 @@ function applyLiveRuntimeEnvironment() {
   }
 }
 
+/**
+ * @param {string} stdout
+ */
+function extractAssistantTextFromCliStdout(stdout) {
+  const output = String(stdout ?? '').trim();
+
+  if (!output) {
+    return '';
+  }
+
+  const lines = output.split(/\r?\n/);
+  let currentEvent = '';
+  let finalText = '';
+
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      currentEvent = line.slice('event:'.length).trim();
+      continue;
+    }
+
+    if (!line.startsWith('data:')) {
+      continue;
+    }
+
+    if (currentEvent !== 'final') {
+      continue;
+    }
+
+    const dataPayload = line.slice('data:'.length).trim();
+
+    try {
+      const parsedPayload = JSON.parse(dataPayload);
+
+      if (parsedPayload && typeof parsedPayload.text === 'string') {
+        finalText = parsedPayload.text;
+      }
+    } catch {
+      // Ignore malformed frames and fall back to plain output handling below.
+    }
+  }
+
+  return finalText.trim() || output;
+}
+
 /** @param {string} rootPath */
 async function loadCli(rootPath) {
   process.env.AGENT_CLI_ROOT = rootPath;
@@ -206,7 +250,7 @@ describe('agent-cli CLI', () => {
 
     await main(['--new-chat', userMessage], io);
 
-    const assistantText = io.getStdout().trim();
+    const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);
 
@@ -256,7 +300,7 @@ describe('agent-cli CLI', () => {
 
     await main(['--new-chat', userMessage], io);
 
-    const assistantText = io.getStdout().trim();
+    const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText).toContain(systemProbeToken);
     expect(assistantText).toContain(skillProbeToken);
@@ -295,6 +339,7 @@ describe('agent-cli CLI', () => {
 
     const secondCurrent = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
     const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${secondCurrent.chatId}.json`));
+    const secondAssistantText = extractAssistantTextFromCliStdout(secondIo.getStdout());
     const userMessages = chat.messages
       .filter(
         /** @param {{ role?: string }} message */
@@ -307,7 +352,7 @@ describe('agent-cli CLI', () => {
 
     expect(secondCurrent.chatId).toBe(firstCurrent.chatId);
     expect(userMessages).toEqual(['Say hello briefly.', 'Now say goodbye briefly.']);
-    expect(String(secondIo.getStdout()).trim().length).toBeGreaterThan(0);
+    expect(secondAssistantText.length).toBeGreaterThan(0);
     expect(chat.messages.at(-1)?.role).toBe('assistant');
   });
 
@@ -326,8 +371,9 @@ describe('agent-cli CLI', () => {
 
     const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
     const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${current.chatId}.json`));
+    const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
-    expect(String(io.getStdout()).trim().length).toBeGreaterThan(0);
+    expect(assistantText.length).toBeGreaterThan(0);
     expect(chat.messages[0]).toMatchObject({ role: 'user', content: 'follow up' });
     expect(chat.messages.at(-1)?.role).toBe('assistant');
   });

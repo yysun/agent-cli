@@ -278,6 +278,7 @@ describe('runtime-client', () => {
     expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
       expect.objectContaining({
         modelRequest: expect.objectContaining({
+          mode: 'stream',
           temperature: 0.25,
           maxTokens: 512,
           webSearch: {
@@ -332,6 +333,98 @@ describe('runtime-client', () => {
     ).rejects.toThrow('LLM turn ended without a final text response. Stop reason: timeout');
 
     expect(runtimeMock.disposeLLMEnvironment).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses generate mode when stream is explicitly disabled', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    runtimeMock.respondWithTools.mockResolvedValue({
+      state: {
+        conversationMessages: [
+          {
+            role: 'user',
+            content: 'Hello',
+          },
+          {
+            role: 'assistant',
+            content: 'Hi',
+          },
+        ],
+        finalText: 'Hi',
+      },
+      reason: 'text_response',
+    });
+
+    const { runChatTurn } = await loadRuntimeClient(rootPath);
+
+    await runChatTurn({
+      chat: {
+        id: 'chat-1',
+        createdAt: '2026-05-07T12:00:00.000Z',
+        updatedAt: '2026-05-07T12:00:00.000Z',
+        messages: [],
+      },
+      userMessage: 'Hello',
+      stream: false,
+      systemPrompt: 'System prompt',
+      skillInventory: [],
+    });
+
+    expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRequest: expect.objectContaining({
+          mode: 'generate',
+        }),
+      }),
+    );
+  });
+
+  it('forwards stream chunks when an onStreamChunk callback is provided', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    const onStreamChunk = vi.fn();
+
+    runtimeMock.respondWithTools.mockImplementation(async (options) => {
+      options.modelRequest.onChunk?.({ content: 'Hello' });
+      options.modelRequest.onChunk?.({ content: ' world' });
+
+      return {
+        state: {
+          conversationMessages: [
+            {
+              role: 'user',
+              content: 'Hello',
+            },
+            {
+              role: 'assistant',
+              content: 'Hello world',
+            },
+          ],
+          finalText: 'Hello world',
+        },
+        reason: 'text_response',
+      };
+    });
+
+    const { runChatTurn } = await loadRuntimeClient(rootPath);
+
+    await runChatTurn({
+      chat: {
+        id: 'chat-1',
+        createdAt: '2026-05-07T12:00:00.000Z',
+        updatedAt: '2026-05-07T12:00:00.000Z',
+        messages: [],
+      },
+      userMessage: 'Hello',
+      onStreamChunk,
+      systemPrompt: 'System prompt',
+      skillInventory: [],
+    });
+
+    expect(onStreamChunk).toHaveBeenCalledTimes(2);
+    expect(onStreamChunk).toHaveBeenNthCalledWith(1, { content: 'Hello' });
+    expect(onStreamChunk).toHaveBeenNthCalledWith(2, { content: ' world' });
   });
 
   it('normalizes mixed-case provider names from the environment', async () => {

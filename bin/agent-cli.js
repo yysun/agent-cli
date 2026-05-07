@@ -29,17 +29,28 @@ import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.j
 
 export function usageText() {
   return [
-    'Usage: agent-cli [--new-chat] [--verbose] <message>',
+    'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] <message>',
     '',
     'Examples:',
     '  agent-cli --new-chat "Map my next financial move"',
     '  agent-cli "What should I do first?"',
     '  agent-cli --verbose "What should I do first?"',
+    '  agent-cli --stream-off "What should I do first?"',
   ].join('\n');
 }
 
 export function startupText(cwd = process.cwd()) {
   return `Agent CLI starting in ${cwd}`;
+}
+
+/**
+ * @param {{ write(chunk: string): void }} stdout
+ * @param {string} eventName
+ * @param {unknown} payload
+ */
+function writeSseEvent(stdout, eventName, payload) {
+  stdout.write(`event: ${eventName}\n`);
+  stdout.write(`data: ${JSON.stringify(payload ?? null)}\n\n`);
 }
 
 /**
@@ -70,6 +81,7 @@ export function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.m
  */
 export function parseArguments(argv) {
   let newChat = false;
+  let streamOff = false;
   let help = false;
   let verbose = false;
   const messageParts = [];
@@ -90,6 +102,11 @@ export function parseArguments(argv) {
       continue;
     }
 
+    if (arg === '--stream-off') {
+      streamOff = true;
+      continue;
+    }
+
     if (arg.startsWith('--')) {
       throw new Error(`Unknown flag: ${arg}`);
     }
@@ -100,6 +117,7 @@ export function parseArguments(argv) {
   return {
     help,
     newChat,
+    streamOff,
     verbose,
     message: messageParts.join(' ').trim(),
   };
@@ -111,7 +129,7 @@ export function parseArguments(argv) {
  * @param {{ agentConfig?: Record<string, unknown> }} [options]
  */
 export async function main(argv = process.argv.slice(2), io = { stdout: process.stdout }, options = {}) {
-  const { help, newChat, message } = parseArguments(argv);
+  const { help, newChat, streamOff, message } = parseArguments(argv);
   const agentConfig = options.agentConfig ?? await loadAgentConfig();
 
   if (help) {
@@ -134,6 +152,12 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
   const turnResult = await runChatTurn({
     chat,
     userMessage: message,
+    stream: !streamOff,
+    onStreamChunk: streamOff
+      ? undefined
+      : (chunk) => {
+        writeSseEvent(io.stdout, 'chunk', chunk);
+      },
     systemPrompt,
     skillInventory,
     agentConfig,
@@ -144,7 +168,15 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
     messages: turnResult.messages,
   });
 
-  io.stdout.write(`${turnResult.assistantText}\n`);
+  if (streamOff) {
+    io.stdout.write(`${turnResult.assistantText}\n`);
+  } else {
+    writeSseEvent(io.stdout, 'final', {
+      text: turnResult.assistantText,
+    });
+    io.stdout.write('data: [DONE]\n\n');
+  }
+
   return turnResult;
 }
 

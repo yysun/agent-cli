@@ -25,6 +25,8 @@ npm run agent-cli -- "What should I do first?"
 
 Use `--verbose` when you want startup and runtime-selection diagnostics on stderr without affecting the assistant response on stdout.
 
+Streaming is enabled by default. While streaming, stdout emits SSE frames (`event: chunk`, `event: final`, then `data: [DONE]`). Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.
+
 ### Agent Files
 
 - System prompt: `./agent/system.md`

@@ -121,19 +121,29 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--new-chat', 'Map', 'the', 'terrain'])).toEqual({
       help: false,
       newChat: true,
+      streamOff: false,
       verbose: false,
       message: 'Map the terrain',
     });
     expect(parseArguments(['--help'])).toEqual({
       help: true,
       newChat: false,
+      streamOff: false,
       verbose: false,
       message: '',
     });
     expect(parseArguments(['--verbose', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
+      streamOff: false,
       verbose: true,
+      message: 'Inspect status',
+    });
+    expect(parseArguments(['--stream-off', 'Inspect', 'status'])).toEqual({
+      help: false,
+      newChat: false,
+      streamOff: true,
+      verbose: false,
       message: 'Inspect status',
     });
   });
@@ -171,7 +181,7 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain('Missing user message.');
-    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] <message>');
+    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] <message>');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
@@ -225,6 +235,66 @@ describe('agent-cli entrypoint', () => {
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
+  });
+
+  it('prints SSE frames in default streaming mode', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk }) => {
+        onStreamChunk?.({ content: 'Hello' });
+        onStreamChunk?.({ content: ' world' });
+
+        return {
+          assistantText: 'Hello world',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'Hello world' },
+          ],
+        };
+      }),
+    });
+    const io = createIoCapture();
+
+    await main(['--new-chat', 'hello'], io);
+
+    const stdout = io.getStdout();
+
+    expect(stdout).toContain('event: chunk\n');
+    expect(stdout).toContain('data: {"content":"Hello"}\n\n');
+    expect(stdout).toContain('data: {"content":" world"}\n\n');
+    expect(stdout).toContain('event: final\n');
+    expect(stdout).toContain('data: {"text":"Hello world"}\n\n');
+    expect(stdout).toContain('data: [DONE]\n\n');
+  });
+
+  it('prints plain text output when --stream-off is set', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockResolvedValue({
+        assistantText: 'Hello world',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'Hello world' },
+        ],
+      }),
+    });
+    const io = createIoCapture();
+
+    await main(['--new-chat', '--stream-off', 'hello'], io);
+
+    expect(io.getStdout()).toBe('Hello world\n');
   });
 
   it('loads provider and model from agent/config.json for verbose diagnostics', async () => {
@@ -289,7 +359,7 @@ describe('agent-cli entrypoint', () => {
 
     await runCli(['--help'], io);
 
-    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] <message>');
+    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] <message>');
     expect(io.getStderr()).toBe('');
   });
 });
