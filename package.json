@@ -1,0 +1,35 @@
+{
+  "name": "agent-cli",
+  "version": "1.0.0",
+  "description": "Project: Agent CLI Repo: yysun/agent-cli CLI: agent-cli Core objects: - Memory = map marks - Tension = terrain signals - Insight = route judgment - Action = next move",
+  "main": "bin/agent-cli.js",
+  "bin": {
+    "agent-cli": "./bin/agent-cli.js"
+  },
+  "scripts": {
+    "test": "npm run test:syntax && npm run test:unit && npm run test:e2e",
+    "test:syntax": "node --check ./bin/agent-cli.js && node --check ./lib/paths.js && node --check ./lib/agent-files.js && node --check ./lib/session-store.js && node --check ./lib/runtime-client.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/session-store.test.js && node --check ./tests/unit/runtime-client.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js",
+    "test:unit": "vitest run tests/unit",
+    "test:e2e": "vitest run tests/e2e",
+    "agent-cli": "node ./bin/agent-cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yysun/agent-cli.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "llm-runtime": "^0.4.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
+  },
+  "bugs": {
+    "url": "https://github.com/yysun/agent-cli/issues"
+  },
+  "homepage": "https://github.com/yysun/agent-cli#readme"
+}
