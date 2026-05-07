@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "npm run test:syntax && npm run test:unit && npm run test:e2e",
-    "test:syntax": "node --check ./bin/agent-cli.js && node --check ./lib/paths.js && node --check ./lib/agent-files.js && node --check ./lib/session-store.js && node --check ./lib/runtime-client.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/session-store.test.js && node --check ./tests/unit/runtime-client.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js",
+    "test:syntax": "node --check ./bin/agent-cli.js && node --check ./lib/paths.js && node --check ./lib/agent-files.js && node --check ./lib/session-store.js && node --check ./lib/runtime-client.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-cli.test.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/paths.test.js && node --check ./tests/unit/session-store.test.js && node --check ./tests/unit/runtime-client.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
     "agent-cli": "node ./bin/agent-cli.js"

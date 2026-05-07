@@ -64,6 +64,10 @@ afterEach(async () => {
   delete process.env.LLM_PROVIDER;
   delete process.env.LLM_MODEL;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.AZURE_OPENAI_API_KEY;
+  delete process.env.AZURE_OPENAI_RESOURCE_NAME;
+  delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+  delete process.env.AZURE_OPENAI_DEPLOYMENT;
 
   while (rootsToClean.length > 0) {
     await removeTestRoot(rootsToClean.pop());
@@ -71,6 +75,64 @@ afterEach(async () => {
 });
 
 describe('runtime-client', () => {
+  it('fails early when the configured provider is missing required environment variables', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    delete process.env.OPENAI_API_KEY;
+
+    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+
+    expect(() => validateRuntimeEnvironment()).toThrow('Missing environment variable: OPENAI_API_KEY');
+  });
+
+  it('accepts AZURE_OPENAI_DEPLOYMENT_NAME for azure provider configuration', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    process.env.LLM_PROVIDER = 'azure';
+    process.env.LLM_MODEL = 'gpt-5.4';
+    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
+    process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'test-deployment';
+    delete process.env.AZURE_OPENAI_DEPLOYMENT;
+
+    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+    const runtimeSettings = validateRuntimeEnvironment();
+
+    expect(runtimeSettings).toMatchObject({
+      provider: 'azure',
+      model: 'gpt-5.4',
+      providers: {
+        azure: {
+          apiKey: 'test-azure-key',
+          resourceName: 'test-resource',
+          deployment: 'test-deployment',
+        },
+      },
+    });
+  });
+
+  it('defaults the azure model to the deployment name when LLM_MODEL is unset', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    process.env.LLM_PROVIDER = 'azure';
+    delete process.env.LLM_MODEL;
+    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
+    process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'test-deployment';
+    delete process.env.AZURE_OPENAI_DEPLOYMENT;
+
+    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+    const runtimeSettings = validateRuntimeEnvironment();
+
+    expect(runtimeSettings).toMatchObject({
+      provider: 'azure',
+      model: 'test-deployment',
+    });
+  });
+
   it('executes a tool-capable turn and returns the completed conversation', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -194,5 +256,53 @@ describe('runtime-client', () => {
     ).rejects.toThrow('LLM turn ended without a final text response. Stop reason: timeout');
 
     expect(runtimeMock.disposeLLMEnvironment).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes mixed-case provider names from the environment', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    process.env.LLM_PROVIDER = 'OpenAI';
+    delete process.env.LLM_MODEL;
+
+    runtimeMock.respondWithTools.mockResolvedValue({
+      state: {
+        conversationMessages: [
+          {
+            role: 'user',
+            content: 'Hello',
+          },
+          {
+            role: 'assistant',
+            content: 'Hi',
+          },
+        ],
+        finalText: 'Hi',
+      },
+      reason: 'text_response',
+    });
+
+    const { runChatTurn } = await loadRuntimeClient(rootPath);
+
+    await runChatTurn({
+      chat: {
+        id: 'chat-1',
+        createdAt: '2026-05-07T12:00:00.000Z',
+        updatedAt: '2026-05-07T12:00:00.000Z',
+        messages: [],
+      },
+      userMessage: 'Hello',
+      systemPrompt: 'System prompt',
+      skillInventory: [],
+    });
+
+    expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRequest: expect.objectContaining({
+          provider: 'openai',
+          model: 'gpt-5',
+        }),
+      }),
+    );
   });
 });

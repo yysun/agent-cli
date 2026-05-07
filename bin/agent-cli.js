@@ -14,24 +14,54 @@
  * Recent changes:
  * - 2026-05-07: Added the initial `llm-runtime`-backed CLI implementation.
  * - 2026-05-07: Exported the CLI entry functions so Vitest can exercise them directly.
+ * - 2026-05-07: Moved startup diagnostics behind `--verbose` so stdout stays machine-friendly.
  */
 import 'dotenv/config';
 
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadSkillInventory, loadSystemPrompt } from '../lib/agent-files.js';
 import { loadRequestedChat, persistCompletedChat } from '../lib/session-store.js';
-import { runChatTurn } from '../lib/runtime-client.js';
+import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
 
 export function usageText() {
   return [
-    'Usage: agent-cli [--new-chat] <message>',
+    'Usage: agent-cli [--new-chat] [--verbose] <message>',
     '',
     'Examples:',
     '  agent-cli --new-chat "Map my next financial move"',
     '  agent-cli "What should I do first?"',
+    '  agent-cli --verbose "What should I do first?"',
   ].join('\n');
+}
+
+export function startupText(cwd = process.cwd()) {
+  return `Agent CLI starting in ${cwd}`;
+}
+
+/**
+ * @param {{ provider: string, model: string }} runtimeSettings
+ */
+export function runtimeSelectionText(runtimeSettings) {
+  return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
+}
+
+/**
+ * @param {string | undefined} argvPath
+ * @param {string} moduleUrl
+ */
+export function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argvPath) {
+    return false;
+  }
+
+  try {
+    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return pathToFileURL(path.resolve(argvPath)).href === moduleUrl;
+  }
 }
 
 /**
@@ -40,6 +70,7 @@ export function usageText() {
 export function parseArguments(argv) {
   let newChat = false;
   let help = false;
+  let verbose = false;
   const messageParts = [];
 
   for (const arg of argv) {
@@ -53,6 +84,11 @@ export function parseArguments(argv) {
       continue;
     }
 
+    if (arg === '--verbose' || arg === '-v') {
+      verbose = true;
+      continue;
+    }
+
     if (arg.startsWith('--')) {
       throw new Error(`Unknown flag: ${arg}`);
     }
@@ -63,6 +99,7 @@ export function parseArguments(argv) {
   return {
     help,
     newChat,
+    verbose,
     message: messageParts.join(' ').trim(),
   };
 }
@@ -82,6 +119,8 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
   if (!message) {
     throw new Error(`Missing user message.\n\n${usageText()}`);
   }
+
+  validateRuntimeEnvironment();
 
   const [systemPrompt, skillInventory, chat] = await Promise.all([
     loadSystemPrompt(),
@@ -111,6 +150,16 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
  */
 export async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
+    const parsed = parseArguments(argv);
+
+    if (parsed.verbose && !parsed.help) {
+      io.stderr.write(`${startupText()}\n`);
+
+      if (parsed.message) {
+        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment())}\n`);
+      }
+    }
+
     await main(argv, io);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -119,8 +168,6 @@ export async function runCli(argv = process.argv.slice(2), io = { stdout: proces
   }
 }
 
-const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
-
-if (invokedPath && import.meta.url === invokedPath) {
+if (isCliEntrypoint()) {
   await runCli();
 }

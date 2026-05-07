@@ -92,14 +92,41 @@ describe('session-store', () => {
     expect(reloaded.messages[1].tool_calls).toHaveLength(1);
   });
 
-  it('fails clearly when there is no current chat', async () => {
+  it('creates a new in-memory chat shell when there is no current chat', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
     const { loadRequestedChat } = await loadSessionStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: false });
 
-    await expect(loadRequestedChat({ newChat: false })).rejects.toThrow(
-      'Missing current chat. Start one with --new-chat.',
-    );
+    expect(chat.id).toMatch(/Z-/);
+    expect(chat.messages).toEqual([]);
+    expect(chat.createdAt).toBe(chat.updatedAt);
+  });
+
+  it('creates a new in-memory chat shell when the current chat file is missing', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { loadRequestedChat, persistCompletedChat } = await loadSessionStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: true });
+
+    await persistCompletedChat({
+      chat,
+      messages: [
+        {
+          role: 'user',
+          content: 'Hello',
+        },
+      ],
+    });
+
+    const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
+    await removeTestRoot(path.join(rootPath, 'agent', 'sessions', 'chats', `${current.chatId}.json`));
+
+    const recoveredChat = await loadRequestedChat({ newChat: false });
+
+    expect(recoveredChat.id).not.toBe(chat.id);
+    expect(recoveredChat.messages).toEqual([]);
   });
 });
