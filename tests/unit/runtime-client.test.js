@@ -474,4 +474,74 @@ describe('runtime-client', () => {
       }),
     );
   });
+
+  it('limits model context messages without truncating persisted chat history', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    runtimeMock.respondWithTools.mockImplementation(async (options) => {
+      const builtMessages = await options.buildMessages({
+        state: options.initialState,
+        emptyTextRetryCount: 0,
+      });
+
+      expect(options.initialState.conversationMessages).toHaveLength(2);
+      expect(options.initialState.conversationMessages[0]).toMatchObject({
+        role: 'assistant',
+        content: 'Older B',
+      });
+      expect(options.initialState.conversationMessages[1]).toMatchObject({
+        role: 'user',
+        content: 'New input',
+      });
+      expect(options.initialState.persistedMessages).toHaveLength(4);
+      expect(builtMessages.at(-1)).toMatchObject({ role: 'user', content: 'New input' });
+
+      const afterText = await options.onTextResponse({
+        state: options.initialState,
+        response: {
+          type: 'text',
+          content: 'Final answer',
+          assistantMessage: {
+            role: 'assistant',
+            content: 'Final answer',
+          },
+        },
+        responseText: 'Final answer',
+        messages: builtMessages,
+        iteration: 1,
+      });
+
+      return {
+        state: afterText.state,
+        reason: 'text_response',
+      };
+    });
+
+    const { runChatTurn } = await loadRuntimeClient(rootPath);
+    const result = await runChatTurn({
+      chat: {
+        id: 'chat-1',
+        createdAt: '2026-05-07T12:00:00.000Z',
+        updatedAt: '2026-05-07T12:00:00.000Z',
+        messages: [
+          { role: 'user', content: 'Older Q1' },
+          { role: 'assistant', content: 'Older A1' },
+          { role: 'assistant', content: 'Older B' },
+        ],
+      },
+      userMessage: 'New input',
+      historyMessageLimit: 1,
+      systemPrompt: 'System prompt',
+      skillInventory: [],
+    });
+
+    expect(result.assistantText).toBe('Final answer');
+    expect(result.messages).toHaveLength(5);
+    expect(result.messages[0]).toMatchObject({ role: 'user', content: 'Older Q1' });
+    expect(result.messages[1]).toMatchObject({ role: 'assistant', content: 'Older A1' });
+    expect(result.messages[2]).toMatchObject({ role: 'assistant', content: 'Older B' });
+    expect(result.messages[3]).toMatchObject({ role: 'user', content: 'New input' });
+    expect(result.messages[4]).toMatchObject({ role: 'assistant', content: 'Final answer' });
+  });
 });

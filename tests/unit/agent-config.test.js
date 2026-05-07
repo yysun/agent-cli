@@ -49,6 +49,7 @@ describe('agent-config', () => {
       modal: 'gpt-5-mini',
       temperature: '0.25',
       tokens: 2048,
+      past_messages: 5,
       permissions: 'ask',
       reasoning: {
         effort: 'medium',
@@ -66,6 +67,7 @@ describe('agent-config', () => {
       model: 'gpt-5-mini',
       temperature: 0.25,
       maxTokens: 2048,
+      pastMessages: 5,
       toolPermission: 'ask',
       reasoningEffort: 'medium',
       webSearch: {

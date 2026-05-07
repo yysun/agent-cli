@@ -149,6 +149,10 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
     loadRequestedChat({ newChat }),
   ]);
 
+  const historyMessageLimit = Number.isInteger(agentConfig.pastMessages) && agentConfig.pastMessages >= 0
+    ? agentConfig.pastMessages
+    : 0;
+
   const turnResult = await runChatTurn({
     chat,
     userMessage: message,
@@ -158,6 +162,7 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
       : (chunk) => {
         writeSseEvent(io.stdout, 'chunk', chunk);
       },
+    historyMessageLimit,
     systemPrompt,
     skillInventory,
     agentConfig,

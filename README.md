@@ -52,6 +52,7 @@ Optional non-secret runtime defaults can live in `./agent/config.json`:
 	"model": "gpt-5",
 	"maxTokens": 2048,
 	"temperature": 0.2,
+	"pastMessages": 20,
 	"toolPermission": "ask",
 	"reasoningEffort": "medium",
 	"webSearch": {
@@ -59,6 +60,8 @@ Optional non-secret runtime defaults can live in `./agent/config.json`:
 	}
 }
 ```
+
+`pastMessages` controls how many previous persisted chat messages are loaded into each LLM request. If it is not defined, the CLI loads `0` past messages by default.
 
 The loader also accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 

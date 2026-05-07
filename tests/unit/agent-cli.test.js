@@ -328,6 +328,67 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
+  it('defaults to loading zero past messages when config does not define pastMessages', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const runChatTurnMock = vi.fn().mockResolvedValue({
+      assistantText: 'ok',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'ok' },
+      ],
+    });
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: runChatTurnMock,
+    });
+
+    await main(['--new-chat', 'hello'], createIoCapture());
+
+    expect(runChatTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        historyMessageLimit: 0,
+      }),
+    );
+  });
+
+  it('loads configured number of past messages from agent/config.json', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeAgentConfig(rootPath, {
+      pastMessages: 7,
+    });
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const runChatTurnMock = vi.fn().mockResolvedValue({
+      assistantText: 'ok',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'ok' },
+      ],
+    });
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: runChatTurnMock,
+    });
+
+    await main(['--new-chat', 'hello'], createIoCapture());
+
+    expect(runChatTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        historyMessageLimit: 7,
+      }),
+    );
+  });
+
   it('does not write partial session files when the runtime setup fails', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
