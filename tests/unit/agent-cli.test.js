@@ -14,7 +14,7 @@
  * - 2026-05-07: Added flag coverage for the verbose CLI diagnostics mode.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -237,7 +237,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('prints SSE frames in default streaming mode', async () => {
+  it('does not print streaming diagnostics to stderr unless verbose is enabled', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -246,7 +246,17 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk }) => {
+      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+        onStreamChunk?.({
+          warnings: [
+            {
+              code: 'web_search_ignored',
+              message: 'web search is disabled',
+            },
+          ],
+        });
+        onStreamChunk?.({ reasoningContent: 'thinking...' });
+        onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
         onStreamChunk?.({ content: 'Hello' });
         onStreamChunk?.({ content: ' world' });
 
@@ -264,13 +274,48 @@ describe('agent-cli entrypoint', () => {
     await main(['--new-chat', 'hello'], io);
 
     const stdout = io.getStdout();
+    const stderr = io.getStderr();
 
-    expect(stdout).toContain('event: chunk\n');
-    expect(stdout).toContain('data: {"content":"Hello"}\n\n');
-    expect(stdout).toContain('data: {"content":" world"}\n\n');
-    expect(stdout).toContain('event: final\n');
-    expect(stdout).toContain('data: {"text":"Hello world"}\n\n');
-    expect(stdout).toContain('data: [DONE]\n\n');
+    expect(stderr).toBe('');
+    expect(stdout).toContain('Hello world\n');
+    expect(stdout).not.toContain('data: [DONE]');
+    expect(stdout).not.toContain('reasoning:');
+    expect(stdout).not.toContain('warning:');
+    expect(stdout).not.toContain('tool:');
+  });
+
+  it('prints streaming diagnostics to stderr in verbose mode', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+        onStreamChunk?.({ warnings: [{ message: 'web search is disabled' }] });
+        onStreamChunk?.({ reasoningContent: 'thinking...' });
+        onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+        onStreamChunk?.({ content: 'Hello' });
+
+        return {
+          assistantText: 'Hello',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'Hello' },
+          ],
+        };
+      }),
+    });
+    const io = createIoCapture();
+
+    await main(['--new-chat', '--verbose', 'hello'], io);
+
+    expect(io.getStderr()).toContain('warning: web search is disabled\n');
+    expect(io.getStderr()).toContain('reasoning: "thinking..."\n');
+    expect(io.getStderr()).toContain('tool: load_skill\n');
+    expect(io.getStdout()).toContain('Hello\n');
   });
 
   it('prints plain text output when --stream-off is set', async () => {
@@ -295,6 +340,81 @@ describe('agent-cli entrypoint', () => {
     await main(['--new-chat', '--stream-off', 'hello'], io);
 
     expect(io.getStdout()).toBe('Hello world\n');
+  });
+
+  it('persists stream trace events json when streamTrace is enabled', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeAgentConfig(rootPath, {
+      streamTrace: true,
+    });
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+        onStreamChunk?.({ warnings: [{ message: 'warning message' }] });
+        onStreamChunk?.({ errors: [{ message: 'error message' }] });
+        onStreamChunk?.({ reasoningContent: 'reasoning text' });
+        onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+        onStreamChunk?.({ content: 'Hello' });
+
+        return {
+          assistantText: 'Hello',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'Hello' },
+          ],
+        };
+      }),
+    });
+
+    await main(['--new-chat', 'hello'], createIoCapture());
+
+    const current = JSON.parse(await readFile(path.join(rootPath, 'agent', 'sessions', 'current.json'), 'utf8'));
+    const eventsData = JSON.parse(await readFile(
+      path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'events.json'),
+      'utf8',
+    ));
+
+    expect(eventsData.chatId).toBe(current.chatId);
+    expect(Array.isArray(eventsData.events)).toBe(true);
+    expect(eventsData.events.some((event) => event.type === 'warning')).toBe(true);
+    expect(eventsData.events.some((event) => event.type === 'error')).toBe(true);
+    expect(eventsData.events.some((event) => event.type === 'reasoning')).toBe(true);
+    expect(eventsData.events.some((event) => event.type === 'tool')).toBe(true);
+    expect(eventsData.events.some((event) => event.type === 'text')).toBe(true);
+  });
+
+  it('persists an error stream trace event when runChatTurn fails', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeAgentConfig(rootPath, {
+      streamTrace: true,
+    });
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath, {
+      runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+    });
+
+    await expect(main(['--new-chat', 'hello'], createIoCapture())).rejects.toThrow('Synthetic turn failure');
+
+    const chatRoots = await readdir(path.join(rootPath, 'agent', 'sessions', 'chats'));
+    expect(chatRoots.length).toBe(1);
+
+    const eventsData = JSON.parse(await readFile(
+      path.join(rootPath, 'agent', 'sessions', 'chats', chatRoots[0], 'events.json'),
+      'utf8',
+    ));
+
+    expect(eventsData.events.some((event) => event.type === 'error')).toBe(true);
+    expect(eventsData.events.some((event) => String(event.text).includes('Synthetic turn failure'))).toBe(true);
   });
 
   it('loads provider and model from agent/config.json for verbose diagnostics', async () => {

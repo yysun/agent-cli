@@ -25,7 +25,7 @@ npm run agent-cli -- "What should I do first?"
 
 Use `--verbose` when you want startup and runtime-selection diagnostics on stderr without affecting the assistant response on stdout.
 
-Streaming is enabled by default. While streaming, stdout emits SSE frames (`event: chunk`, `event: final`, then `data: [DONE]`). Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.
+Streaming is enabled by default. While streaming, response text chunks stream on stdout. Diagnostics such as `warning: ...`, `error: ...`, `reasoning: ...`, and `tool: ...` are printed to stderr only when `--verbose` is set. There is no `data: [DONE]` marker. Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.
 
 ### Agent Files
 
@@ -33,6 +33,10 @@ Streaming is enabled by default. While streaming, stdout emits SSE frames (`even
 - Agent config: `./agent/config.json`
 - Skills root: `./agent/skills/`
 - Sessions: `./agent/sessions/`
+
+Session chats are stored under `./agent/sessions/chats/{chatId}/` with:
+- `messages.json`: persisted chat messages
+- `events.json`: optional stream trace when enabled
 
 `./agent/config.json` is optional.
 If `./agent/system.md` is missing or empty, the CLI falls back to a built-in default system prompt.
@@ -53,6 +57,7 @@ Optional non-secret runtime defaults can live in `./agent/config.json`:
 	"maxTokens": 2048,
 	"temperature": 0.2,
 	"pastMessages": 20,
+	"streamTrace": true,
 	"toolPermission": "ask",
 	"reasoningEffort": "medium",
 	"webSearch": {
@@ -62,6 +67,7 @@ Optional non-secret runtime defaults can live in `./agent/config.json`:
 ```
 
 `pastMessages` controls how many previous persisted chat messages are loaded into each LLM request. If it is not defined, the CLI loads `0` past messages by default.
+`streamTrace` accepts `true` or `false`. When set to `true`, the CLI writes per-turn streaming events (`warning`, `error`, `reasoning`, `tool`, and `text`) to `events.json` under the active chat directory.
 
 The loader also accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 

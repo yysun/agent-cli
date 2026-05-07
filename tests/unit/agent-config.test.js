@@ -50,6 +50,7 @@ describe('agent-config', () => {
       temperature: '0.25',
       tokens: 2048,
       past_messages: 5,
+      stream_trace: 'true',
       permissions: 'ask',
       reasoning: {
         effort: 'medium',
@@ -68,6 +69,7 @@ describe('agent-config', () => {
       temperature: 0.25,
       maxTokens: 2048,
       pastMessages: 5,
+      streamTrace: true,
       toolPermission: 'ask',
       reasoningEffort: 'medium',
       webSearch: {
@@ -87,6 +89,20 @@ describe('agent-config', () => {
 
     await expect(loadAgentConfig()).rejects.toThrow(
       'Invalid agent config value for permissions: expected one of auto, ask, read.',
+    );
+  });
+
+  it('fails clearly for invalid streamTrace values', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeAgentConfig(rootPath, {
+      streamTrace: 'maybe',
+    });
+
+    const { loadAgentConfig } = await loadAgentConfigModule(rootPath);
+
+    await expect(loadAgentConfig()).rejects.toThrow(
+      'Invalid agent config value for streamTrace: expected true or false.',
     );
   });
 });

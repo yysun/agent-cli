@@ -174,6 +174,7 @@ describe('runtime-client', () => {
   it('executes a tool-capable turn and returns the completed conversation', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
+    const onToolCall = vi.fn();
 
     runtimeMock.respondWithTools.mockImplementation(async (options) => {
       const builtMessages = await options.buildMessages({
@@ -240,6 +241,7 @@ describe('runtime-client', () => {
         messages: [],
       },
       userMessage: 'Use the skill',
+      onToolCall,
       systemPrompt: 'System prompt',
       skillInventory: [
         {
@@ -301,6 +303,11 @@ describe('runtime-client', () => {
         toolCallId: 'tool-call-1',
       }),
     );
+    expect(onToolCall).toHaveBeenCalledWith({
+      id: 'tool-call-1',
+      name: 'load_skill',
+      arguments: '{"skillId":"agent-cli-core"}',
+    });
     expect(runtimeMock.disposeLLMEnvironment).toHaveBeenCalledTimes(1);
   });
 

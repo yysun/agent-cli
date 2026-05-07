@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadAgentConfig } from '../lib/agent-config.js';
 import { loadSkillInventory, loadSystemPrompt } from '../lib/agent-files.js';
-import { loadRequestedChat, persistCompletedChat } from '../lib/session-store.js';
+import { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } from '../lib/session-store.js';
 import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
 
 export function usageText() {
@@ -45,12 +45,22 @@ export function startupText(cwd = process.cwd()) {
 
 /**
  * @param {{ write(chunk: string): void }} stdout
- * @param {string} eventName
- * @param {unknown} payload
+ * @param {string | null} previousType
+ * @param {string} nextType
  */
-function writeSseEvent(stdout, eventName, payload) {
-  stdout.write(`event: ${eventName}\n`);
-  stdout.write(`data: ${JSON.stringify(payload ?? null)}\n\n`);
+function writeTypeTransitionSeparator(stdout, previousType, nextType) {
+  if (previousType && previousType !== nextType) {
+    stdout.write('\n');
+  }
+}
+
+/**
+ * @param {{ write(chunk: string): void }} stderr
+ * @param {string} kind
+ * @param {string} text
+ */
+function writeDiagnostic(stderr, kind, text) {
+  stderr.write(`${kind}: ${text}\n`);
 }
 
 /**
@@ -125,12 +135,23 @@ export function parseArguments(argv) {
 
 /**
  * @param {string[]} [argv]
- * @param {{ stdout: { write(chunk: string): void } }} [io]
+ * @param {{ stdout: { write(chunk: string): void }, stderr?: { write(chunk: string): void } }} [io]
  * @param {{ agentConfig?: Record<string, unknown> }} [options]
  */
-export async function main(argv = process.argv.slice(2), io = { stdout: process.stdout }, options = {}) {
-  const { help, newChat, streamOff, message } = parseArguments(argv);
+export async function main(
+  argv = process.argv.slice(2),
+  io = { stdout: process.stdout, stderr: process.stderr },
+  options = {},
+) {
+  const { help, newChat, streamOff, verbose, message } = parseArguments(argv);
   const agentConfig = options.agentConfig ?? await loadAgentConfig();
+  const stderr = io.stderr ?? process.stderr;
+  const streamTraceEnabled = agentConfig.streamTrace === true;
+  /** @type {Array<{ type: string, text: string, createdAt: string }>} */
+  const streamTraceEvents = [];
+  /** @type {string | null} */
+  let lastStreamType = null;
+  let wroteTextChunk = false;
 
   if (help) {
     io.stdout.write(`${usageText()}\n`);
@@ -149,37 +170,174 @@ export async function main(argv = process.argv.slice(2), io = { stdout: process.
     loadRequestedChat({ newChat }),
   ]);
 
-  const historyMessageLimit = Number.isInteger(agentConfig.pastMessages) && agentConfig.pastMessages >= 0
-    ? agentConfig.pastMessages
+  const pastMessages = Number(agentConfig.pastMessages);
+  const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
+    ? pastMessages
     : 0;
+  /** @type {{ assistantText: string, messages: any[] } | null} */
+  let turnResult = null;
 
-  const turnResult = await runChatTurn({
-    chat,
-    userMessage: message,
-    stream: !streamOff,
-    onStreamChunk: streamOff
-      ? undefined
-      : (chunk) => {
-        writeSseEvent(io.stdout, 'chunk', chunk);
-      },
-    historyMessageLimit,
-    systemPrompt,
-    skillInventory,
-    agentConfig,
-  });
+  try {
+    turnResult = await runChatTurn({
+      chat,
+      userMessage: message,
+      stream: !streamOff,
+      onStreamChunk: streamOff
+        ? undefined
+        : (chunk) => {
+          const reasoningText = [
+            chunk.reasoningContent,
+            chunk.reasoning,
+            chunk.reasoningText,
+            chunk.thinking,
+          ].find((value) => typeof value === 'string' && value.length > 0);
+          const streamErrors = [
+            ...(Array.isArray(chunk.errors) ? chunk.errors : []),
+            ...(chunk.error ? [chunk.error] : []),
+          ];
+
+          for (const warning of chunk.warnings ?? []) {
+            const warningText = String(
+              warning && typeof warning === 'object' && 'message' in warning
+                ? warning.message
+                : JSON.stringify(warning ?? null),
+            );
+
+            if (verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
+              writeDiagnostic(stderr, 'warning', warningText);
+            }
+
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: 'warning',
+                text: warningText,
+                createdAt: new Date().toISOString(),
+              });
+            }
+
+            lastStreamType = 'warning';
+          }
+
+          for (const streamError of streamErrors) {
+            const errorText = String(
+              streamError && typeof streamError === 'object' && 'message' in streamError
+                ? streamError.message
+                : JSON.stringify(streamError ?? null),
+            );
+
+            if (verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
+              writeDiagnostic(stderr, 'error', errorText);
+            }
+
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: 'error',
+                text: errorText,
+                createdAt: new Date().toISOString(),
+              });
+            }
+
+            lastStreamType = 'error';
+          }
+
+          if (reasoningText) {
+            if (verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
+              writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
+            }
+
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: 'reasoning',
+                text: reasoningText,
+                createdAt: new Date().toISOString(),
+              });
+            }
+
+            lastStreamType = 'reasoningContent';
+          }
+
+          if (chunk.content) {
+            io.stdout.write(chunk.content);
+            wroteTextChunk = true;
+
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: 'text',
+                text: chunk.content,
+                createdAt: new Date().toISOString(),
+              });
+            }
+
+            lastStreamType = 'text';
+          }
+        },
+      onToolCall: streamOff
+        ? undefined
+        : (toolCall) => {
+          if (verbose) {
+            writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
+            writeDiagnostic(stderr, 'tool', toolCall.name);
+          }
+
+          if (streamTraceEnabled) {
+            streamTraceEvents.push({
+              type: 'tool',
+              text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
+              createdAt: new Date().toISOString(),
+            });
+          }
+
+          lastStreamType = 'tool';
+        },
+      historyMessageLimit,
+      systemPrompt,
+      skillInventory,
+      agentConfig,
+    });
+  } catch (error) {
+    if (streamTraceEnabled) {
+      const errorText = error instanceof Error ? error.message : String(error);
+
+      streamTraceEvents.push({
+        type: 'error',
+        text: errorText,
+        createdAt: new Date().toISOString(),
+      });
+
+      await persistStreamTraceEvents({
+        chat,
+        streamTraceEvents,
+      });
+    }
+
+    throw error;
+  }
+
+  if (!turnResult) {
+    throw new Error('Missing turn result.');
+  }
 
   await persistCompletedChat({
     chat,
     messages: turnResult.messages,
   });
 
+  if (streamTraceEnabled) {
+    await persistStreamTraceEvents({
+      chat,
+      streamTraceEvents,
+    });
+  }
+
   if (streamOff) {
     io.stdout.write(`${turnResult.assistantText}\n`);
   } else {
-    writeSseEvent(io.stdout, 'final', {
-      text: turnResult.assistantText,
-    });
-    io.stdout.write('data: [DONE]\n\n');
+    if (wroteTextChunk) {
+      io.stdout.write('\n');
+    }
   }
 
   return turnResult;

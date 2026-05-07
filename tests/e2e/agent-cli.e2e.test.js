@@ -55,6 +55,7 @@ const FALLBACK_LIVE_MODELS = {
   anthropic: 'claude-sonnet-4-20250514',
   xai: 'grok-3-mini',
 };
+const LIVE_E2E_TIMEOUT_MS = 30000;
 
 const originalRuntimeEnvironment = captureRuntimeEnvironment();
 const liveRuntimeConfig = resolveRequiredLiveRuntimeConfig(originalRuntimeEnvironment);
@@ -207,7 +208,17 @@ function extractAssistantTextFromCliStdout(stdout) {
     }
   }
 
-  return finalText.trim() || output;
+  if (finalText.trim()) {
+    return finalText.trim();
+  }
+
+  const cleanedHumanReadableStream = output
+    .split(/\r?\n/)
+    .filter((line) => !/^(warning|reasoning|tool):\s/.test(line))
+    .join('\n')
+    .trim();
+
+  return cleanedHumanReadableStream || output;
 }
 
 /** @param {string} rootPath */
@@ -255,14 +266,14 @@ describe('agent-cli CLI', () => {
     expect(assistantText.length).toBeGreaterThan(0);
 
     const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chatFilePath = path.join(rootPath, 'agent', 'sessions', 'chats', `${current.chatId}.json`);
+    const chatFilePath = path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'messages.json');
     const chat = await readJson(chatFilePath);
     const rawChatFile = await readFile(chatFilePath, 'utf8');
 
     expect(chat.messages[0]).toMatchObject({ role: 'user', content: userMessage });
     expect(chat.messages.at(-1)).toMatchObject({ role: 'assistant', content: assistantText });
     expect(rawChatFile).not.toContain('You are a terse test assistant.');
-  });
+  }, LIVE_E2E_TIMEOUT_MS);
 
   it('proves the live turn used the system prompt and triggered a skill load', async () => {
     applyLiveRuntimeEnvironment();
@@ -306,7 +317,7 @@ describe('agent-cli CLI', () => {
     expect(assistantText).toContain(skillProbeToken);
 
     const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${current.chatId}.json`));
+    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'messages.json'));
     const loadSkillMessage = chat.messages.find(
       /** @param {{ role?: string, tool_calls?: Array<{ function?: { name?: string, arguments?: string } }> }} message */
       (message) => message.role === 'assistant'
@@ -319,7 +330,7 @@ describe('agent-cli CLI', () => {
     );
 
     expect(loadSkillMessage).toBeTruthy();
-  });
+  }, LIVE_E2E_TIMEOUT_MS);
 
   it('reuses the current chat on follow-up live LLM turns', async () => {
     applyLiveRuntimeEnvironment();
@@ -338,7 +349,7 @@ describe('agent-cli CLI', () => {
     await main(['Now say goodbye briefly.'], secondIo);
 
     const secondCurrent = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${secondCurrent.chatId}.json`));
+    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', secondCurrent.chatId, 'messages.json'));
     const secondAssistantText = extractAssistantTextFromCliStdout(secondIo.getStdout());
     const userMessages = chat.messages
       .filter(
@@ -354,7 +365,7 @@ describe('agent-cli CLI', () => {
     expect(userMessages).toEqual(['Say hello briefly.', 'Now say goodbye briefly.']);
     expect(secondAssistantText.length).toBeGreaterThan(0);
     expect(chat.messages.at(-1)?.role).toBe('assistant');
-  });
+  }, LIVE_E2E_TIMEOUT_MS);
 
   it('starts a new chat when the current chat is missing', async () => {
     applyLiveRuntimeEnvironment();
@@ -370,12 +381,12 @@ describe('agent-cli CLI', () => {
     await main(['follow up'], io);
 
     const current = await readJson(path.join(rootPath, 'agent', 'sessions', 'current.json'));
-    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', `${current.chatId}.json`));
+    const chat = await readJson(path.join(rootPath, 'agent', 'sessions', 'chats', current.chatId, 'messages.json'));
     const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);
     expect(chat.messages[0]).toMatchObject({ role: 'user', content: 'follow up' });
     expect(chat.messages.at(-1)?.role).toBe('assistant');
-  });
+  }, LIVE_E2E_TIMEOUT_MS);
 
 });
