@@ -34,6 +34,7 @@ const rootsToClean = [];
 const CLI_ENVIRONMENT_KEYS = [
   'LLM_PROVIDER',
   'LLM_MODEL',
+  'GOOGLE_API_KEY',
   'OPENAI_API_KEY',
   'AGENT_CLI_ROOT',
 ];
@@ -121,6 +122,7 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--new-chat', 'Map', 'the', 'terrain'])).toEqual({
       help: false,
       newChat: true,
+      runtimeOverrides: {},
       streamOff: false,
       verbose: false,
       message: 'Map the terrain',
@@ -128,6 +130,7 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--help'])).toEqual({
       help: true,
       newChat: false,
+      runtimeOverrides: {},
       streamOff: false,
       verbose: false,
       message: '',
@@ -135,6 +138,7 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--verbose', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
+      runtimeOverrides: {},
       streamOff: false,
       verbose: true,
       message: 'Inspect status',
@@ -142,7 +146,45 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--stream-off', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
+      runtimeOverrides: {},
       streamOff: true,
+      verbose: false,
+      message: 'Inspect status',
+    });
+  });
+
+  it('parses CLI runtime overrides and normalizes their values', async () => {
+    const { parseArguments } = await loadCliModule();
+
+    expect(parseArguments([
+      '--provider', 'google',
+      '--model=gemini-2.5-pro',
+      '--temperature', '0.1',
+      '--max-tokens', '2048',
+      '--tool-permission=read',
+      '--reasoning-effort', 'low',
+      '--past-messages', '12',
+      '--stream-trace',
+      '--web-search=high',
+      'Inspect',
+      'status',
+    ])).toEqual({
+      help: false,
+      newChat: false,
+      runtimeOverrides: {
+        provider: 'google',
+        model: 'gemini-2.5-pro',
+        temperature: 0.1,
+        maxTokens: 2048,
+        toolPermission: 'read',
+        reasoningEffort: 'low',
+        pastMessages: 12,
+        streamTrace: true,
+        webSearch: {
+          searchContextSize: 'high',
+        },
+      },
+      streamOff: false,
       verbose: false,
       message: 'Inspect status',
     });
@@ -181,7 +223,7 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain('Missing user message.');
-    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] <message>');
+    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
@@ -234,6 +276,54 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
+    process.exitCode = originalExitCode;
+  });
+
+  it('prefers CLI runtime overrides over agent/config.json', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await mkdir(path.join(rootPath, 'agent', 'skills'), { recursive: true });
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await writeAgentConfig(rootPath, {
+      provider: 'openai',
+      model: 'gpt-5-mini',
+      pastMessages: 2,
+      streamTrace: false,
+    });
+
+    delete process.env.OPENAI_API_KEY;
+    process.env.GOOGLE_API_KEY = 'test-google-key';
+
+    const runChatTurn = vi.fn().mockRejectedValue(new Error('Synthetic turn failure'));
+    const { runCli } = await loadCliModule(rootPath, {
+      runChatTurn,
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli([
+      '--verbose',
+      '--provider', 'google',
+      '--model', 'gemini-2.5-pro',
+      '--past-messages', '9',
+      '--stream-trace',
+      'hello',
+    ], io);
+
+    expect(io.getStderr()).toContain('provider=google model=gemini-2.5-pro');
+    expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
+      historyMessageLimit: 9,
+      agentConfig: expect.objectContaining({
+        provider: 'google',
+        model: 'gemini-2.5-pro',
+        pastMessages: 9,
+        streamTrace: true,
+      }),
+    }));
+    expect(process.exitCode).toBe(1);
+
+    delete process.env.GOOGLE_API_KEY;
     process.exitCode = originalExitCode;
   });
 
@@ -540,7 +630,7 @@ describe('agent-cli entrypoint', () => {
 
     await runCli(['--help'], io);
 
-    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] <message>');
+    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
     expect(io.getStderr()).toBe('');
   });
 });

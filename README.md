@@ -27,6 +27,8 @@ Use `--verbose` when you want startup and runtime-selection diagnostics on stder
 
 Streaming is enabled by default. While streaming, response text chunks stream on stdout. Diagnostics such as `warning: ...`, `error: ...`, `reasoning: ...`, and `tool: ...` are printed to stderr only when `--verbose` is set. There is no `data: [DONE]` marker. Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.
 
+Runtime settings can also be supplied on the command line. These values override `./agent/config.json` when both are present. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
+
 ### Agent Files
 
 - System prompt: `./agent/system.md`
@@ -72,7 +74,7 @@ Optional non-secret runtime defaults can live in `./agent/config.json`:
 The loader also accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
 Provider credentials still come from environment variables.
-When both are set, `./agent/config.json` takes precedence over `LLM_PROVIDER` and `LLM_MODEL`.
+Precedence is: command-line flags, then `./agent/config.json`, then `LLM_PROVIDER` and `LLM_MODEL`.
 
 Set runtime environment variables before running the CLI:
 

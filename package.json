@@ -1,6 +1,6 @@
 {
   "name": "agent-cli",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Project: Agent CLI Repo: yysun/agent-cli CLI: agent-cli Core objects: - Memory = map marks - Tension = terrain signals - Insight = route judgment - Action = next move",
   "main": "bin/agent-cli.js",
   "bin": {

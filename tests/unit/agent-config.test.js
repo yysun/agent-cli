@@ -32,6 +32,37 @@ afterEach(async () => {
 });
 
 describe('agent-config', () => {
+  it('normalizes CLI-style runtime override keys', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { normalizeAgentConfig } = await loadAgentConfigModule(rootPath);
+
+    expect(normalizeAgentConfig({
+      provider: 'google',
+      model: 'gemini-2.5-pro',
+      temperature: '0.15',
+      'max-tokens': '4096',
+      'tool-permission': 'read',
+      'reasoning-effort': 'low',
+      'past-messages': '7',
+      'stream-trace': 'false',
+      'web-search': 'high',
+    })).toEqual({
+      provider: 'google',
+      model: 'gemini-2.5-pro',
+      temperature: 0.15,
+      maxTokens: 4096,
+      toolPermission: 'read',
+      reasoningEffort: 'low',
+      pastMessages: 7,
+      streamTrace: false,
+      webSearch: {
+        searchContextSize: 'high',
+      },
+    });
+  });
+
   it('returns an empty config when agent/config.json is missing', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);

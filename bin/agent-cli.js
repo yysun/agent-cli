@@ -22,20 +22,28 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { loadAgentConfig } from '../lib/agent-config.js';
+import { loadAgentConfig, normalizeAgentConfig } from '../lib/agent-config.js';
 import { loadSkillInventory, loadSystemPrompt } from '../lib/agent-files.js';
 import { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } from '../lib/session-store.js';
 import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
 
 export function usageText() {
   return [
-    'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] <message>',
+    'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
+    '',
+    'Runtime options override agent/config.json when provided:',
+    '  --provider <name>                 --model <name>',
+    '  --temperature <number>            --max-tokens <number>',
+    '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
+    '  --past-messages <count>           --stream-trace <true|false>',
+    '  --web-search <true|false|low|medium|high>',
     '',
     'Examples:',
     '  agent-cli --new-chat "Map my next financial move"',
     '  agent-cli "What should I do first?"',
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
+    '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
   ].join('\n');
 }
 
@@ -95,8 +103,86 @@ export function parseArguments(argv) {
   let help = false;
   let verbose = false;
   const messageParts = [];
+  /** @type {Record<string, unknown>} */
+  const runtimeOverrides = {};
 
-  for (const arg of argv) {
+  /** @param {string} rawValue */
+  const normalizeFlagName = (rawValue) => rawValue.trim().toLowerCase();
+
+  /**
+   * @param {string[]} values
+   * @param {number} index
+   * @param {string | undefined} inlineValue
+   * @param {string} flagName
+   * @param {{ allowBareTrue?: boolean }} [options]
+   */
+  const readFlagValue = (values, index, inlineValue, flagName, options = {}) => {
+    if (inlineValue !== undefined) {
+      return {
+        nextIndex: index,
+        value: inlineValue,
+      };
+    }
+
+    const nextValue = values[index + 1];
+
+    if (typeof nextValue === 'string' && !nextValue.startsWith('--')) {
+      return {
+        nextIndex: index + 1,
+        value: nextValue,
+      };
+    }
+
+    if (options.allowBareTrue) {
+      return {
+        nextIndex: index,
+        value: true,
+      };
+    }
+
+    throw new Error(`Missing value for flag: --${flagName}`);
+  };
+
+  /**
+   * @param {string[]} values
+   * @param {number} index
+   * @param {string | undefined} inlineValue
+   * @param {string[]} explicitValues
+   */
+  const readOptionalFlagValue = (values, index, inlineValue, explicitValues) => {
+    if (inlineValue !== undefined) {
+      return {
+        nextIndex: index,
+        value: inlineValue,
+      };
+    }
+
+    const nextValue = values[index + 1];
+    const normalizedNextValue = typeof nextValue === 'string'
+      ? nextValue.trim().toLowerCase()
+      : '';
+
+    if (explicitValues.includes(normalizedNextValue)) {
+      return {
+        nextIndex: index + 1,
+        value: nextValue,
+      };
+    }
+
+    return {
+      nextIndex: index,
+      value: true,
+    };
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === '--') {
+      messageParts.push(...argv.slice(index + 1));
+      break;
+    }
+
     if (arg === '--new-chat') {
       newChat = true;
       continue;
@@ -118,6 +204,85 @@ export function parseArguments(argv) {
     }
 
     if (arg.startsWith('--')) {
+      const flagBody = arg.slice(2);
+      const equalsIndex = flagBody.indexOf('=');
+      const rawFlagName = equalsIndex >= 0 ? flagBody.slice(0, equalsIndex) : flagBody;
+      const inlineValue = equalsIndex >= 0 ? flagBody.slice(equalsIndex + 1) : undefined;
+      const flagName = normalizeFlagName(rawFlagName);
+
+      if (flagName === 'provider') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides.provider = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'model') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides.model = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'temperature') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides.temperature = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'max-tokens' || flagName === 'max-output-tokens') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides['max-tokens'] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'tool-permission' || flagName === 'permission' || flagName === 'permissions') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides['tool-permission'] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'reasoning-effort' || flagName === 'reasoning') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides['reasoning-effort'] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'past-messages' || flagName === 'history-messages') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides['past-messages'] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'stream-trace') {
+        const result = readOptionalFlagValue(argv, index, inlineValue, ['true', 'false']);
+        runtimeOverrides['stream-trace'] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'no-stream-trace') {
+        runtimeOverrides['stream-trace'] = false;
+        continue;
+      }
+
+      if (flagName === 'web-search') {
+        const result = readOptionalFlagValue(argv, index, inlineValue, ['true', 'false', 'low', 'medium', 'high']);
+        runtimeOverrides['web-search'] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'no-web-search') {
+        runtimeOverrides['web-search'] = false;
+        continue;
+      }
+
       throw new Error(`Unknown flag: ${arg}`);
     }
 
@@ -127,6 +292,7 @@ export function parseArguments(argv) {
   return {
     help,
     newChat,
+    runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
     message: messageParts.join(' ').trim(),
@@ -143,8 +309,12 @@ export async function main(
   io = { stdout: process.stdout, stderr: process.stderr },
   options = {},
 ) {
-  const { help, newChat, streamOff, verbose, message } = parseArguments(argv);
-  const agentConfig = options.agentConfig ?? await loadAgentConfig();
+  const { help, newChat, runtimeOverrides, streamOff, verbose, message } = parseArguments(argv);
+  const baseAgentConfig = options.agentConfig ?? await loadAgentConfig();
+  const agentConfig = {
+    ...baseAgentConfig,
+    ...runtimeOverrides,
+  };
   const stderr = io.stderr ?? process.stderr;
   const streamTraceEnabled = agentConfig.streamTrace === true;
   /** @type {Array<{ type: string, text: string, createdAt: string }>} */
@@ -350,7 +520,11 @@ export async function main(
 export async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
     const parsed = parseArguments(argv);
-    const agentConfig = parsed.help ? {} : await loadAgentConfig();
+    const fileAgentConfig = parsed.help ? {} : await loadAgentConfig();
+    const agentConfig = {
+      ...fileAgentConfig,
+      ...parsed.runtimeOverrides,
+    };
 
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}\n`);
