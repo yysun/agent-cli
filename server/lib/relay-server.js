@@ -12,9 +12,12 @@
  *
  * Recent changes:
  * - 2026-05-11: Added the initial optional remote-control relay server.
+ * - 2026-05-11: Added CORS and preflight handling so browser UIs can access relay APIs and SSE.
  */
 import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { URL } from 'node:url';
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
@@ -660,6 +663,9 @@ async function readRequestBody(request) {
  */
 function writeJson(response, statusCode, payload) {
   response.statusCode = statusCode;
+  response.setHeader('access-control-allow-origin', '*');
+  response.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  response.setHeader('access-control-allow-headers', 'content-type,authorization');
   response.setHeader('content-type', 'application/json; charset=utf-8');
   response.end(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -672,11 +678,106 @@ function writeNotFound(response, message = 'Not found.') {
   writeJson(response, 404, { error: message });
 }
 
+/** @param {string} filePath */
+function contentTypeForPath(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+
+  if (extension === '.html') return 'text/html; charset=utf-8';
+  if (extension === '.js' || extension === '.mjs') return 'text/javascript; charset=utf-8';
+  if (extension === '.css') return 'text/css; charset=utf-8';
+  if (extension === '.json') return 'application/json; charset=utf-8';
+  if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.ico') return 'image/x-icon';
+
+  return 'application/octet-stream';
+}
+
 /**
- * @param {{ service?: RelayService, baseUrl?: string }} [options]
+ * @param {string} staticDir
+ * @param {string} requestPathname
+ */
+function resolveStaticFilePath(staticDir, requestPathname) {
+  const normalizedRequestPath = path.posix.normalize(`/${requestPathname}`).replace(/^\/+/u, '');
+  const absoluteStaticRoot = path.resolve(staticDir);
+  const absoluteRequestedPath = path.resolve(absoluteStaticRoot, normalizedRequestPath);
+  const pathBoundary = `${absoluteStaticRoot}${path.sep}`;
+
+  if (absoluteRequestedPath !== absoluteStaticRoot && !absoluteRequestedPath.startsWith(pathBoundary)) {
+    return null;
+  }
+
+  return absoluteRequestedPath;
+}
+
+/**
+ * @param {import('node:http').ServerResponse} response
+ * @param {string} filePath
+ */
+async function writeStaticFile(response, filePath) {
+  const content = await readFile(filePath);
+  response.statusCode = 200;
+  response.setHeader('content-type', contentTypeForPath(filePath));
+  response.end(content);
+}
+
+/**
+ * @param {import('node:http').IncomingMessage} request
+ * @param {import('node:http').ServerResponse} response
+ * @param {string | undefined} staticDir
+ * @param {string} pathname
+ */
+async function tryServeStatic(request, response, staticDir, pathname) {
+  if (!staticDir) {
+    return false;
+  }
+
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return false;
+  }
+
+  const requestedPath = pathname === '/' ? '/index.html' : pathname;
+  const resolvedFilePath = resolveStaticFilePath(staticDir, requestedPath);
+
+  if (!resolvedFilePath) {
+    response.statusCode = 400;
+    response.end('Invalid path.');
+    return true;
+  }
+
+  try {
+    await writeStaticFile(response, resolvedFilePath);
+    return true;
+  } catch {
+    const extension = path.extname(requestedPath);
+
+    if (extension) {
+      return false;
+    }
+
+    const indexFilePath = resolveStaticFilePath(staticDir, '/index.html');
+
+    if (!indexFilePath) {
+      return false;
+    }
+
+    try {
+      await writeStaticFile(response, indexFilePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * @param {{ service?: RelayService, baseUrl?: string, staticDir?: string }} [options]
  */
 export function createRelayHttpServer(options = {}) {
   const service = options.service ?? new RelayService();
+  const staticDir = normalizeOptionalString(options.staticDir);
   const server = createServer(async (request, response) => {
     try {
       if (!request.url || !request.method) {
@@ -687,6 +788,15 @@ export function createRelayHttpServer(options = {}) {
       const origin = options.baseUrl ?? `http://${request.headers.host ?? '127.0.0.1'}`;
       const url = new URL(request.url, origin);
       const pathname = url.pathname;
+
+      if (request.method === 'OPTIONS') {
+        response.statusCode = 204;
+        response.setHeader('access-control-allow-origin', '*');
+        response.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+        response.setHeader('access-control-allow-headers', 'content-type,authorization');
+        response.end();
+        return;
+      }
 
       if (request.method === 'GET' && pathname === '/healthz') {
         writeJson(response, 200, { ok: true });
@@ -755,6 +865,7 @@ export function createRelayHttpServer(options = {}) {
               'content-type': 'text/event-stream; charset=utf-8',
               'cache-control': 'no-cache, no-transform',
               connection: 'keep-alive',
+              'access-control-allow-origin': '*',
             });
             response.write(': connected\n\n');
 
@@ -825,6 +936,12 @@ export function createRelayHttpServer(options = {}) {
           timeoutMs: Number(url.searchParams.get('timeoutMs') ?? '0'),
         });
         writeJson(response, 200, result);
+        return;
+      }
+
+      const staticServed = await tryServeStatic(request, response, staticDir, pathname);
+
+      if (staticServed) {
         return;
       }
 

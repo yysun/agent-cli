@@ -10,19 +10,53 @@
  *
  * Recent changes:
  * - 2026-05-11: Added relay server coverage for the optional remote supervision flow.
+ * - 2026-05-11: Added static SPA fallback and API-precedence regression coverage.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-import { RelayService } from '../../lib/relay-server.js';
+import { createRelayHttpServer, RelayService } from '../../server/lib/relay-server.js';
 
 /** @type {RelayService[]} */
 const servicesToClose = [];
+const tempDirsToRemove = [];
 
-afterEach(() => {
+afterEach(async () => {
   while (servicesToClose.length > 0) {
     servicesToClose.pop()?.close();
   }
+
+  while (tempDirsToRemove.length > 0) {
+    const dir = tempDirsToRemove.pop();
+
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
 });
+
+async function createTempStaticDir() {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-cli-relay-test-'));
+  tempDirsToRemove.push(dir);
+  return dir;
+}
+
+async function startServer(options = {}) {
+  const server = createRelayHttpServer(options);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+
+  if (!address || typeof address === 'string') {
+    throw new Error('Failed to start relay test server.');
+  }
+
+  return {
+    server,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+  };
+}
 
 describe('relay-server', () => {
   it('creates relay sessions with a client connection URL', () => {
@@ -189,5 +223,34 @@ describe('relay-server', () => {
       after: 0,
       timeoutMs: 1,
     })).rejects.toThrow('Relay session not found.');
+  });
+
+  it('serves SPA assets while keeping API routes authoritative', async () => {
+    const staticDir = await createTempStaticDir();
+    await mkdir(staticDir, { recursive: true });
+    await writeFile(join(staticDir, 'index.html'), '<!doctype html><html><body>SPA</body></html>');
+    await writeFile(join(staticDir, 'app.js'), 'console.log("spa")');
+
+    const { server, baseUrl } = await startServer({ staticDir });
+    servicesToClose.push({ close: () => server.close() });
+
+    const healthResponse = await fetch(`${baseUrl}/healthz`);
+    expect(healthResponse.headers.get('content-type')).toContain('application/json');
+    expect(await healthResponse.json()).toEqual({ ok: true });
+
+    const spaResponse = await fetch(`${baseUrl}/dashboard`);
+    expect(spaResponse.headers.get('content-type')).toContain('text/html');
+    expect(await spaResponse.text()).toContain('SPA');
+
+    const apiResponse = await fetch(`${baseUrl}/v1/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chatId: 'chat-1' }),
+    });
+
+    expect(apiResponse.headers.get('content-type')).toContain('application/json');
+    expect(apiResponse.status).toBe(201);
+    const session = await apiResponse.json();
+    expect(session.clientConnectionUrl).toContain('/pair?sessionId=');
   });
 });

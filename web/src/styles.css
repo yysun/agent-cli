@@ -1,0 +1,236 @@
+/*
+ * Agent CLI Relay Web Styles
+ *
+ * Purpose:
+ * - Define the visual language for the relay command deck.
+ *
+ * Key features:
+ * - Uses a warm gradient atmosphere, high-contrast cards, and responsive grid sections.
+ *
+ * Recent changes:
+ * - 2026-05-11: Added initial custom styling for the React relay UI.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg-1: #fff5df;
+  --bg-2: #ffd5b7;
+  --ink: #1a1b1f;
+  --ink-soft: #50525c;
+  --card: rgba(255, 255, 255, 0.88);
+  --card-border: rgba(23, 24, 28, 0.1);
+  --accent: #f85f3e;
+  --accent-2: #2f7fd9;
+  --danger: #b3154e;
+  --shadow: 0 16px 50px rgba(25, 14, 8, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(255, 163, 103, 0.42), transparent 45%),
+    radial-gradient(circle at 85% 5%, rgba(59, 139, 234, 0.3), transparent 35%),
+    linear-gradient(130deg, var(--bg-1), var(--bg-2));
+}
+
+code,
+.mono,
+pre {
+  font-family: 'IBM Plex Mono', Menlo, monospace;
+}
+
+.app-shell {
+  width: min(1200px, 92vw);
+  margin: 2.4rem auto 3rem;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 1rem;
+  animation: page-enter 380ms ease-out;
+}
+
+.hero,
+.panel {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.hero {
+  grid-column: 1 / -1;
+  padding: 1.4rem 1.6rem;
+}
+
+.eyebrow {
+  margin: 0;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0.4rem 0 0.5rem;
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.panel {
+  padding: 1rem;
+}
+
+.pair-panel {
+  grid-column: span 5;
+}
+
+.command-panel {
+  grid-column: span 7;
+}
+
+.approvals-panel,
+.events-panel,
+.notifications-panel {
+  grid-column: span 4;
+}
+
+h2 {
+  margin: 0 0 0.7rem;
+  font-size: 1.1rem;
+}
+
+label {
+  display: block;
+  margin: 0.45rem 0;
+  font-weight: 500;
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(30, 31, 35, 0.15);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+button {
+  border: 0;
+  border-radius: 12px;
+  padding: 0.6rem 0.9rem;
+  background: linear-gradient(120deg, var(--accent), #f7864e);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+
+button:hover:enabled {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.ghost {
+  background: linear-gradient(120deg, var(--danger), #db2f67);
+}
+
+.status,
+.error,
+.muted {
+  margin: 0.65rem 0 0;
+  font-size: 0.9rem;
+}
+
+.error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+.command-actions,
+.approval-actions {
+  margin-top: 0.8rem;
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.approval-card,
+.event-list li,
+.notification-list li {
+  border: 1px solid rgba(30, 31, 35, 0.11);
+  border-radius: 12px;
+  padding: 0.65rem;
+  background: rgba(255, 255, 255, 0.93);
+  margin: 0 0 0.6rem;
+}
+
+.approval-card h3 {
+  margin: 0;
+}
+
+pre {
+  margin: 0.5rem 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: 0.5rem;
+  border-radius: 10px;
+  background: rgba(20, 21, 27, 0.06);
+}
+
+.event-list,
+.notification-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 960px) {
+
+  .pair-panel,
+  .command-panel,
+  .approvals-panel,
+  .events-panel,
+  .notifications-panel {
+    grid-column: 1 / -1;
+  }
+}

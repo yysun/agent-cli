@@ -43,6 +43,31 @@ Remote hosting with an initial local turn uses:
 npm run agent-cli -- --remote "Summarize the current task"
 ```
 
+Start the relay server in a separate terminal:
+
+```bash
+npm run relay-server
+```
+
+By default, the relay binds to `127.0.0.1` for local development. For cloud deploys, set `HOST=0.0.0.0` (and `PORT` as needed) before starting the relay server.
+
+Then launch the web UI:
+
+```bash
+npm run web:install
+npm run web:dev
+```
+
+Or run all three together in one command:
+
+```bash
+npm run dev
+```
+
+`npm run dev` starts the relay server first, waits for `/healthz`, then starts the web UI and `agent-cli --remote`.
+
+Paste the `Client connection URL` printed by `agent-cli --remote` into the web app and pair. The UI can send remote user messages, approval decisions, cancel/resume commands, and disconnect requests for the active local remote session.
+
 ### Agent Files
 
 - System prompt: `./AGENTS.md`
@@ -101,10 +126,33 @@ Supported provider env vars:
 
 ### Tests
 
-- `npm test`: syntax checks plus all Vitest suites
+- `npm test`: targeted checks (syntax, unit tests, and web typecheck)
 - `npm run test:unit`: targeted module tests
 - `npm run test:e2e`: end-to-end CLI flows against a real LLM provider
 - `npm run relay-server`: run the optional relay server locally
+- `npm run dev`: start relay + web + remote CLI together for local development
+- `npm run web:install`: install React/Vite web UI dependencies under `./web`
+- `npm run web:dev`: run the web UI in development mode
+- `npm run web:build`: build the web UI for production
+- `npm run web:preview`: preview the built web UI locally
+
+### Production Static Hosting
+
+Yes. You can serve the compiled React app as static files from the relay server.
+
+Build the web app first:
+
+```bash
+npm run web:build
+```
+
+Then start relay with static hosting enabled:
+
+```bash
+npm run relay-server:prod
+```
+
+This serves `./web/dist` from the same process while keeping relay APIs available. You can also pass custom values with `--host`, `--static-dir`, `HOST`, `PORT`, and `RELAY_STATIC_DIR`.
 
 ### Remote Safety
 
