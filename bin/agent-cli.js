@@ -16,6 +16,7 @@
  * - 2026-05-07: Exported the CLI entry functions so Vitest can exercise them directly.
  * - 2026-05-07: Moved startup diagnostics behind `--verbose` so stdout stays machine-friendly.
  * - 2026-05-11: Always include the built-in prompt and layer AGENTS.md after it when present.
+ * - 2026-05-11: Added `--remote` host mode backed by `AGENT_CLI_RELAY_SERVER_URL`.
  */
 import 'dotenv/config';
 
@@ -25,12 +26,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizeAgentConfig } from '../lib/agent-config.js';
 import { getBuiltInSystemPrompt, loadProjectSystemPrompt, loadSkillInventory } from '../lib/agent-files.js';
-import { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } from '../lib/session-store.js';
+import {
+  loadRequestedChat,
+  persistCompletedChat,
+  persistRemoteSessionState,
+  persistStreamTraceEvents,
+} from '../lib/session-store.js';
+import * as relayClient from '../lib/relay-client.js';
+import { runRemoteControlSession } from '../lib/remote-control.js';
 import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
+
+export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
 
 export function usageText() {
   return [
     'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
+    '       agent-cli --remote [--new-chat] [initial message]',
     '',
     'Runtime options override environment defaults when provided:',
     '  --provider <name>                 --model <name>',
@@ -38,6 +49,9 @@ export function usageText() {
     '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
     '  --past-messages <count>           --stream-trace <true|false>',
     '  --web-search <true|false|low|medium|high>',
+    '  --remote',
+    '',
+    `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in .env or the environment.`,
     '',
     'Examples:',
     '  agent-cli --new-chat "Map my next financial move"',
@@ -45,6 +59,7 @@ export function usageText() {
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
+    '  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote',
   ].join('\n');
 }
 
@@ -79,6 +94,17 @@ export function runtimeSelectionText(runtimeSettings) {
   return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
 }
 
+/** @param {NodeJS.ProcessEnv | Record<string, unknown>} [environment] */
+export function readRemoteRelayServerUrl(environment = process.env) {
+  const relayServer = String(environment[REMOTE_RELAY_SERVER_ENV_KEY] ?? '').trim();
+
+  if (!relayServer) {
+    throw new Error(`Missing environment variable: ${REMOTE_RELAY_SERVER_ENV_KEY}`);
+  }
+
+  return relayClient.normalizeRelayServerUrl(relayServer);
+}
+
 /**
  * @param {string | undefined} argvPath
  * @param {string} moduleUrl
@@ -102,6 +128,7 @@ export function parseArguments(argv) {
   let newChat = false;
   let streamOff = false;
   let help = false;
+  let remoteControl = false;
   let verbose = false;
   const messageParts = [];
   /** @type {Record<string, unknown>} */
@@ -204,6 +231,11 @@ export function parseArguments(argv) {
       continue;
     }
 
+    if (arg === '--remote') {
+      remoteControl = true;
+      continue;
+    }
+
     if (arg.startsWith('--')) {
       const flagBody = arg.slice(2);
       const equalsIndex = flagBody.indexOf('=');
@@ -293,10 +325,219 @@ export function parseArguments(argv) {
   return {
     help,
     newChat,
+    remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
     message: messageParts.join(' ').trim(),
+  };
+}
+
+/**
+ * @param {{
+ *   io: { stdout: { write(chunk: string): void }, stderr?: { write(chunk: string): void } },
+ *   verbose: boolean,
+ *   streamOff: boolean,
+ *   agentConfig: Record<string, unknown>,
+ *   projectSystemPrompt: string | undefined,
+ *   skillInventory: Array<{ skillId: string, description?: string }>,
+ * }} options
+ */
+function createTurnExecutor(options) {
+  const builtInSystemPrompt = getBuiltInSystemPrompt();
+  const stderr = options.io.stderr ?? process.stderr;
+
+  /**
+   * @param {{
+   *   chat: { id: string, messages: any[], createdAt?: string, updatedAt?: string },
+   *   message: string,
+   *   approvalGate?: { requestApproval?: (request: Record<string, unknown>) => Promise<{ approved?: boolean, reason?: string }> },
+   *   abortSignal?: AbortSignal,
+   *   onAssistantChunk?: (chunkText: string) => Promise<void> | void,
+   * }} params
+   */
+  return async function executeTurn({
+    chat,
+    message,
+    approvalGate,
+    abortSignal,
+    onAssistantChunk,
+  }) {
+    const streamTraceEnabled = options.agentConfig.streamTrace === true;
+    /** @type {Array<{ type: string, text: string, createdAt: string }>} */
+    const streamTraceEvents = [];
+    /** @type {string | null} */
+    let lastStreamType = null;
+    let wroteTextChunk = false;
+    const pastMessages = Number(options.agentConfig.pastMessages);
+    const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
+      ? pastMessages
+      : 0;
+
+    try {
+      const turnResult = await runChatTurn({
+        chat,
+        userMessage: message,
+        stream: !options.streamOff,
+        approvalGate,
+        abortSignal,
+        onStreamChunk: options.streamOff
+          ? undefined
+          : async (chunk) => {
+            const reasoningText = [
+              chunk.reasoningContent,
+              chunk.reasoning,
+              chunk.reasoningText,
+              chunk.thinking,
+            ].find((value) => typeof value === 'string' && value.length > 0);
+            const streamErrors = [
+              ...(Array.isArray(chunk.errors) ? chunk.errors : []),
+              ...(chunk.error ? [chunk.error] : []),
+            ];
+
+            for (const warning of chunk.warnings ?? []) {
+              const warningText = String(
+                warning && typeof warning === 'object' && 'message' in warning
+                  ? warning.message
+                  : JSON.stringify(warning ?? null),
+              );
+
+              if (options.verbose) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
+                writeDiagnostic(stderr, 'warning', warningText);
+              }
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'warning',
+                  text: warningText,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'warning';
+            }
+
+            for (const streamError of streamErrors) {
+              const errorText = String(
+                streamError && typeof streamError === 'object' && 'message' in streamError
+                  ? streamError.message
+                  : JSON.stringify(streamError ?? null),
+              );
+
+              if (options.verbose) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
+                writeDiagnostic(stderr, 'error', errorText);
+              }
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'error',
+                  text: errorText,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'error';
+            }
+
+            if (reasoningText) {
+              if (options.verbose) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
+                writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
+              }
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'reasoning',
+                  text: reasoningText,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'reasoningContent';
+            }
+
+            if (chunk.content) {
+              options.io.stdout.write(chunk.content);
+              wroteTextChunk = true;
+              await onAssistantChunk?.(chunk.content);
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'text',
+                  text: chunk.content,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'text';
+            }
+          },
+        onToolCall: options.streamOff
+          ? undefined
+          : (toolCall) => {
+            if (options.verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
+              writeDiagnostic(stderr, 'tool', toolCall.name);
+            }
+
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: 'tool',
+                text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
+                createdAt: new Date().toISOString(),
+              });
+            }
+
+            lastStreamType = 'tool';
+          },
+        historyMessageLimit,
+        builtInSystemPrompt,
+        projectSystemPrompt: options.projectSystemPrompt,
+        skillInventory: options.skillInventory,
+        agentConfig: options.agentConfig,
+      });
+
+      await persistCompletedChat({
+        chat,
+        messages: turnResult.messages,
+      });
+
+      if (streamTraceEnabled) {
+        await persistStreamTraceEvents({
+          chat,
+          streamTraceEvents,
+        });
+      }
+
+      chat.messages = turnResult.messages;
+
+      if (options.streamOff) {
+        options.io.stdout.write(`${turnResult.assistantText}\n`);
+      } else if (wroteTextChunk) {
+        options.io.stdout.write('\n');
+      }
+
+      return turnResult;
+    } catch (error) {
+      if (streamTraceEnabled) {
+        const errorText = error instanceof Error ? error.message : String(error);
+
+        streamTraceEvents.push({
+          type: 'error',
+          text: errorText,
+          createdAt: new Date().toISOString(),
+        });
+
+        await persistStreamTraceEvents({
+          chat,
+          streamTraceEvents,
+        });
+      }
+
+      throw error;
+    }
   };
 }
 
@@ -310,14 +551,22 @@ export async function main(
   io = { stdout: process.stdout, stderr: process.stderr },
   options = {},
 ) {
-  const { help, newChat, runtimeOverrides, streamOff, verbose, message } = parseArguments(argv);
+  const {
+    help,
+    newChat,
+    remoteControl,
+    runtimeOverrides,
+    streamOff,
+    verbose,
+    message,
+  } = parseArguments(argv);
 
   if (help) {
     io.stdout.write(`${usageText()}\n`);
     return null;
   }
 
-  if (!message) {
+  if (!message && !remoteControl) {
     throw new Error(`Missing user message.\n\n${usageText()}`);
   }
 
@@ -330,192 +579,55 @@ export async function main(
     ...baseAgentConfig,
     ...runtimeOverrides,
   };
-  const stderr = io.stderr ?? process.stderr;
-  const streamTraceEnabled = agentConfig.streamTrace === true;
-  /** @type {Array<{ type: string, text: string, createdAt: string }>} */
-  const streamTraceEvents = [];
-  /** @type {string | null} */
-  let lastStreamType = null;
-  let wroteTextChunk = false;
-
-  validateRuntimeEnvironment(process.env, agentConfig);
-
   const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
     loadProjectSystemPrompt(),
     loadSkillInventory(),
     loadRequestedChat({ newChat }),
   ]);
-
-  const pastMessages = Number(agentConfig.pastMessages);
-  const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
-    ? pastMessages
-    : 0;
-  /** @type {{ assistantText: string, messages: any[] } | null} */
-  let turnResult = null;
-
-  try {
-    turnResult = await runChatTurn({
-      chat,
-      userMessage: message,
-      stream: !streamOff,
-      onStreamChunk: streamOff
-        ? undefined
-        : (chunk) => {
-          const reasoningText = [
-            chunk.reasoningContent,
-            chunk.reasoning,
-            chunk.reasoningText,
-            chunk.thinking,
-          ].find((value) => typeof value === 'string' && value.length > 0);
-          const streamErrors = [
-            ...(Array.isArray(chunk.errors) ? chunk.errors : []),
-            ...(chunk.error ? [chunk.error] : []),
-          ];
-
-          for (const warning of chunk.warnings ?? []) {
-            const warningText = String(
-              warning && typeof warning === 'object' && 'message' in warning
-                ? warning.message
-                : JSON.stringify(warning ?? null),
-            );
-
-            if (verbose) {
-              writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
-              writeDiagnostic(stderr, 'warning', warningText);
-            }
-
-            if (streamTraceEnabled) {
-              streamTraceEvents.push({
-                type: 'warning',
-                text: warningText,
-                createdAt: new Date().toISOString(),
-              });
-            }
-
-            lastStreamType = 'warning';
-          }
-
-          for (const streamError of streamErrors) {
-            const errorText = String(
-              streamError && typeof streamError === 'object' && 'message' in streamError
-                ? streamError.message
-                : JSON.stringify(streamError ?? null),
-            );
-
-            if (verbose) {
-              writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
-              writeDiagnostic(stderr, 'error', errorText);
-            }
-
-            if (streamTraceEnabled) {
-              streamTraceEvents.push({
-                type: 'error',
-                text: errorText,
-                createdAt: new Date().toISOString(),
-              });
-            }
-
-            lastStreamType = 'error';
-          }
-
-          if (reasoningText) {
-            if (verbose) {
-              writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
-              writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
-            }
-
-            if (streamTraceEnabled) {
-              streamTraceEvents.push({
-                type: 'reasoning',
-                text: reasoningText,
-                createdAt: new Date().toISOString(),
-              });
-            }
-
-            lastStreamType = 'reasoningContent';
-          }
-
-          if (chunk.content) {
-            io.stdout.write(chunk.content);
-            wroteTextChunk = true;
-
-            if (streamTraceEnabled) {
-              streamTraceEvents.push({
-                type: 'text',
-                text: chunk.content,
-                createdAt: new Date().toISOString(),
-              });
-            }
-
-            lastStreamType = 'text';
-          }
-        },
-      onToolCall: streamOff
-        ? undefined
-        : (toolCall) => {
-          if (verbose) {
-            writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
-            writeDiagnostic(stderr, 'tool', toolCall.name);
-          }
-
-          if (streamTraceEnabled) {
-            streamTraceEvents.push({
-              type: 'tool',
-              text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
-              createdAt: new Date().toISOString(),
-            });
-          }
-
-          lastStreamType = 'tool';
-        },
-      historyMessageLimit,
-      builtInSystemPrompt: getBuiltInSystemPrompt(),
-      projectSystemPrompt,
-      skillInventory,
-      agentConfig,
-    });
-  } catch (error) {
-    if (streamTraceEnabled) {
-      const errorText = error instanceof Error ? error.message : String(error);
-
-      streamTraceEvents.push({
-        type: 'error',
-        text: errorText,
-        createdAt: new Date().toISOString(),
-      });
-
-      await persistStreamTraceEvents({
-        chat,
-        streamTraceEvents,
-      });
-    }
-
-    throw error;
-  }
-
-  if (!turnResult) {
-    throw new Error('Missing turn result.');
-  }
-
-  await persistCompletedChat({
-    chat,
-    messages: turnResult.messages,
+  const executeTurn = createTurnExecutor({
+    io,
+    verbose,
+    streamOff,
+    agentConfig,
+    projectSystemPrompt,
+    skillInventory,
   });
 
-  if (streamTraceEnabled) {
-    await persistStreamTraceEvents({
+  if (remoteControl) {
+    const relayServer = readRemoteRelayServerUrl(process.env);
+
+    await persistCompletedChat({
       chat,
-      streamTraceEvents,
+      messages: chat.messages,
     });
+
+    const relaySession = await runRemoteControlSession({
+      relayServer,
+      chat,
+      io,
+      initialMessage: message || undefined,
+      onSessionReady: async (startedRelaySession) => {
+        await persistRemoteSessionState({
+          chat,
+          remoteSession: startedRelaySession,
+        });
+      },
+      executeTurn,
+      relayClient,
+    });
+
+    await persistRemoteSessionState({
+      chat,
+      remoteSession: relaySession,
+    });
+
+    return relaySession;
   }
 
-  if (streamOff) {
-    io.stdout.write(`${turnResult.assistantText}\n`);
-  } else if (wroteTextChunk) {
-    io.stdout.write('\n');
-  }
-
-  return turnResult;
+  return await executeTurn({
+    chat,
+    message,
+  });
 }
 
 /**

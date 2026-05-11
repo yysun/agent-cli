@@ -40,6 +40,7 @@ const CLI_ENVIRONMENT_KEYS = [
   'LLM_PAST_MESSAGES',
   'LLM_STREAM_TRACE',
   'LLM_WEB_SEARCH',
+  'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
   'OPENAI_API_KEY',
   'AGENT_CLI_ROOT',
@@ -68,21 +69,24 @@ function applyMinimalRuntimeEnvironment() {
 
 /**
  * @param {string} [rootPath]
- * @param {Record<string, unknown> | ((actual: Record<string, unknown>) => Record<string, unknown>)} [runtimeClientOverrides]
+ * @param {{
+ *   runtimeClient?: Record<string, unknown> | ((actual: Record<string, unknown>) => Record<string, unknown>),
+ *   remoteControl?: Record<string, unknown> | ((actual: Record<string, unknown>) => Record<string, unknown>),
+ * }} [moduleOverrides]
  */
-async function loadCliModule(rootPath, runtimeClientOverrides) {
+async function loadCliModule(rootPath, moduleOverrides = {}) {
   if (rootPath) {
     process.env.AGENT_CLI_ROOT = rootPath;
   }
 
   vi.resetModules();
 
-  if (runtimeClientOverrides) {
+  if (moduleOverrides.runtimeClient) {
     vi.doMock('../../lib/runtime-client.js', async () => {
       const actual = /** @type {Record<string, unknown>} */ (await vi.importActual('../../lib/runtime-client.js'));
-      const overrides = typeof runtimeClientOverrides === 'function'
-        ? runtimeClientOverrides(actual)
-        : runtimeClientOverrides;
+      const overrides = typeof moduleOverrides.runtimeClient === 'function'
+        ? moduleOverrides.runtimeClient(actual)
+        : moduleOverrides.runtimeClient;
 
       return {
         ...actual,
@@ -93,12 +97,29 @@ async function loadCliModule(rootPath, runtimeClientOverrides) {
     vi.doUnmock('../../lib/runtime-client.js');
   }
 
+  if (moduleOverrides.remoteControl) {
+    vi.doMock('../../lib/remote-control.js', async () => {
+      const actual = /** @type {Record<string, unknown>} */ (await vi.importActual('../../lib/remote-control.js'));
+      const overrides = typeof moduleOverrides.remoteControl === 'function'
+        ? moduleOverrides.remoteControl(actual)
+        : moduleOverrides.remoteControl;
+
+      return {
+        ...actual,
+        ...overrides,
+      };
+    });
+  } else {
+    vi.doUnmock('../../lib/remote-control.js');
+  }
+
   return await import('../../bin/agent-cli.js');
 }
 
 afterEach(async () => {
   restoreCliEnvironment(originalCliEnvironment);
   vi.doUnmock('../../lib/runtime-client.js');
+  vi.doUnmock('../../lib/remote-control.js');
 
   while (rootsToClean.length > 0) {
     const rootPath = rootsToClean.pop();
@@ -128,6 +149,7 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--new-chat', 'Map', 'the', 'terrain'])).toEqual({
       help: false,
       newChat: true,
+      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -136,6 +158,7 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--help'])).toEqual({
       help: true,
       newChat: false,
+      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -144,6 +167,7 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--verbose', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
+      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: true,
@@ -152,10 +176,20 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--stream-off', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
+      remoteControl: false,
       runtimeOverrides: {},
       streamOff: true,
       verbose: false,
       message: 'Inspect status',
+    });
+    expect(parseArguments(['--remote'])).toEqual({
+      help: false,
+      newChat: false,
+      remoteControl: true,
+      runtimeOverrides: {},
+      streamOff: false,
+      verbose: false,
+      message: '',
     });
   });
 
@@ -177,6 +211,7 @@ describe('agent-cli entrypoint', () => {
     ])).toEqual({
       help: false,
       newChat: false,
+      remoteControl: false,
       runtimeOverrides: {
         provider: 'google',
         model: 'gemini-2.5-pro',
@@ -194,6 +229,82 @@ describe('agent-cli entrypoint', () => {
       verbose: false,
       message: 'Inspect status',
     });
+  });
+
+  it('starts remote host mode from AGENT_CLI_RELAY_SERVER_URL and persists remote metadata', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    process.env.AGENT_CLI_RELAY_SERVER_URL = 'http://127.0.0.1:8787';
+
+    /** @type {((value?: unknown) => void) | undefined} */
+    let resolveSessionReady;
+    const sessionReady = new Promise((resolve) => {
+      resolveSessionReady = resolve;
+    });
+    /** @type {((value?: unknown) => void) | undefined} */
+    let resolveRemoteSession;
+    const remoteSessionComplete = new Promise((resolve) => {
+      resolveRemoteSession = resolve;
+    });
+
+    const relaySession = {
+      sessionId: 'relay-session-1',
+      clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
+      pairingToken: 'pair-token',
+      expiresAt: '2026-05-11T12:15:00.000Z',
+    };
+    const runRemoteControlSession = vi.fn().mockImplementation(async (params) => {
+      await params.onSessionReady?.(relaySession);
+      resolveSessionReady?.();
+      await remoteSessionComplete;
+      return relaySession;
+    });
+
+    const { main } = await loadCliModule(rootPath, {
+      remoteControl: {
+        runRemoteControlSession,
+      },
+    });
+
+    const mainPromise = main(['--new-chat', '--remote'], createIoCapture());
+
+    await sessionReady;
+
+    expect(runRemoteControlSession).toHaveBeenCalledWith(expect.objectContaining({
+      relayServer: 'http://127.0.0.1:8787',
+      initialMessage: undefined,
+    }));
+
+    const current = JSON.parse(await readFile(path.join(rootPath, '.chats', 'current.json'), 'utf8'));
+    const remoteState = JSON.parse(await readFile(path.join(rootPath, '.chats', current.chatId, 'remote.json'), 'utf8'));
+
+    expect(remoteState.remoteSession).toMatchObject({
+      sessionId: 'relay-session-1',
+      clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
+    });
+
+    resolveRemoteSession?.();
+    await mainPromise;
+  });
+
+  it('fails clearly when --remote is used without AGENT_CLI_RELAY_SERVER_URL', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    delete process.env.AGENT_CLI_RELAY_SERVER_URL;
+    process.exitCode = undefined;
+    await runCli(['--remote'], io);
+
+    expect(io.getStderr()).toContain('Missing environment variable: AGENT_CLI_RELAY_SERVER_URL');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
   });
 
   it('loads runtime defaults from environment and lets CLI flags override them', async () => {
@@ -223,12 +334,14 @@ describe('agent-cli entrypoint', () => {
     });
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn,
-      validateRuntimeEnvironment: vi.fn(() => ({
-        provider: 'openai',
-        model: 'gpt-5',
-        providers: { openai: { apiKey: 'test-openai-key' } },
-      })),
+      runtimeClient: {
+        runChatTurn,
+        validateRuntimeEnvironment: vi.fn(() => ({
+          provider: 'openai',
+          model: 'gpt-5',
+          providers: { openai: { apiKey: 'test-openai-key' } },
+        })),
+      },
     });
 
     await main(['--temperature', '0.1', 'Inspect', 'status'], createIoCapture());
@@ -351,7 +464,9 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { runCli } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      runtimeClient: {
+        runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      },
     });
     const io = createIoCapture();
     const originalExitCode = process.exitCode;
@@ -378,7 +493,9 @@ describe('agent-cli entrypoint', () => {
 
     const runChatTurn = vi.fn().mockRejectedValue(new Error('Synthetic turn failure'));
     const { runCli } = await loadCliModule(rootPath, {
-      runChatTurn,
+      runtimeClient: {
+        runChatTurn,
+      },
     });
     const io = createIoCapture();
     const originalExitCode = process.exitCode;
@@ -418,28 +535,30 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
-        onStreamChunk?.({
-          warnings: [
-            {
-              code: 'web_search_ignored',
-              message: 'web search is disabled',
-            },
-          ],
-        });
-        onStreamChunk?.({ reasoningContent: 'thinking...' });
-        onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
-        onStreamChunk?.({ content: 'Hello' });
-        onStreamChunk?.({ content: ' world' });
+      runtimeClient: {
+        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+          onStreamChunk?.({
+            warnings: [
+              {
+                code: 'web_search_ignored',
+                message: 'web search is disabled',
+              },
+            ],
+          });
+          onStreamChunk?.({ reasoningContent: 'thinking...' });
+          onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+          onStreamChunk?.({ content: 'Hello' });
+          onStreamChunk?.({ content: ' world' });
 
-        return {
-          assistantText: 'Hello world',
-          messages: [
-            { role: 'user', content: 'hello' },
-            { role: 'assistant', content: 'Hello world' },
-          ],
-        };
-      }),
+          return {
+            assistantText: 'Hello world',
+            messages: [
+              { role: 'user', content: 'hello' },
+              { role: 'assistant', content: 'Hello world' },
+            ],
+          };
+        }),
+      },
     });
     const io = createIoCapture();
 
@@ -465,20 +584,22 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
-        onStreamChunk?.({ warnings: [{ message: 'web search is disabled' }] });
-        onStreamChunk?.({ reasoningContent: 'thinking...' });
-        onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
-        onStreamChunk?.({ content: 'Hello' });
+      runtimeClient: {
+        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+          onStreamChunk?.({ warnings: [{ message: 'web search is disabled' }] });
+          onStreamChunk?.({ reasoningContent: 'thinking...' });
+          onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+          onStreamChunk?.({ content: 'Hello' });
 
-        return {
-          assistantText: 'Hello',
-          messages: [
-            { role: 'user', content: 'hello' },
-            { role: 'assistant', content: 'Hello' },
-          ],
-        };
-      }),
+          return {
+            assistantText: 'Hello',
+            messages: [
+              { role: 'user', content: 'hello' },
+              { role: 'assistant', content: 'Hello' },
+            ],
+          };
+        }),
+      },
     });
     const io = createIoCapture();
 
@@ -499,13 +620,15 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockResolvedValue({
-        assistantText: 'Hello world',
-        messages: [
-          { role: 'user', content: 'hello' },
-          { role: 'assistant', content: 'Hello world' },
-        ],
-      }),
+      runtimeClient: {
+        runChatTurn: vi.fn().mockResolvedValue({
+          assistantText: 'Hello world',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'Hello world' },
+          ],
+        }),
+      },
     });
     const io = createIoCapture();
 
@@ -523,21 +646,23 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
-        onStreamChunk?.({ warnings: [{ message: 'warning message' }] });
-        onStreamChunk?.({ errors: [{ message: 'error message' }] });
-        onStreamChunk?.({ reasoningContent: 'reasoning text' });
-        onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
-        onStreamChunk?.({ content: 'Hello' });
+      runtimeClient: {
+        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+          onStreamChunk?.({ warnings: [{ message: 'warning message' }] });
+          onStreamChunk?.({ errors: [{ message: 'error message' }] });
+          onStreamChunk?.({ reasoningContent: 'reasoning text' });
+          onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+          onStreamChunk?.({ content: 'Hello' });
 
-        return {
-          assistantText: 'Hello',
-          messages: [
-            { role: 'user', content: 'hello' },
-            { role: 'assistant', content: 'Hello' },
-          ],
-        };
-      }),
+          return {
+            assistantText: 'Hello',
+            messages: [
+              { role: 'user', content: 'hello' },
+              { role: 'assistant', content: 'Hello' },
+            ],
+          };
+        }),
+      },
     });
 
     await main(['--new-chat', '--stream-trace', 'hello'], createIoCapture());
@@ -550,11 +675,11 @@ describe('agent-cli entrypoint', () => {
 
     expect(eventsData.chatId).toBe(current.chatId);
     expect(Array.isArray(eventsData.events)).toBe(true);
-    expect(eventsData.events.some((event) => event.type === 'warning')).toBe(true);
-    expect(eventsData.events.some((event) => event.type === 'error')).toBe(true);
-    expect(eventsData.events.some((event) => event.type === 'reasoning')).toBe(true);
-    expect(eventsData.events.some((event) => event.type === 'tool')).toBe(true);
-    expect(eventsData.events.some((event) => event.type === 'text')).toBe(true);
+    expect(eventsData.events.some(/** @param {{ type?: string }} event */(event) => event.type === 'warning')).toBe(true);
+    expect(eventsData.events.some(/** @param {{ type?: string }} event */(event) => event.type === 'error')).toBe(true);
+    expect(eventsData.events.some(/** @param {{ type?: string }} event */(event) => event.type === 'reasoning')).toBe(true);
+    expect(eventsData.events.some(/** @param {{ type?: string }} event */(event) => event.type === 'tool')).toBe(true);
+    expect(eventsData.events.some(/** @param {{ type?: string }} event */(event) => event.type === 'text')).toBe(true);
   });
 
   it('persists an error stream trace event when runChatTurn fails', async () => {
@@ -566,7 +691,9 @@ describe('agent-cli entrypoint', () => {
     await writeSystemPrompt(rootPath, 'Prompt');
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      runtimeClient: {
+        runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      },
     });
 
     await expect(main(['--new-chat', '--stream-trace', 'hello'], createIoCapture())).rejects.toThrow('Synthetic turn failure');
@@ -579,8 +706,8 @@ describe('agent-cli entrypoint', () => {
       'utf8',
     ));
 
-    expect(eventsData.events.some((event) => event.type === 'error')).toBe(true);
-    expect(eventsData.events.some((event) => String(event.text).includes('Synthetic turn failure'))).toBe(true);
+    expect(eventsData.events.some(/** @param {{ type?: string }} event */(event) => event.type === 'error')).toBe(true);
+    expect(eventsData.events.some(/** @param {{ text?: string }} event */(event) => String(event.text).includes('Synthetic turn failure'))).toBe(true);
   });
 
   it('defaults to loading zero past messages when config does not define pastMessages', async () => {
@@ -600,7 +727,9 @@ describe('agent-cli entrypoint', () => {
     });
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: runChatTurnMock,
+      runtimeClient: {
+        runChatTurn: runChatTurnMock,
+      },
     });
 
     await main(['--new-chat', 'hello'], createIoCapture());
@@ -629,7 +758,9 @@ describe('agent-cli entrypoint', () => {
     });
 
     const { main } = await loadCliModule(rootPath, {
-      runChatTurn: runChatTurnMock,
+      runtimeClient: {
+        runChatTurn: runChatTurnMock,
+      },
     });
 
     await main(['--new-chat', '--past-messages', '7', 'hello'], createIoCapture());

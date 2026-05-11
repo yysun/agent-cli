@@ -566,4 +566,91 @@ describe('runtime-client', () => {
     expect(result.messages[3]).toMatchObject({ role: 'user', content: 'New input' });
     expect(result.messages[4]).toMatchObject({ role: 'assistant', content: 'Final answer' });
   });
+
+  it('requests approval before executing tools when tool permission is ask', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const gatedToolExecute = vi.fn().mockResolvedValue({ ok: true });
+    runtimeMock.resolveToolsAsync.mockResolvedValue({
+      gated_tool: {
+        execute: gatedToolExecute,
+      },
+    });
+    runtimeMock.respondWithTools.mockImplementation(async (options) => {
+      const toolCall = {
+        id: 'tool-call-1',
+        type: 'function',
+        function: {
+          name: 'gated_tool',
+          arguments: '{"safe":true}',
+        },
+      };
+
+      const afterToolCalls = await options.onToolCallsResponse({
+        state: options.initialState,
+        response: {
+          type: 'tool_calls',
+          content: '',
+          tool_calls: [toolCall],
+          assistantMessage: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [toolCall],
+          },
+        },
+        messages: [],
+        iteration: 1,
+      });
+
+      const afterText = await options.onTextResponse({
+        state: afterToolCalls.state,
+        response: {
+          type: 'text',
+          content: 'Final answer',
+          assistantMessage: {
+            role: 'assistant',
+            content: 'Final answer',
+          },
+        },
+        responseText: 'Final answer',
+        messages: [],
+        iteration: 2,
+      });
+
+      return {
+        state: afterText.state,
+        reason: 'text_response',
+      };
+    });
+
+    const approvalGate = {
+      requestApproval: vi.fn().mockResolvedValue({ approved: false, reason: 'Denied remotely' }),
+    };
+
+    const { runChatTurn } = await loadRuntimeClient(rootPath);
+    const result = await runChatTurn({
+      chat: {
+        id: 'chat-1',
+        createdAt: '2026-05-07T12:00:00.000Z',
+        updatedAt: '2026-05-07T12:00:00.000Z',
+        messages: [],
+      },
+      userMessage: 'Hello',
+      builtInSystemPrompt: 'Built-in prompt',
+      skillInventory: [],
+      approvalGate,
+      agentConfig: {
+        toolPermission: 'ask',
+      },
+    });
+
+    expect(approvalGate.requestApproval).toHaveBeenCalledWith({
+      toolCallId: 'tool-call-1',
+      toolName: 'gated_tool',
+      arguments: { safe: true },
+    });
+    expect(gatedToolExecute).not.toHaveBeenCalled();
+    expect(result.messages.some((message) => message.role === 'tool' && String(message.content).includes('Denied remotely'))).toBe(true);
+  });
 });

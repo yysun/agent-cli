@@ -182,4 +182,38 @@ describe('session-store', () => {
     expect(eventsData.events[0]).toMatchObject({ type: 'warning', text: 'webSearch ignored' });
     expect(eventsData.events[1]).toMatchObject({ type: 'text', text: 'Hi' });
   });
+
+  it('persists remote session metadata for the active chat', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { loadRequestedChat, persistCompletedChat, persistRemoteSessionState } = await loadSessionStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: true });
+
+    await persistCompletedChat({
+      chat,
+      messages: [
+        {
+          role: 'user',
+          content: 'Hello',
+        },
+      ],
+    });
+
+    await persistRemoteSessionState({
+      chat,
+      remoteSession: {
+        sessionId: 'relay-session-1',
+        clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
+      },
+    });
+
+    const remoteData = JSON.parse(await readFile(path.join(rootPath, '.chats', chat.id, 'remote.json'), 'utf8'));
+
+    expect(remoteData.chatId).toBe(chat.id);
+    expect(remoteData.remoteSession).toMatchObject({
+      sessionId: 'relay-session-1',
+      clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
+    });
+  });
 });
