@@ -8,13 +8,14 @@
  *
  * Key features:
  * - Supports current-chat reuse and `--new-chat` creation.
- * - Loads prompt and skills from codex/copilot paths using `llm-runtime` conventions.
+ * - Layers the built-in prompt with optional `./AGENTS.md` content and discovered skills.
  * - Persists completed turns under `./.chats`.
  *
  * Recent changes:
  * - 2026-05-07: Added the initial `llm-runtime`-backed CLI implementation.
  * - 2026-05-07: Exported the CLI entry functions so Vitest can exercise them directly.
  * - 2026-05-07: Moved startup diagnostics behind `--verbose` so stdout stays machine-friendly.
+ * - 2026-05-11: Always include the built-in prompt and layer AGENTS.md after it when present.
  */
 import 'dotenv/config';
 
@@ -23,7 +24,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizeAgentConfig } from '../lib/agent-config.js';
-import { loadSkillInventory, loadSystemPrompt } from '../lib/agent-files.js';
+import { getBuiltInSystemPrompt, loadProjectSystemPrompt, loadSkillInventory } from '../lib/agent-files.js';
 import { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } from '../lib/session-store.js';
 import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
 
@@ -339,8 +340,8 @@ export async function main(
 
   validateRuntimeEnvironment(process.env, agentConfig);
 
-  const [systemPrompt, skillInventory, chat] = await Promise.all([
-    loadSystemPrompt(),
+  const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
+    loadProjectSystemPrompt(),
     loadSkillInventory(),
     loadRequestedChat({ newChat }),
   ]);
@@ -468,7 +469,8 @@ export async function main(
           lastStreamType = 'tool';
         },
       historyMessageLimit,
-      systemPrompt,
+      builtInSystemPrompt: getBuiltInSystemPrompt(),
+      projectSystemPrompt,
       skillInventory,
       agentConfig,
     });
@@ -509,10 +511,8 @@ export async function main(
 
   if (streamOff) {
     io.stdout.write(`${turnResult.assistantText}\n`);
-  } else {
-    if (wroteTextChunk) {
-      io.stdout.write('\n');
-    }
+  } else if (wroteTextChunk) {
+    io.stdout.write('\n');
   }
 
   return turnResult;

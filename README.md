@@ -39,7 +39,9 @@ Session chats are stored under `./.chats/{chatId}/` with:
 - `messages.json`: persisted chat messages
 - `events.json`: optional stream trace when enabled
 
-If `./AGENTS.md` is missing or empty, the CLI falls back to a built-in default system prompt.
+The CLI always includes a built-in default system prompt.
+If `./AGENTS.md` is present and non-empty, its content is added after the built-in prompt and before tools/skills guidance.
+If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
 
 The CLI treats the current working directory as the project root by default. Run it from the folder that contains `./AGENTS.md`, or set `AGENT_CLI_ROOT` to point at a different project root.

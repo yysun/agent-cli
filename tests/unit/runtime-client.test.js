@@ -11,6 +11,7 @@
  *
  * Recent changes:
  * - 2026-05-07: Added targeted Vitest coverage for the runtime client.
+ * - 2026-05-11: Added message-ordering coverage for built-in and project prompt layering.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -183,7 +184,7 @@ describe('runtime-client', () => {
     });
   });
 
-  it('executes a tool-capable turn and returns the completed conversation', async () => {
+  it('layers built-in prompt, AGENTS prompt, and skills before the user message', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     const onToolCall = vi.fn();
@@ -194,8 +195,9 @@ describe('runtime-client', () => {
         emptyTextRetryCount: 0,
       });
 
-      expect(builtMessages[0]).toMatchObject({ role: 'system', content: 'System prompt' });
-      expect(builtMessages[1].content).toContain('agent-cli-core');
+      expect(builtMessages[0]).toMatchObject({ role: 'system', content: 'Built-in prompt' });
+      expect(builtMessages[1]).toMatchObject({ role: 'system', content: 'Project prompt' });
+      expect(builtMessages[2].content).toContain('agent-cli-core');
       expect(builtMessages.at(-1)).toMatchObject({ role: 'user', content: 'Use the skill' });
 
       const toolCall = {
@@ -254,7 +256,8 @@ describe('runtime-client', () => {
       },
       userMessage: 'Use the skill',
       onToolCall,
-      systemPrompt: 'System prompt',
+      builtInSystemPrompt: 'Built-in prompt',
+      projectSystemPrompt: 'Project prompt',
       skillInventory: [
         {
           skillId: 'agent-cli-core',
@@ -346,7 +349,7 @@ describe('runtime-client', () => {
           messages: [],
         },
         userMessage: 'Hello',
-        systemPrompt: 'System prompt',
+        builtInSystemPrompt: 'Built-in prompt',
         skillInventory: [],
       }),
     ).rejects.toThrow('LLM turn ended without a final text response. Stop reason: timeout');
@@ -386,7 +389,7 @@ describe('runtime-client', () => {
       },
       userMessage: 'Hello',
       stream: false,
-      systemPrompt: 'System prompt',
+      builtInSystemPrompt: 'Built-in prompt',
       skillInventory: [],
     });
 
@@ -437,7 +440,7 @@ describe('runtime-client', () => {
       },
       userMessage: 'Hello',
       onStreamChunk,
-      systemPrompt: 'System prompt',
+      builtInSystemPrompt: 'Built-in prompt',
       skillInventory: [],
     });
 
@@ -480,7 +483,7 @@ describe('runtime-client', () => {
         messages: [],
       },
       userMessage: 'Hello',
-      systemPrompt: 'System prompt',
+      builtInSystemPrompt: 'Built-in prompt',
       skillInventory: [],
     });
 
@@ -551,7 +554,7 @@ describe('runtime-client', () => {
       },
       userMessage: 'New input',
       historyMessageLimit: 1,
-      systemPrompt: 'System prompt',
+      builtInSystemPrompt: 'Built-in prompt',
       skillInventory: [],
     });
 
