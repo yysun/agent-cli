@@ -16,11 +16,13 @@
     "agent-cli": "node ./bin/agent-cli.js",
     "dev": "concurrently -k -s first -n RELAY,WEB,CLI \"npm run dev:relay\" \"npm run dev:web\" \"npm run dev:cli\"",
     "dev:relay": "npm run relay-server",
+    "dev:relay:lan": "npm run web:build && npm run relay-server:lan",
     "dev:wait-relay": "wait-on http-get://127.0.0.1:8787/healthz",
     "dev:web": "npm run dev:wait-relay && npm run web:dev",
     "dev:cli": "npm run dev:wait-relay && AGENT_CLI_RELAY_SERVER_URL=${AGENT_CLI_RELAY_SERVER_URL:-http://127.0.0.1:8787} node ./bin/agent-cli.js --remote",
     "relay-server": "node ./server/bin/relay-server.js",
-    "relay-server:prod": "node ./server/bin/relay-server.js --host 0.0.0.0 --static-dir ./web/dist",
+    "relay-server:lan": "node ./server/bin/relay-server.js --host 0.0.0.0",
+    "relay-server:prod": "npm run web:build && npm run relay-server:lan",
     "web:install": "npm --prefix ./web install",
     "web:dev": "npm --prefix ./web run dev",
     "web:typecheck": "npm --prefix ./web run typecheck",
@@ -37,12 +39,13 @@
   "type": "module",
   "dependencies": {
     "dotenv": "^17.3.1",
-    "llm-runtime": "^0.4.0"
+    "llm-runtime": "^0.4.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
-    "wait-on": "^8.0.3",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "wait-on": "^8.0.3"
   },
   "bugs": {
     "url": "https://github.com/yysun/agent-cli/issues"

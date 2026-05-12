@@ -13,7 +13,14 @@
  * Recent changes:
  * - 2026-05-11: Added the initial optional relay server entrypoint.
  */
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { createRelayHttpServer } from '../lib/relay-server.js';
+import { listRelayListenUrls } from '../lib/relay-server.js';
+import { fileURLToPath } from 'node:url';
+
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const fixedStaticDir = path.join(packageRoot, 'web', 'dist');
 
 function readPort(argv) {
   for (let index = 0; index < argv.length; index += 1) {
@@ -47,30 +54,44 @@ function readHost(argv) {
   return String(process.env.HOST ?? '').trim() || '127.0.0.1';
 }
 
-function readStaticDir(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-
-    if (arg === '--static-dir') {
-      return String(argv[index + 1] ?? '').trim() || undefined;
-    }
-
-    if (arg.startsWith('--static-dir=')) {
-      return String(arg.split('=')[1] ?? '').trim() || undefined;
-    }
+/** @param {string} host */
+function resolveStaticDir(host) {
+  if (host !== '0.0.0.0' && host !== '::') {
+    return undefined;
   }
 
-  return String(process.env.RELAY_STATIC_DIR ?? '').trim() || undefined;
+  if (!existsSync(path.join(fixedStaticDir, 'index.html'))) {
+    return undefined;
+  }
+
+  return fixedStaticDir;
 }
 
 const port = readPort(process.argv.slice(2));
 const host = readHost(process.argv.slice(2));
-const staticDir = readStaticDir(process.argv.slice(2));
+const staticDir = resolveStaticDir(host);
 const server = createRelayHttpServer({ staticDir });
 
 server.listen(port, host, () => {
   const address = server.address();
-  const resolvedPort = address && typeof address === 'object' ? address.port : port;
-  const displayHost = address && typeof address === 'object' ? address.address : host;
-  process.stdout.write(`Relay server listening on http://${displayHost}:${resolvedPort}\n`);
+
+  if (!address || typeof address === 'string') {
+    process.stdout.write(`Relay server listening on http://${host}:${port}\n`);
+    return;
+  }
+
+  const urls = listRelayListenUrls(address);
+
+  if (urls.length === 1) {
+    process.stdout.write(`Relay server listening on ${urls[0]}\n`);
+    if (staticDir) {
+      process.stdout.write(`Serving static web app from ${staticDir}\n`);
+    }
+    return;
+  }
+
+  process.stdout.write(`Relay server listening on:\n${urls.map((url) => `- ${url}`).join('\n')}\n`);
+  if (staticDir) {
+    process.stdout.write(`Serving static web app from ${staticDir}\n`);
+  }
 });

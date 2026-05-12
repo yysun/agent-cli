@@ -17,6 +17,7 @@
 import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { URL } from 'node:url';
 
@@ -42,6 +43,174 @@ function normalizeOptionalString(value) {
 
 function createToken() {
   return randomBytes(24).toString('base64url');
+}
+
+/** @param {string | number | undefined} family */
+function normalizeAddressFamily(family) {
+  if (family === 'IPv4' || family === 4) {
+    return 'IPv4';
+  }
+
+  if (family === 'IPv6' || family === 6) {
+    return 'IPv6';
+  }
+
+  return undefined;
+}
+
+/** @param {string} address */
+function isWildcardAddress(address) {
+  return address === '0.0.0.0' || address === '::';
+}
+
+/** @param {string} address */
+function formatHostForUrl(address) {
+  return address.includes(':') ? `[${address}]` : address;
+}
+
+/** @param {string} address */
+function isLoopbackAddress(address) {
+  return address === '127.0.0.1' || address === '::1';
+}
+
+/** @param {string} address */
+function isLocalIpv6Address(address) {
+  return address === '::1' || address.startsWith('fe80:');
+}
+
+/** @param {string} address */
+function isPrivateIpv4Address(address) {
+  const octets = address.split('.').map((part) => Number(part));
+
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+
+  if (octets[0] === 10) {
+    return true;
+  }
+
+  if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) {
+    return true;
+  }
+
+  return octets[0] === 192 && octets[1] === 168;
+}
+
+/**
+ * @param {{ address: string, family?: string, internal?: boolean }} entry
+ */
+function sortAddressPriority(entry) {
+  if (entry.family === 'IPv4' && isPrivateIpv4Address(entry.address) && !entry.internal) {
+    return 0;
+  }
+
+  if (entry.family === 'IPv4' && !entry.internal) {
+    return 1;
+  }
+
+  if (entry.family === 'IPv6' && !entry.internal && !isLocalIpv6Address(entry.address)) {
+    return 2;
+  }
+
+  if (isLoopbackAddress(entry.address) || entry.internal) {
+    return 3;
+  }
+
+  return 4;
+}
+
+/**
+ * @param {import('node:os').NetworkInterfaceInfoIPv4 | import('node:os').NetworkInterfaceInfoIPv6} entry
+ */
+function normalizeInterfaceAddress(entry) {
+  if (!entry?.address) {
+    return undefined;
+  }
+
+  if (normalizeAddressFamily(entry.family) === 'IPv6') {
+    const address = entry.address.split('%')[0];
+
+    if (!address || address.startsWith('fe80:')) {
+      return undefined;
+    }
+
+    return address;
+  }
+
+  return entry.address;
+}
+
+/**
+ * @param {import('node:net').AddressInfo} addressInfo
+ * @param {{ interfaces?: ReturnType<typeof networkInterfaces> }} [options]
+ */
+export function listRelayListenUrls(addressInfo, options = {}) {
+  const family = normalizeAddressFamily(addressInfo.family);
+  const resolvedAddress = addressInfo.address;
+  const port = addressInfo.port;
+
+  if (!isWildcardAddress(resolvedAddress)) {
+    return [`http://${formatHostForUrl(resolvedAddress)}:${port}`];
+  }
+
+  const interfaces = options.interfaces ?? networkInterfaces();
+  /** @type {Map<string, { name: string, address: string, family?: string, internal?: boolean }>} */
+  const collectedAddresses = new Map();
+
+  for (const [name, entries] of Object.entries(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (family && normalizeAddressFamily(entry.family) !== family) {
+        continue;
+      }
+
+      const normalizedAddress = normalizeInterfaceAddress(entry);
+
+      if (!normalizedAddress) {
+        continue;
+      }
+
+      const candidate = {
+        name,
+        address: normalizedAddress,
+        family: normalizeAddressFamily(entry.family),
+        internal: Boolean(entry.internal),
+      };
+      const existing = collectedAddresses.get(normalizedAddress);
+
+      if (!existing || sortAddressPriority(candidate) < sortAddressPriority(existing)) {
+        collectedAddresses.set(normalizedAddress, candidate);
+      }
+    }
+  }
+
+  if (collectedAddresses.size === 0) {
+    const fallbackAddress = family === 'IPv6' ? '::1' : '127.0.0.1';
+    collectedAddresses.set(fallbackAddress, {
+      name: family === 'IPv6' ? 'lo0' : 'lo0',
+      address: fallbackAddress,
+      family,
+      internal: true,
+    });
+  }
+
+  return [...collectedAddresses.values()]
+    .sort((left, right) => {
+      const priorityDifference = sortAddressPriority(left) - sortAddressPriority(right);
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      const interfaceDifference = left.name.localeCompare(right.name);
+
+      if (interfaceDifference !== 0) {
+        return interfaceDifference;
+      }
+
+      return left.address.localeCompare(right.address);
+    })
+    .map((entry) => `http://${formatHostForUrl(entry.address)}:${port}`);
 }
 
 /**
@@ -429,7 +598,10 @@ export class RelayService {
 
       clearTimeout(waiter.timer);
       waiter.resolve({
-        commands: session.commands.filter((entry) => entry.sequence > waiter.after),
+        commands: session.commands.filter(
+          /** @param {{ sequence: number }} entry */
+          (entry) => entry.sequence > waiter.after,
+        ),
         cursor: session.commandSequence,
         timedOut: false,
       });
@@ -456,7 +628,10 @@ export class RelayService {
   async pollCommands(sessionId, input) {
     const session = this.authenticateDesktop(sessionId, input.desktopToken);
     const after = Math.max(0, Number(input.after) || 0);
-    const availableCommands = session.commands.filter((command) => command.sequence > after);
+    const availableCommands = session.commands.filter(
+      /** @param {{ sequence: number }} command */
+      (command) => command.sequence > after,
+    );
 
     if (availableCommands.length > 0) {
       return {
@@ -492,7 +667,10 @@ export class RelayService {
   readEvents(sessionId, input) {
     const session = this.authenticateMobile(sessionId, input.mobileToken);
     const after = Math.max(0, Number(input.after) || 0);
-    const events = session.events.filter((event) => event.sequence > after);
+    const events = session.events.filter(
+      /** @param {{ sequence: number }} event */
+      (event) => event.sequence > after,
+    );
 
     return {
       events,
@@ -507,7 +685,10 @@ export class RelayService {
   readNotifications(sessionId, input) {
     const session = this.authenticateMobile(sessionId, input.mobileToken);
     const after = Math.max(0, Number(input.after) || 0);
-    const notifications = session.notifications.filter((entry) => entry.sequence > after);
+    const notifications = session.notifications.filter(
+      /** @param {{ sequence: number }} entry */
+      (entry) => entry.sequence > after,
+    );
 
     return {
       notifications,
@@ -859,7 +1040,10 @@ export function createRelayHttpServer(options = {}) {
 
           if (acceptHeader.includes('text/event-stream')) {
             const session = service.authenticateMobile(sessionId, mobileToken);
-            const initialEvents = session.events.filter((event) => event.sequence > Math.max(0, after || 0));
+            const initialEvents = session.events.filter(
+              /** @param {{ sequence: number }} event */
+              (event) => event.sequence > Math.max(0, after || 0),
+            );
 
             response.writeHead(200, {
               'content-type': 'text/event-stream; charset=utf-8',

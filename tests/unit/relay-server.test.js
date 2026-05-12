@@ -17,10 +17,13 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { createRelayHttpServer, RelayService } from '../../server/lib/relay-server.js';
+import { createRelayHttpServer, listRelayListenUrls, RelayService } from '../../server/lib/relay-server.js';
 
-/** @type {RelayService[]} */
+/** @typedef {{ close: () => void }} Closeable */
+
+/** @type {Closeable[]} */
 const servicesToClose = [];
+/** @type {string[]} */
 const tempDirsToRemove = [];
 
 afterEach(async () => {
@@ -45,7 +48,9 @@ async function createTempStaticDir() {
 
 async function startServer(options = {}) {
   const server = createRelayHttpServer(options);
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(undefined));
+  });
   const address = server.address();
 
   if (!address || typeof address === 'string') {
@@ -59,6 +64,43 @@ async function startServer(options = {}) {
 }
 
 describe('relay-server', () => {
+  it('lists every IPv4 interface when the relay binds to the wildcard host', () => {
+    const urls = listRelayListenUrls({
+      address: '0.0.0.0',
+      family: 'IPv4',
+      port: 8787,
+    }, {
+      interfaces: {
+        lo0: [
+          { address: '127.0.0.1', family: 'IPv4', internal: true, netmask: '255.0.0.0', cidr: '127.0.0.1/8', mac: '00:00:00:00:00:00' },
+        ],
+        wlp2s0: [
+          { address: '192.168.1.25', family: 'IPv4', internal: false, netmask: '255.255.255.0', cidr: '192.168.1.25/24', mac: '00:00:00:00:00:01' },
+          { address: 'fe80::1%wlp2s0', family: 'IPv6', internal: false, netmask: 'ffff:ffff:ffff:ffff::', cidr: 'fe80::1/64', mac: '00:00:00:00:00:01', scopeid: 1 },
+        ],
+        tailscale0: [
+          { address: '100.96.12.4', family: 'IPv4', internal: false, netmask: '255.192.0.0', cidr: '100.96.12.4/10', mac: '00:00:00:00:00:02' },
+        ],
+      },
+    });
+
+    expect(urls).toEqual([
+      'http://192.168.1.25:8787',
+      'http://100.96.12.4:8787',
+      'http://127.0.0.1:8787',
+    ]);
+  });
+
+  it('formats IPv6 listener URLs with brackets', () => {
+    const urls = listRelayListenUrls({
+      address: '::1',
+      family: 'IPv6',
+      port: 8787,
+    });
+
+    expect(urls).toEqual(['http://[::1]:8787']);
+  });
+
   it('creates relay sessions with a client connection URL', () => {
     const service = new RelayService();
     servicesToClose.push(service);
@@ -196,7 +238,12 @@ describe('relay-server', () => {
     expect(eventBacklog.events).toHaveLength(2);
     expect(eventBacklog.events[0].type).toBe('run_status');
     expect(eventBacklog.events[1].type).toBe('completion');
-    expect(notifications.notifications.map((entry) => entry.level)).toEqual([
+    const notificationLevels = notifications.notifications.map(
+      /** @param {{ level: string }} entry */
+      (entry) => entry.level,
+    );
+
+    expect(notificationLevels).toEqual([
       'human_input_needed',
       'run_completed',
     ]);
@@ -232,7 +279,7 @@ describe('relay-server', () => {
     await writeFile(join(staticDir, 'app.js'), 'console.log("spa")');
 
     const { server, baseUrl } = await startServer({ staticDir });
-    servicesToClose.push({ close: () => server.close() });
+    servicesToClose.push({ close: () => { server.close(); } });
 
     const healthResponse = await fetch(`${baseUrl}/healthz`);
     expect(healthResponse.headers.get('content-type')).toContain('application/json');

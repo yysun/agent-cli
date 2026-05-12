@@ -59,11 +59,13 @@ afterEach(async () => {
 });
 
 /**
- * @param {string[]} [extraArgs]
+ * @param {{ host?: string, extraArgs?: string[] }} [options]
  * @returns {Promise<{ relayServer: string }>}
  */
-async function startRelayServer(extraArgs = []) {
-  const relayProcess = spawn(process.execPath, [relayServerBin, '--host', '127.0.0.1', '--port', '0', ...extraArgs], {
+async function startRelayServer(options = {}) {
+  const host = options.host ?? '127.0.0.1';
+  const extraArgs = options.extraArgs ?? [];
+  const relayProcess = spawn(process.execPath, [relayServerBin, '--host', host, '--port', '0', ...extraArgs], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -124,10 +126,14 @@ async function startRelayServer(extraArgs = []) {
     relayProcess.once('exit', handleExit);
     relayProcess.stdout?.on('data', (chunk) => {
       stdout += String(chunk);
-      const match = stdout.match(/Relay server listening on (http:\/\/[^\s]+)/u);
+      const match = stdout.match(/https?:\/\/[^\s]+/u);
 
       if (match) {
-        finish(resolve, { relayServer: match[1] });
+        const url = new URL(match[0]);
+        const relayServer = host === '0.0.0.0'
+          ? `http://127.0.0.1:${url.port}`
+          : match[0];
+        finish(resolve, { relayServer });
       }
     });
     relayProcess.stderr?.on('data', (chunk) => {
@@ -321,20 +327,20 @@ describe('relay server binary', () => {
   });
 
   it('serves static files from the entrypoint while preserving API routes', async () => {
-    const staticDir = await createTempStaticDir();
-    await mkdir(staticDir, { recursive: true });
-    await writeFile(path.join(staticDir, 'index.html'), '<!doctype html><html><body>Relay UI</body></html>', 'utf8');
-    await writeFile(path.join(staticDir, 'app.js'), 'console.log("relay ui")', 'utf8');
-
-    const { relayServer } = await startRelayServer(['--static-dir', staticDir]);
+    const { relayServer } = await startRelayServer({ host: '0.0.0.0' });
 
     const rootResponse = await fetch(`${relayServer}/`);
     expect(rootResponse.headers.get('content-type')).toContain('text/html');
-    expect(await rootResponse.text()).toContain('Relay UI');
+    const rootHtml = await rootResponse.text();
+    expect(rootHtml).toContain('Agent CLI Remote Relay');
 
-    const scriptResponse = await fetch(`${relayServer}/app.js`);
+    const scriptPathMatch = rootHtml.match(/src="([^"]+assets\/[^"/]+\.js)"/u);
+    const scriptPath = scriptPathMatch?.[1];
+    expect(scriptPath).toBeTruthy();
+
+    const scriptResponse = await fetch(`${relayServer}${scriptPath}`);
     expect(scriptResponse.headers.get('content-type')).toContain('text/javascript');
-    expect(await scriptResponse.text()).toContain('relay ui');
+    expect((await scriptResponse.text()).length).toBeGreaterThan(1000);
 
     const healthResponse = await fetch(`${relayServer}/healthz`);
     expect(healthResponse.headers.get('content-type')).toContain('application/json');

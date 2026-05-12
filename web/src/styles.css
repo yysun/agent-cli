@@ -2,6 +2,539 @@
  * Agent CLI Relay Web Styles
  *
  * Purpose:
+ * - Define the visual language for the relay chat homepage.
+ *
+ * Key features:
+ * - Uses a warm, editorial layout with a dominant transcript panel and compact control rail.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg-1: #fff8ea;
+  --bg-2: #ffd5bc;
+  --bg-3: #ffe9d2;
+  --ink: #1e1f25;
+  --ink-soft: #5b5c66;
+  --card: rgba(255, 252, 247, 0.8);
+  --card-strong: rgba(255, 255, 255, 0.96);
+  --card-border: rgba(33, 34, 40, 0.1);
+  --accent: #f0673c;
+  --accent-strong: #df4a1c;
+  --accent-2: #2f7fd9;
+  --success: #1d8a5a;
+  --warning: #b86f00;
+  --danger: #af2147;
+  --shadow: 0 22px 55px rgba(47, 26, 15, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at 14% 12%, rgba(255, 157, 96, 0.35), transparent 38%),
+    radial-gradient(circle at 88% 10%, rgba(64, 134, 227, 0.22), transparent 28%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2) 58%, var(--bg-3));
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+code,
+.mono,
+pre {
+  font-family: 'IBM Plex Mono', Menlo, monospace;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  width: min(1320px, calc(100vw - 2rem));
+  margin: 1.5rem auto 2.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.9fr);
+  gap: 1rem;
+  animation: page-enter 360ms ease-out;
+}
+
+.hero,
+.panel {
+  border: 1px solid var(--card-border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+
+.hero {
+  grid-column: 1 / -1;
+  padding: 1.4rem;
+  background:
+    linear-gradient(140deg, rgba(255, 255, 255, 0.9), rgba(255, 246, 236, 0.78)),
+    rgba(255, 255, 255, 0.78);
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
+  gap: 1rem;
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
+.hero-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.hero-stat {
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(33, 34, 40, 0.08);
+}
+
+.hero-stat span,
+.panel-kicker,
+.bubble-meta,
+.session-facts dt,
+.mini-badge,
+.approval-state,
+.connection-pill {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.hero-stat span {
+  display: block;
+  color: var(--ink-soft);
+}
+
+.hero-stat strong {
+  display: block;
+  margin-top: 0.45rem;
+  font-size: 1rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.eyebrow,
+.panel-kicker {
+  margin: 0;
+  color: var(--accent-2);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0.55rem;
+  font-size: clamp(2rem, 4vw, 3.35rem);
+  line-height: 1.05;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 1.2rem;
+}
+
+h3 {
+  margin-bottom: 0.3rem;
+  font-size: 1rem;
+}
+
+.subtitle,
+.muted,
+.bubble-footnote,
+.session-facts dd,
+.status-banner {
+  color: var(--ink-soft);
+}
+
+.subtitle {
+  max-width: 70ch;
+  margin-bottom: 0;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.panel {
+  padding: 1rem;
+  background: var(--card);
+}
+
+.chat-panel {
+  min-height: 78vh;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 0.95rem;
+}
+
+.sidebar {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.panel-heading.compact {
+  align-items: center;
+}
+
+.mini-badge,
+.connection-pill,
+.approval-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(33, 34, 40, 0.06);
+  color: var(--ink-soft);
+}
+
+.connection-pill.connected,
+.approval-state.approved {
+  background: rgba(29, 138, 90, 0.14);
+  color: var(--success);
+}
+
+.approval-state.rejected,
+.chat-bubble.is-error {
+  background: rgba(175, 33, 71, 0.1);
+  color: var(--danger);
+}
+
+.approval-state.pending,
+.connection-pill.idle {
+  background: rgba(184, 111, 0, 0.1);
+  color: var(--warning);
+}
+
+.status-banner {
+  margin-bottom: 0;
+  padding: 0.9rem 1rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(33, 34, 40, 0.08);
+}
+
+.chat-thread {
+  min-height: 0;
+  padding: 0.4rem 0.1rem 0.2rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.empty-state,
+.chat-bubble,
+.approval-card,
+.notification-list li {
+  border: 1px solid rgba(33, 34, 40, 0.08);
+  border-radius: 20px;
+  background: var(--card-strong);
+}
+
+.empty-state {
+  padding: 1.35rem;
+  text-align: center;
+}
+
+.chat-bubble,
+.approval-card {
+  padding: 0.95rem 1rem;
+}
+
+.chat-bubble {
+  max-width: min(78%, 760px);
+  align-self: flex-start;
+}
+
+.chat-bubble.user {
+  align-self: flex-end;
+  background: linear-gradient(145deg, rgba(240, 103, 60, 0.14), rgba(255, 255, 255, 0.98));
+}
+
+.chat-bubble.assistant {
+  background: linear-gradient(145deg, rgba(47, 127, 217, 0.08), rgba(255, 255, 255, 0.98));
+}
+
+.chat-bubble.system {
+  max-width: 100%;
+  background: rgba(255, 248, 238, 0.9);
+}
+
+.chat-bubble.is-muted {
+  color: var(--ink-soft);
+}
+
+.bubble-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+  color: var(--ink-soft);
+}
+
+.bubble-footnote {
+  margin-bottom: 0;
+  font-size: 0.85rem;
+}
+
+.inline-approval {
+  max-width: min(88%, 820px);
+}
+
+.approval-actions,
+.stack-actions,
+.control-grid,
+.composer-actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.approval-actions {
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+label {
+  display: block;
+  margin: 0.7rem 0 0.3rem;
+  font-weight: 600;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(33, 34, 40, 0.13);
+  border-radius: 16px;
+  padding: 0.75rem 0.9rem;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+}
+
+textarea {
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus {
+  outline: 2px solid rgba(47, 127, 217, 0.18);
+  border-color: rgba(47, 127, 217, 0.42);
+}
+
+button {
+  border: 0;
+  border-radius: 16px;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+}
+
+button:hover:enabled {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(240, 103, 60, 0.22);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+button.secondary {
+  background: linear-gradient(135deg, rgba(47, 127, 217, 0.92), rgba(62, 153, 238, 0.92));
+}
+
+button.ghost {
+  background: linear-gradient(135deg, rgba(175, 33, 71, 0.92), rgba(210, 59, 105, 0.92));
+}
+
+.composer {
+  padding-top: 0.2rem;
+  border-top: 1px solid rgba(33, 34, 40, 0.08);
+}
+
+.composer-actions {
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.8rem;
+}
+
+.composer-actions .muted {
+  flex: 1 1 260px;
+  margin-bottom: 0;
+}
+
+.control-grid {
+  margin-top: 0.9rem;
+}
+
+.control-grid button {
+  flex: 1 1 140px;
+}
+
+.session-facts {
+  display: grid;
+  gap: 0.8rem;
+  margin: 1rem 0 0;
+}
+
+.session-facts div {
+  padding: 0.85rem 0.9rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(33, 34, 40, 0.08);
+}
+
+.session-facts dt {
+  margin-bottom: 0.35rem;
+  color: var(--ink-soft);
+}
+
+.session-facts dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.notification-list {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  max-height: 380px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.notification-list li {
+  padding: 0.85rem 0.95rem;
+}
+
+pre {
+  margin: 0.65rem 0 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 0.8rem;
+  border-radius: 14px;
+  background: rgba(29, 32, 40, 0.05);
+}
+
+.error {
+  margin: 0.75rem 0 0;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.muted {
+  margin-top: 0.55rem;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 1080px) {
+
+  .app-shell,
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .chat-panel {
+    min-height: 62vh;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    width: min(100vw - 1rem, 100%);
+    margin: 0.5rem auto 1.2rem;
+  }
+
+  .panel,
+  .hero {
+    padding: 0.95rem;
+    border-radius: 20px;
+  }
+
+  .hero-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-panel {
+    min-height: auto;
+  }
+
+  .chat-bubble,
+  .inline-approval {
+    max-width: 100%;
+  }
+
+  .bubble-meta,
+  .composer-actions,
+  .panel-heading {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .control-grid button,
+  .stack-actions button {
+    width: 100%;
+  }
+}
+
+/*
+ * Agent CLI Relay Web Styles
+ *
+ * Purpose:
  * - Define the visual language for the relay command deck.
  *
  * Key features:

@@ -49,9 +49,19 @@ Start the relay server in a separate terminal:
 npm run relay-server
 ```
 
-By default, the relay binds to `127.0.0.1` for local development. For cloud deploys, set `HOST=0.0.0.0` (and `PORT` as needed) before starting the relay server.
+By default, the relay binds to `127.0.0.1` and serves only the relay API.
 
-Then launch the web UI:
+For phone or LAN access with the built web app served from the same process:
+
+```bash
+npm run relay-server:prod
+```
+
+On startup, the relay prints every reachable listen URL for the current bind. When you use `HOST=0.0.0.0`, it lists each local interface address instead of only the wildcard host.
+
+Use `npm run relay-server:lan` when `./web/dist` is already built and you want LAN exposure without rebuilding.
+
+For live frontend iteration, you can still run the Vite dev server separately:
 
 ```bash
 npm run web:install
@@ -138,7 +148,7 @@ Supported provider env vars:
 
 ### Production Static Hosting
 
-Yes. You can serve the compiled React app as static files from the relay server.
+Yes. The relay can serve the compiled React app as static files from `./web/dist`.
 
 Build the web app first:
 
@@ -149,10 +159,16 @@ npm run web:build
 Then start relay with static hosting enabled:
 
 ```bash
+npm run relay-server:lan
+```
+
+Or use the helper script:
+
+```bash
 npm run relay-server:prod
 ```
 
-This serves `./web/dist` from the same process while keeping relay APIs available. You can also pass custom values with `--host`, `--static-dir`, `HOST`, `PORT`, and `RELAY_STATIC_DIR`.
+This serves the fixed `./web/dist` bundle from the same process while keeping relay APIs available. You can also pass custom values with `--host` and `PORT`.
 
 ### Remote Safety
 
