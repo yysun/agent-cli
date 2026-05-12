@@ -66,6 +66,14 @@ type InitialConnectionDraft = {
   inviteDetected: boolean;
 };
 
+type StoredRelaySession = {
+  relayServer: string;
+  sessionId: string;
+  mobileToken: string;
+};
+
+const STORED_RELAY_SESSION_KEY = 'agent-cli.relay-web-session';
+
 function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -84,6 +92,23 @@ function formatTimestamp(value: string | undefined): string {
   return date.toLocaleString();
 }
 
+function formatTime(value: string | undefined): string {
+  if (!value) {
+    return '--';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '--';
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function toSortValue(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -96,9 +121,9 @@ function formatRunStatus(status: string): string | null {
     case 'waiting_for_input':
       return 'Waiting for the next message.';
     case 'started':
-      return 'Local host started a run.';
+      return 'Analyzing the latest request.';
     case 'cancel_requested':
-      return 'Cancellation requested.';
+      return 'Stop requested from the browser.';
     case 'cancelled':
       return 'Run cancelled.';
     case 'failed':
@@ -117,7 +142,7 @@ function readInitialConnectionDraft(): InitialConnectionDraft {
       relayServer: '',
       sessionId: '',
       pairingToken: '',
-      statusText: 'Open a relay invite or paste a client connection URL to begin.',
+      statusText: 'Open a relay invite to begin.',
       inviteDetected: false,
     };
   }
@@ -130,7 +155,7 @@ function readInitialConnectionDraft(): InitialConnectionDraft {
       relayServer: parsed.relayServer,
       sessionId: parsed.sessionId,
       pairingToken: parsed.pairingToken,
-      statusText: 'Invite detected. Review the session details and connect.',
+      statusText: 'Invite detected. Connect when ready.',
       inviteDetected: true,
     };
   } catch {
@@ -139,7 +164,7 @@ function readInitialConnectionDraft(): InitialConnectionDraft {
       relayServer: window.location.origin,
       sessionId: '',
       pairingToken: '',
-      statusText: 'Open a relay invite or paste a client connection URL to begin.',
+      statusText: 'Open a relay invite to begin.',
       inviteDetected: false,
     };
   }
@@ -149,17 +174,145 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function readStoredRelaySession(): StoredRelaySession | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(STORED_RELAY_SESSION_KEY);
+
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawValue) as Partial<StoredRelaySession>;
+
+    if (
+      typeof parsed.relayServer !== 'string'
+      || typeof parsed.sessionId !== 'string'
+      || typeof parsed.mobileToken !== 'string'
+      || !parsed.relayServer
+      || !parsed.sessionId
+      || !parsed.mobileToken
+    ) {
+      return null;
+    }
+
+    return {
+      relayServer: parsed.relayServer,
+      sessionId: parsed.sessionId,
+      mobileToken: parsed.mobileToken,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredRelaySession(session: StoredRelaySession): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(STORED_RELAY_SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Ignore storage failures and continue with the live session.
+  }
+}
+
+function clearStoredRelaySession(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(STORED_RELAY_SESSION_KEY);
+  } catch {
+    // Ignore storage failures and continue with in-memory state.
+  }
+}
+
+function isInvalidStoredRelaySession(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return message.includes('invalid mobile token')
+    || message.includes('relay session not found')
+    || message.includes('invalid relay session token');
+}
+
+function buildWorkspaceTitle(sessionId: string): string {
+  if (!sessionId) {
+    return 'Remote Workspace';
+  }
+
+  return `Session ${sessionId.slice(0, 8)}`;
+}
+
+function logRelayMessage(label: string, details: Record<string, unknown>): void {
+  console.info(`[relay] ${label}`, details);
+}
+
+function logRelayEvent(event: RelayEvent): void {
+  if (event.type === 'run_status') {
+    const status = formatRunStatus(String(event.payload?.status ?? 'unknown'));
+
+    if (!status) {
+      return;
+    }
+
+    logRelayMessage('status', {
+      status: String(event.payload?.status ?? 'unknown'),
+      text: status,
+      createdAt: event.createdAt,
+      sequence: event.sequence,
+    });
+    return;
+  }
+
+  if (event.type === 'failure') {
+    logRelayMessage('failure', {
+      message: String(event.payload?.message ?? 'Run failed.'),
+      createdAt: event.createdAt,
+      sequence: event.sequence,
+    });
+    return;
+  }
+
+  if (event.type === 'disconnect') {
+    logRelayMessage('disconnect', {
+      reason: String(event.payload?.reason ?? 'unknown reason'),
+      createdAt: event.createdAt,
+      sequence: event.sequence,
+    });
+  }
+}
+
+function logRelayNotification(notification: RelayNotification): void {
+  logRelayMessage('notification', {
+    level: notification.level,
+    title: notification.title,
+    body: notification.body,
+    createdAt: notification.createdAt,
+    sequence: notification.sequence,
+  });
+}
+
 export default function App() {
   const initialDraft = useMemo(() => readInitialConnectionDraft(), []);
+  const storedRelaySession = useMemo(
+    () => (initialDraft.inviteDetected ? null : readStoredRelaySession()),
+    [initialDraft.inviteDetected],
+  );
 
-  const [connectionUrlInput, setConnectionUrlInput] = useState<string>(initialDraft.connectionUrlInput);
-  const [relayServer, setRelayServer] = useState<string>(initialDraft.relayServer);
-  const [sessionId, setSessionId] = useState<string>(initialDraft.sessionId);
+  const [connectionInput, setConnectionInput] = useState<string>(initialDraft.connectionUrlInput);
+  const [relayServer, setRelayServer] = useState<string>(storedRelaySession?.relayServer ?? initialDraft.relayServer);
+  const [sessionId, setSessionId] = useState<string>(storedRelaySession?.sessionId ?? initialDraft.sessionId);
   const [pairingToken, setPairingToken] = useState<string>(initialDraft.pairingToken);
   const [mobileToken, setMobileToken] = useState<string>('');
-  const [mobileName, setMobileName] = useState<string>('web-supervisor');
+  const mobileName = 'web-supervisor';
   const [events, setEvents] = useState<RelayEvent[]>([]);
-  const [notifications, setNotifications] = useState<RelayNotification[]>([]);
+  const [, setNotifications] = useState<RelayNotification[]>([]);
   const [outboundMessages, setOutboundMessages] = useState<OutboundMessage[]>([]);
   const [approvalDecisions, setApprovalDecisions] = useState<Record<string, boolean>>({});
   const [messageInput, setMessageInput] = useState<string>('');
@@ -174,31 +327,7 @@ export default function App() {
   const notificationCursorRef = useRef<number>(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-
-  const pendingApprovals = useMemo<ApprovalEntry[]>(() => {
-    const approvalMap = new Map<string, ApprovalEntry>();
-
-    for (const event of events) {
-      if (event.type !== 'tool_approval_request') {
-        continue;
-      }
-
-      const approvalId = String(event.payload?.approvalId ?? '');
-
-      if (!approvalId || approvalId in approvalDecisions) {
-        continue;
-      }
-
-      approvalMap.set(approvalId, {
-        approvalId,
-        toolName: String(event.payload?.toolName ?? 'unknown_tool'),
-        argumentSummary: (event.payload?.argumentSummary as RelayPayload | undefined) ?? {},
-        createdAt: event.createdAt,
-      });
-    }
-
-    return [...approvalMap.values()];
-  }, [approvalDecisions, events]);
+  const autoConnectAttemptedRef = useRef<boolean>(false);
 
   const chatEntries = useMemo<ChatEntry[]>(() => {
     const derived: ChatEntry[] = [];
@@ -222,7 +351,7 @@ export default function App() {
         role: 'assistant',
         text,
         createdAt: assistantCreatedAt,
-        meta: 'Streaming…',
+        meta: 'Analyzing and streaming updates…',
       });
 
       assistantText = '';
@@ -294,45 +423,8 @@ export default function App() {
 
       flushAssistantChunk();
 
-      if (event.type === 'run_status') {
-        const status = formatRunStatus(String(event.payload?.status ?? 'unknown'));
-
-        if (!status) {
-          continue;
-        }
-
-        derived.push({
-          id: `event-${event.sequence}`,
-          kind: 'message',
-          role: 'system',
-          text: status,
-          createdAt: event.createdAt,
-          tone: 'muted',
-        });
+      if (event.type === 'run_status' || event.type === 'failure' || event.type === 'disconnect') {
         continue;
-      }
-
-      if (event.type === 'failure') {
-        derived.push({
-          id: `event-${event.sequence}`,
-          kind: 'message',
-          role: 'system',
-          text: String(event.payload?.message ?? 'Run failed.'),
-          createdAt: event.createdAt,
-          tone: 'error',
-        });
-        continue;
-      }
-
-      if (event.type === 'disconnect') {
-        derived.push({
-          id: `event-${event.sequence}`,
-          kind: 'message',
-          role: 'system',
-          text: `Disconnected: ${String(event.payload?.reason ?? 'unknown reason')}`,
-          createdAt: event.createdAt,
-          tone: 'error',
-        });
       }
     }
 
@@ -349,7 +441,7 @@ export default function App() {
           ? 'Sending…'
           : message.status === 'failed'
             ? `Failed: ${message.errorText ?? 'Unknown error'}`
-            : 'Sent',
+            : undefined,
         tone: message.status === 'failed' ? 'error' : undefined,
       });
     }
@@ -365,6 +457,8 @@ export default function App() {
     });
   }, [approvalDecisions, events, outboundMessages]);
 
+  const workspaceTitle = buildWorkspaceTitle(sessionId);
+
   useEffect(() => {
     return () => {
       eventSourceRef.current?.close();
@@ -374,6 +468,25 @@ export default function App() {
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ block: 'end' });
   }, [chatEntries.length]);
+
+  useEffect(() => {
+    if (mobileToken || connecting || autoConnectAttemptedRef.current) {
+      return;
+    }
+
+    if (storedRelaySession) {
+      autoConnectAttemptedRef.current = true;
+      void restoreStoredSession(storedRelaySession);
+      return;
+    }
+
+    if (!initialDraft.inviteDetected) {
+      return;
+    }
+
+    autoConnectAttemptedRef.current = true;
+    void connectSession();
+  }, [connecting, initialDraft.inviteDetected, mobileToken, storedRelaySession]);
 
   useEffect(() => {
     if (!mobileToken) {
@@ -403,7 +516,9 @@ export default function App() {
       });
 
       notificationCursorRef.current = Number(result.cursor ?? notificationCursorRef.current);
-      setNotifications((previous) => [...previous, ...(result.notifications ?? [])].slice(-100));
+      const nextNotifications = result.notifications ?? [];
+      nextNotifications.forEach(logRelayNotification);
+      setNotifications((previous) => [...previous, ...nextNotifications].slice(-100));
       setActionErrorText('');
     } catch (error) {
       setActionErrorText(`Notification read failed: ${getErrorMessage(error)}`);
@@ -412,19 +527,128 @@ export default function App() {
     }
   }
 
-  function applyConnectionUrl(): boolean {
-    setConnectErrorText('');
+  function applyConnectionInput(rawInput: string): boolean {
+    const nextInput = rawInput.trim();
+
+    if (!nextInput) {
+      setConnectErrorText('');
+      setSessionId('');
+      setPairingToken('');
+      setRelayServer(initialDraft.relayServer);
+      return false;
+    }
 
     try {
-      const parsed = parseClientConnectionUrl(connectionUrlInput);
+      const parsed = parseClientConnectionUrl(nextInput);
       setRelayServer(parsed.relayServer);
       setSessionId(parsed.sessionId);
       setPairingToken(parsed.pairingToken);
-      setStatusText('Invite imported. Connect when ready.');
+      setConnectErrorText('');
+      setStatusText('Invite imported. Connecting to the relay session.');
       return true;
     } catch (error) {
       setConnectErrorText(`Invite import failed: ${getErrorMessage(error)}`);
       return false;
+    }
+  }
+
+  function clearPersistedRelaySession(reason?: string): void {
+    clearStoredRelaySession();
+    setMobileToken('');
+    setSessionId('');
+    setPairingToken('');
+    setRelayServer(initialDraft.relayServer);
+
+    if (!initialDraft.inviteDetected) {
+      setConnectionInput('');
+    }
+
+    if (reason) {
+      setStatusText(reason);
+    }
+  }
+
+  async function openConnectedSession(nextRelayServer: string, nextSessionId: string, nextMobileToken: string): Promise<void> {
+    const backlog = await readEventBacklog({
+      relayServer: nextRelayServer,
+      sessionId: nextSessionId,
+      mobileToken: nextMobileToken,
+      after: 0,
+    });
+
+    const initialNotifications = await readNotifications({
+      relayServer: nextRelayServer,
+      sessionId: nextSessionId,
+      mobileToken: nextMobileToken,
+      after: 0,
+    });
+
+    (backlog.events ?? []).forEach(logRelayEvent);
+    (initialNotifications.notifications ?? []).forEach(logRelayNotification);
+
+    setRelayServer(nextRelayServer);
+    setSessionId(nextSessionId);
+    setMobileToken(nextMobileToken);
+    setEvents(backlog.events ?? []);
+    setNotifications(initialNotifications.notifications ?? []);
+    setOutboundMessages([]);
+    setApprovalDecisions({});
+
+    eventCursorRef.current = Number(backlog.cursor ?? 0);
+    notificationCursorRef.current = Number(initialNotifications.cursor ?? 0);
+
+    const eventSource = createEventStream({
+      relayServer: nextRelayServer,
+      sessionId: nextSessionId,
+      mobileToken: nextMobileToken,
+      after: eventCursorRef.current,
+    });
+
+    eventSource.addEventListener('remote', (eventMessage: Event) => {
+      try {
+        const messageEvent = eventMessage as MessageEvent<string>;
+        const parsedEvent = JSON.parse(messageEvent.data) as RelayEvent;
+        logRelayEvent(parsedEvent);
+        eventCursorRef.current = Math.max(eventCursorRef.current, Number(parsedEvent.sequence) || 0);
+        setEvents((previous) => [...previous, parsedEvent].slice(-250));
+      } catch {
+        setActionErrorText('Failed to parse an incoming relay event.');
+      }
+    });
+
+    eventSource.onerror = () => {
+      setStatusText('Live stream interrupted. Retry connect to resubscribe.');
+      setConnectErrorText('Connection failed: the live relay stream disconnected.');
+    };
+
+    eventSourceRef.current = eventSource;
+
+    writeStoredRelaySession({
+      relayServer: nextRelayServer,
+      sessionId: nextSessionId,
+      mobileToken: nextMobileToken,
+    });
+  }
+
+  async function restoreStoredSession(storedSession: StoredRelaySession): Promise<void> {
+    setConnectErrorText('');
+    setActionErrorText('');
+    setConnecting(true);
+
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+
+    try {
+      await openConnectedSession(storedSession.relayServer, storedSession.sessionId, storedSession.mobileToken);
+      setStatusText(`Restored session ${storedSession.sessionId}.`);
+    } catch (error) {
+      if (isInvalidStoredRelaySession(error)) {
+        clearPersistedRelaySession('Saved relay session expired. Paste a fresh invite link to reconnect.');
+      }
+
+      setConnectErrorText(`Connection failed: ${getErrorMessage(error)}`);
+    } finally {
+      setConnecting(false);
     }
   }
 
@@ -440,15 +664,16 @@ export default function App() {
       let nextRelayServer = relayServer.trim();
       let nextSessionId = sessionId.trim();
       let nextPairingToken = pairingToken.trim();
+      const nextConnectionInput = connectionInput.trim();
 
-      if ((!nextRelayServer || !nextSessionId || !nextPairingToken) && connectionUrlInput.trim()) {
-        const didImport = applyConnectionUrl();
+      if (nextConnectionInput) {
+        const didImport = applyConnectionInput(nextConnectionInput);
 
         if (!didImport) {
           return;
         }
 
-        const parsed = parseClientConnectionUrl(connectionUrlInput);
+        const parsed = parseClientConnectionUrl(nextConnectionInput);
         nextRelayServer = parsed.relayServer;
         nextSessionId = parsed.sessionId;
         nextPairingToken = parsed.pairingToken;
@@ -470,58 +695,10 @@ export default function App() {
       if (!nextMobileToken) {
         throw new Error('Relay pairing succeeded without a mobile token.');
       }
-
-      const backlog = await readEventBacklog({
-        relayServer: nextRelayServer,
-        sessionId: nextSessionId,
-        mobileToken: nextMobileToken,
-        after: 0,
-      });
-
-      const initialNotifications = await readNotifications({
-        relayServer: nextRelayServer,
-        sessionId: nextSessionId,
-        mobileToken: nextMobileToken,
-        after: 0,
-      });
-
-      setRelayServer(nextRelayServer);
-      setSessionId(nextSessionId);
       setPairingToken(nextPairingToken);
-      setMobileToken(nextMobileToken);
       setStatusText(`Connected to session ${nextSessionId}. Expires ${formatTimestamp(pairResult.expiresAt)}.`);
-      setEvents(backlog.events ?? []);
-      setNotifications(initialNotifications.notifications ?? []);
-      setOutboundMessages([]);
-      setApprovalDecisions({});
 
-      eventCursorRef.current = Number(backlog.cursor ?? 0);
-      notificationCursorRef.current = Number(initialNotifications.cursor ?? 0);
-
-      const eventSource = createEventStream({
-        relayServer: nextRelayServer,
-        sessionId: nextSessionId,
-        mobileToken: nextMobileToken,
-        after: eventCursorRef.current,
-      });
-
-      eventSource.addEventListener('remote', (eventMessage: Event) => {
-        try {
-          const messageEvent = eventMessage as MessageEvent<string>;
-          const parsedEvent = JSON.parse(messageEvent.data) as RelayEvent;
-          eventCursorRef.current = Math.max(eventCursorRef.current, Number(parsedEvent.sequence) || 0);
-          setEvents((previous) => [...previous, parsedEvent].slice(-250));
-        } catch {
-          setActionErrorText('Failed to parse an incoming relay event.');
-        }
-      });
-
-      eventSource.onerror = () => {
-        setStatusText('Live stream interrupted. Retry connect to resubscribe.');
-        setConnectErrorText('Connection failed: the live relay stream disconnected.');
-      };
-
-      eventSourceRef.current = eventSource;
+      await openConnectedSession(nextRelayServer, nextSessionId, nextMobileToken);
     } catch (error) {
       setMobileToken('');
       setStatusText('Connection failed. Review the session details and retry.');
@@ -625,8 +802,7 @@ export default function App() {
         token: mobileToken,
         reason: 'web_disconnect',
       });
-      setMobileToken('');
-      setStatusText('Session disconnected from the web UI.');
+      clearPersistedRelaySession('Session disconnected from the web UI.');
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     } catch (error) {
@@ -635,268 +811,195 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <header className="hero">
-        <div className="hero-copy">
-          <p className="eyebrow">Agent CLI Remote Chat</p>
-          <h1>Run the remote session like a conversation.</h1>
-          <p className="subtitle">
-            Open the relay invite link or paste it below. The homepage reads the session details, connects to the relay,
-            and turns live output, approvals, and state changes into a chat transcript.
-          </p>
-        </div>
-
-        <div className="hero-stats">
-          <article className="hero-stat">
-            <span>Session</span>
-            <strong>{sessionId || 'Waiting for invite'}</strong>
-          </article>
-          <article className="hero-stat">
-            <span>Relay</span>
-            <strong>{relayServer || 'Not set'}</strong>
-          </article>
-          <article className="hero-stat">
-            <span>Pending approvals</span>
-            <strong>{pendingApprovals.length}</strong>
-          </article>
-        </div>
-      </header>
-
-      <section className="panel chat-panel">
-        <div className="panel-heading">
-          <div>
-            <p className="panel-kicker">Home</p>
-            <h2>Remote Chat</h2>
-          </div>
-          <span className={`connection-pill ${mobileToken ? 'connected' : 'idle'}`}>
-            {mobileToken ? 'Connected' : 'Not connected'}
-          </span>
-        </div>
-
-        <p className="status-banner">{statusText}</p>
-
-        <div className="chat-thread">
-          {chatEntries.length === 0 ? (
-            <div className="empty-state">
-              <h3>Connect to start the conversation</h3>
-              <p>
-                The transcript appears here after you join a relay session. Assistant output streams in live, and approval
-                requests appear inline where they block the run.
-              </p>
+    <div className="workspace-page">
+      <main className="workspace-shell">
+        <header className="conversation-header">
+          <div className="conversation-title-group">
+            <div className="workspace-icon" aria-hidden="true">
+              <span />
+              <span />
+              <span />
             </div>
-          ) : null}
+            <div>
+              <h1>{workspaceTitle}</h1>
+              <p className="conversation-subtitle">Desktop + Web sync</p>
+            </div>
+          </div>
 
+          <div className="conversation-actions">
+            {mobileToken ? (
+              <button
+                type="button"
+                className="icon-action"
+                onClick={() => void disconnectSession()}
+                aria-label="Disconnect session"
+              >
+                Disconnect
+              </button>
+            ) : (
+              <div className="header-connect-row">
+                <label className="header-session-field" htmlFor="session-id-input">
+                  <span>Invite link</span>
+                  <input
+                    id="session-id-input"
+                    type="text"
+                    value={connectionInput}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setConnectionInput(nextValue);
+
+                      if (!nextValue.trim()) {
+                        setSessionId('');
+                        setPairingToken('');
+                        setRelayServer(initialDraft.relayServer);
+                        setConnectErrorText('');
+                        return;
+                      }
+
+                      try {
+                        const parsed = parseClientConnectionUrl(nextValue);
+                        setRelayServer(parsed.relayServer);
+                        setSessionId(parsed.sessionId);
+                        setPairingToken(parsed.pairingToken);
+                        setConnectErrorText('');
+                      } catch {
+                        // Keep the raw input while the user is still typing an invite.
+                      }
+                    }}
+                    placeholder="Paste invite link or sessionId=...&pairingToken=..."
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void connectSession()}
+                  disabled={connecting || (!initialDraft.inviteDetected && !connectionInput.trim())}
+                >
+                  {connecting ? 'Connecting...' : 'Connect'}
+                </button>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {connectErrorText ? <p className="error page-error">{connectErrorText}</p> : null}
+
+        <section className="message-stream">
           {chatEntries.map((entry) => {
             if (entry.kind === 'approval') {
               const decisionLabel = entry.decision === undefined
-                ? 'Waiting for review'
+                ? 'Pending'
                 : entry.decision
                   ? 'Approved'
                   : 'Rejected';
 
               return (
-                <article key={entry.id} className="approval-card inline-approval">
-                  <div className="bubble-meta">
-                    <span>Approval request</span>
-                    <span>{formatTimestamp(entry.createdAt)}</span>
+                <section key={entry.id} className="message-row agent-row approval-row">
+                  <div className="avatar agent-avatar">AI</div>
+                  <div className="message-stack">
+                    <div className="message-meta">
+                      <span>Agent</span>
+                      <span>{formatTime(entry.createdAt)}</span>
+                    </div>
+
+                    <article className="approval-card mock-card">
+                      <div className="approval-card-header">
+                        <div>
+                          <h3>Approval required</h3>
+                          <p>Allow {entry.approval.toolName} for this relay session?</p>
+                        </div>
+                        <span className={`approval-state ${entry.decision === undefined ? 'pending' : entry.decision ? 'approved' : 'rejected'}`}>
+                          {decisionLabel}
+                        </span>
+                      </div>
+
+                      <p className="approval-token mono">{entry.approval.approvalId}</p>
+                      <pre>{JSON.stringify(entry.approval.argumentSummary, null, 2)}</pre>
+
+                      <div className="approval-actions mock-actions">
+                        <button
+                          type="button"
+                          onClick={() => void sendApprovalDecision(entry.approval.approvalId, true)}
+                          disabled={!mobileToken || entry.decision !== undefined}
+                        >
+                          Approve once
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => void sendApprovalDecision(entry.approval.approvalId, false)}
+                          disabled={!mobileToken || entry.decision !== undefined}
+                        >
+                          Deny
+                        </button>
+                      </div>
+                    </article>
                   </div>
-                  <h3>{entry.approval.toolName}</h3>
-                  <p className="mono">{entry.approval.approvalId}</p>
-                  <pre>{JSON.stringify(entry.approval.argumentSummary, null, 2)}</pre>
-                  <div className="approval-actions">
-                    <span className={`approval-state ${entry.decision === undefined ? 'pending' : entry.decision ? 'approved' : 'rejected'}`}>
-                      {decisionLabel}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void sendApprovalDecision(entry.approval.approvalId, true)}
-                      disabled={!mobileToken || entry.decision !== undefined}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => void sendApprovalDecision(entry.approval.approvalId, false)}
-                      disabled={!mobileToken || entry.decision !== undefined}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </article>
+                </section>
               );
             }
 
+            const isUser = entry.role === 'user';
+            const rowClassName = `message-row ${isUser ? 'user-row' : 'agent-row'}`;
+            const bubbleClassName = `message-bubble ${isUser ? 'user-bubble' : entry.role === 'system' ? 'system-bubble' : 'agent-bubble'}${entry.tone === 'error' ? ' bubble-error' : ''}`;
+
             return (
-              <article
-                key={entry.id}
-                className={`chat-bubble ${entry.role}${entry.tone === 'error' ? ' is-error' : ''}${entry.tone === 'muted' ? ' is-muted' : ''}`}
-              >
-                <div className="bubble-meta">
-                  <span>{entry.role === 'assistant' ? 'Assistant' : entry.role === 'user' ? 'You' : 'Relay'}</span>
-                  <span>{formatTimestamp(entry.createdAt)}</span>
+              <section key={entry.id} className={rowClassName}>
+                {!isUser ? <div className={`avatar ${entry.role === 'system' ? 'system-avatar' : 'agent-avatar'}`}>{entry.role === 'system' ? '•' : 'AI'}</div> : null}
+
+                <div className="message-stack">
+                  <div className={`message-meta ${isUser ? 'align-end' : ''}`}>
+                    <span>{isUser ? 'You' : entry.role === 'assistant' ? 'Agent' : 'Relay'}</span>
+                    <span>{formatTime(entry.createdAt)}</span>
+                  </div>
+                  <article className={bubbleClassName}>
+                    <p>{entry.text}</p>
+                    {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
+                  </article>
                 </div>
-                <p>{entry.text}</p>
-                {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
-              </article>
+
+                {isUser ? <div className="avatar user-avatar">Y</div> : null}
+              </section>
             );
           })}
 
           <div ref={transcriptEndRef} />
-        </div>
+        </section>
 
-        <form className="composer" onSubmit={(event) => void submitMessage(event)}>
-          <label htmlFor="message-input">Message</label>
+        <form className="composer-panel" onSubmit={(event) => void submitMessage(event)}>
+          <label className="sr-only" htmlFor="message-input">Message Agent</label>
           <textarea
             id="message-input"
             value={messageInput}
             onChange={(event) => setMessageInput(event.target.value)}
-            rows={4}
-            placeholder={mobileToken ? 'Send the next user turn to the local host' : 'Connect to a live session to send messages'}
+            rows={3}
+            placeholder={mobileToken ? 'Message Agent...' : 'Connect to a live session to send messages'}
             disabled={!mobileToken}
           />
 
-          {actionErrorText ? <p className="error">{actionErrorText}</p> : null}
+          {actionErrorText ? <p className="error composer-error">{actionErrorText}</p> : null}
 
-          <div className="composer-actions">
-            <p className="muted">Messages route through the relay. The local machine still runs tools, reads files, and holds secrets.</p>
-            <button type="submit" disabled={sendingMessage || !mobileToken}>
-              {sendingMessage ? 'Sending...' : 'Send Message'}
-            </button>
+          <div className="composer-footer">
+            <div className="composer-tools">
+              <button type="button" className="tool-pill" onClick={() => void refreshNotificationList()} disabled={!mobileToken || refreshingNotifications}>
+                Alerts
+              </button>
+              <button type="button" className="tool-pill" onClick={() => void postCommand('resume').catch(() => undefined)} disabled={!mobileToken}>
+                Resume
+              </button>
+            </div>
+
+            <div className="composer-send">
+              <button type="button" className="secondary" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
+                Stop
+              </button>
+              <button type="submit" disabled={sendingMessage || !mobileToken}>
+                {sendingMessage ? 'Sending...' : 'Send'}
+              </button>
+            </div>
           </div>
         </form>
-      </section>
-
-      <aside className="sidebar">
-        <section className="panel connect-panel">
-          <div className="panel-heading compact">
-            <div>
-              <p className="panel-kicker">Connect</p>
-              <h2>Session Details</h2>
-            </div>
-            {initialDraft.inviteDetected ? <span className="mini-badge">Invite link detected</span> : null}
-          </div>
-
-          <label htmlFor="relay-server">Relay server</label>
-          <input
-            id="relay-server"
-            type="text"
-            value={relayServer}
-            onChange={(event) => setRelayServer(event.target.value)}
-            placeholder="http://127.0.0.1:8787"
-          />
-
-          <label htmlFor="session-id">Session ID</label>
-          <input
-            id="session-id"
-            type="text"
-            value={sessionId}
-            onChange={(event) => setSessionId(event.target.value)}
-            placeholder="relay session id"
-          />
-
-          <label htmlFor="pairing-token">Pairing token</label>
-          <input
-            id="pairing-token"
-            type="text"
-            value={pairingToken}
-            onChange={(event) => setPairingToken(event.target.value)}
-            placeholder="pairing token"
-          />
-
-          <label htmlFor="mobile-name">Supervisor name</label>
-          <input
-            id="mobile-name"
-            type="text"
-            value={mobileName}
-            onChange={(event) => setMobileName(event.target.value)}
-            placeholder="web-supervisor"
-          />
-
-          <label htmlFor="connection-url">Client connection URL</label>
-          <input
-            id="connection-url"
-            type="text"
-            value={connectionUrlInput}
-            onChange={(event) => setConnectionUrlInput(event.target.value)}
-            placeholder="http://127.0.0.1:8787/pair?sessionId=...&pairingToken=..."
-          />
-
-          <div className="stack-actions">
-            <button type="button" className="secondary" onClick={applyConnectionUrl} disabled={!connectionUrlInput.trim() || connecting}>
-              Import Invite URL
-            </button>
-            <button type="button" onClick={() => void connectSession()} disabled={connecting}>
-              {connecting ? 'Connecting...' : 'Connect'}
-            </button>
-          </div>
-
-          {connectErrorText ? <p className="error">{connectErrorText}</p> : null}
-        </section>
-
-        <section className="panel controls-panel">
-          <div className="panel-heading compact">
-            <div>
-              <p className="panel-kicker">Session</p>
-              <h2>Controls</h2>
-            </div>
-            <span className="mini-badge">{mobileToken ? 'Live' : 'Idle'}</span>
-          </div>
-
-          <div className="control-grid">
-            <button type="button" className="secondary" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
-              Cancel Run
-            </button>
-            <button type="button" className="secondary" onClick={() => void postCommand('resume').catch(() => undefined)} disabled={!mobileToken}>
-              Resume Host
-            </button>
-            <button type="button" className="secondary" onClick={() => void refreshNotificationList()} disabled={!mobileToken || refreshingNotifications}>
-              {refreshingNotifications ? 'Refreshing...' : 'Refresh Alerts'}
-            </button>
-            <button type="button" className="ghost" onClick={() => void disconnectSession()} disabled={!mobileToken}>
-              Disconnect
-            </button>
-          </div>
-
-          <dl className="session-facts">
-            <div>
-              <dt>Session ID</dt>
-              <dd>{sessionId || '--'}</dd>
-            </div>
-            <div>
-              <dt>Supervisor</dt>
-              <dd>{mobileName || '--'}</dd>
-            </div>
-            <div>
-              <dt>Pending approvals</dt>
-              <dd>{pendingApprovals.length}</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="panel activity-panel">
-          <div className="panel-heading compact">
-            <div>
-              <p className="panel-kicker">Activity</p>
-              <h2>Notifications</h2>
-            </div>
-            <span className="mini-badge">{notifications.length}</span>
-          </div>
-
-          {notifications.length === 0 ? <p className="muted">No relay notifications yet.</p> : null}
-
-          <ul className="notification-list">
-            {[...notifications].reverse().map((notification) => (
-              <li key={`${notification.sequence}-${notification.level}`}>
-                <p className="mono">#{notification.sequence} {notification.level}</p>
-                <p>{notification.title}</p>
-                <p className="muted">{notification.body}</p>
-                <p className="muted">{formatTimestamp(notification.createdAt)}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </aside>
+      </main>
     </div>
   );
 }

@@ -84,8 +84,41 @@ function normalizeBaseUrl(rawUrl: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
+function getBrowserBaseUrl(): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+
+  return 'http://127.0.0.1';
+}
+
+function toClientConnectionUrl(rawUrl: string): URL {
+  const trimmed = String(rawUrl ?? '').trim();
+
+  if (!trimmed) {
+    throw new Error('Connection URL is required.');
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return new URL(trimmed);
+  }
+
+  if (trimmed.startsWith('/')) {
+    return new URL(trimmed, getBrowserBaseUrl());
+  }
+
+  const queryText = trimmed.replace(/^\?/, '');
+  const queryParams = new URLSearchParams(queryText);
+
+  if (queryParams.has('sessionId') || queryParams.has('pairingToken')) {
+    return new URL(`/pair?${queryParams.toString()}`, getBrowserBaseUrl());
+  }
+
+  return new URL(trimmed);
+}
+
 export function parseClientConnectionUrl(rawUrl: string): ParsedClientConnection {
-  const url = new URL(String(rawUrl ?? '').trim());
+  const url = toClientConnectionUrl(rawUrl);
   const sessionId = url.searchParams.get('sessionId') ?? '';
   const pairingToken = url.searchParams.get('pairingToken') ?? '';
 
