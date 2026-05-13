@@ -64,6 +64,49 @@ async function startServer(options = {}) {
   };
 }
 
+/**
+ * @param {Response} response
+ * @param {(text: string) => boolean} predicate
+ * @param {number} [timeoutMs]
+ */
+async function readStreamTextUntil(response, predicate, timeoutMs = 1000) {
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    throw new Error('Expected a readable response body.');
+  }
+
+  const decoder = new TextDecoder();
+  let text = '';
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const result = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`Timed out waiting for streamed text.\nReceived:\n${text}`)), remainingMs);
+      }),
+    ]);
+
+    if (!result || typeof result !== 'object' || !('done' in result) || !('value' in result)) {
+      continue;
+    }
+
+    if (result.done) {
+      break;
+    }
+
+    text += decoder.decode(result.value, { stream: true });
+
+    if (predicate(text)) {
+      return text;
+    }
+  }
+
+  throw new Error(`Timed out waiting for streamed text.\nReceived:\n${text}`);
+}
+
 describe('relay-server', () => {
   it('lists every IPv4 interface when the relay binds to the wildcard host', () => {
     const urls = listRelayListenUrls({
@@ -327,6 +370,95 @@ describe('relay-server', () => {
       'human_input_needed',
       'run_completed',
     ]);
+  });
+
+  it('streams retry hints, heartbeats, and honors Last-Event-ID for SSE clients', async () => {
+    const { server, baseUrl } = await startServer({
+      sseHeartbeatMs: 10,
+      sseRetryMs: 1234,
+    });
+    servicesToClose.push({ close: () => { server.close(); } });
+
+    const createResponse = await fetch(`${baseUrl}/v1/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chatId: 'chat-sse-1' }),
+    });
+    const session = await createResponse.json();
+
+    const pairResponse = await fetch(`${baseUrl}/v1/sessions/${encodeURIComponent(session.sessionId)}/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pairingToken: session.pairingToken }),
+    });
+    const pair = await pairResponse.json();
+
+    await fetch(`${baseUrl}/v1/sessions/${encodeURIComponent(session.sessionId)}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        desktopToken: session.desktopToken,
+        type: 'run_status',
+        payload: { status: 'started' },
+      }),
+    });
+    await fetch(`${baseUrl}/v1/sessions/${encodeURIComponent(session.sessionId)}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        desktopToken: session.desktopToken,
+        type: 'run_status',
+        payload: { status: 'waiting_for_input' },
+      }),
+    });
+    await fetch(`${baseUrl}/v1/sessions/${encodeURIComponent(session.sessionId)}/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        desktopToken: session.desktopToken,
+        type: 'completion',
+        payload: { text: 'done' },
+      }),
+    });
+
+    const heartbeatController = new AbortController();
+    const heartbeatResponse = await fetch(
+      `${baseUrl}/v1/sessions/${encodeURIComponent(session.sessionId)}/events?mobileToken=${encodeURIComponent(pair.mobileToken)}&after=0`,
+      {
+        headers: { accept: 'text/event-stream' },
+        signal: heartbeatController.signal,
+      },
+    );
+    const heartbeatText = await readStreamTextUntil(
+      heartbeatResponse,
+      (text) => text.includes('retry: 1234') && text.includes(': connected') && text.includes(': heartbeat'),
+    );
+    heartbeatController.abort();
+
+    expect(heartbeatResponse.headers.get('content-type')).toContain('text/event-stream');
+    expect(heartbeatText).toContain('retry: 1234');
+    expect(heartbeatText).toContain(': connected');
+    expect(heartbeatText).toContain(': heartbeat');
+
+    const resumeController = new AbortController();
+    const resumeResponse = await fetch(
+      `${baseUrl}/v1/sessions/${encodeURIComponent(session.sessionId)}/events?mobileToken=${encodeURIComponent(pair.mobileToken)}&after=1`,
+      {
+        headers: {
+          accept: 'text/event-stream',
+          'last-event-id': '2',
+        },
+        signal: resumeController.signal,
+      },
+    );
+    const resumeText = await readStreamTextUntil(
+      resumeResponse,
+      (text) => text.includes('id: 3') && text.includes('"completion"'),
+    );
+    resumeController.abort();
+
+    expect(resumeText).toContain('id: 3');
+    expect(resumeText).not.toContain('id: 2');
   });
 
   it('marks expired sessions as revoked during sweeps', async () => {

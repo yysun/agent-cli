@@ -12,6 +12,7 @@
  * Recent changes:
  * - 2026-05-12: Kept the workspace title static and moved the session label into the subtitle.
  * - 2026-05-13: Added multi-client chat management and share-invite controls.
+ * - 2026-05-13: Added automatic session restore for refresh/foreground resume plus reconnect-safe SSE handling.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -426,6 +427,72 @@ function formatChatTitle(chat: RelayChatSummary): string {
   return `${chat.id.slice(0, 8)} · ${chat.messageCount} msg`;
 }
 
+function mergeRelayEventList(existingEvents: RelayEvent[], incomingEvents: RelayEvent[]): RelayEvent[] {
+  if (incomingEvents.length === 0) {
+    return existingEvents;
+  }
+
+  const mergedEvents = [...existingEvents];
+  const seenSequences = new Set(existingEvents.map((event) => event.sequence));
+
+  for (const event of incomingEvents) {
+    if (seenSequences.has(event.sequence)) {
+      continue;
+    }
+
+    seenSequences.add(event.sequence);
+    mergedEvents.push(event);
+  }
+
+  return mergedEvents
+    .sort((left, right) => left.sequence - right.sequence)
+    .slice(-250);
+}
+
+function mergeRelayNotificationList(
+  existingNotifications: RelayNotification[],
+  incomingNotifications: RelayNotification[],
+): RelayNotification[] {
+  if (incomingNotifications.length === 0) {
+    return existingNotifications;
+  }
+
+  const mergedNotifications = [...existingNotifications];
+  const seenSequences = new Set(existingNotifications.map((notification) => notification.sequence));
+
+  for (const notification of incomingNotifications) {
+    if (seenSequences.has(notification.sequence)) {
+      continue;
+    }
+
+    seenSequences.add(notification.sequence);
+    mergedNotifications.push(notification);
+  }
+
+  return mergedNotifications
+    .sort((left, right) => left.sequence - right.sequence)
+    .slice(-100);
+}
+
+function getLatestObservedChatId(events: RelayEvent[], fallbackChatId = ''): string {
+  return String(
+    [...events]
+      .reverse()
+      .map((event) => String(event.payload?.activeChatId ?? event.payload?.chatId ?? ''))
+      .find(Boolean) ?? fallbackChatId,
+  ).trim();
+}
+
+function isTerminalRelaySessionError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return message.includes('invalid mobile token')
+    || message.includes('invalid relay session token')
+    || message.includes('relay session not found')
+    || message.includes('relay session unavailable')
+    || message.includes('relay session expired');
+}
+
 export default function App() {
   const initialDraft = useMemo(() => readInitialConnectionDraft(), []);
   const availableStoredRelaySession = useMemo(() => readStoredRelaySession(), []);
@@ -472,6 +539,8 @@ export default function App() {
   const autoConnectAttemptedRef = useRef<boolean>(false);
   const latestChatListRequestIdRef = useRef<string>('');
   const latestChatMessagesRequestIdRef = useRef<string>('');
+  const restoreInFlightRef = useRef<boolean>(false);
+  const reconnectTimerRef = useRef<number | null>(null);
 
   const mobileName = 'web-supervisor';
 
@@ -617,6 +686,10 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      if (reconnectTimerRef.current !== null && typeof window !== 'undefined') {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
+
       eventSourceRef.current?.close();
     };
   }, []);
@@ -643,6 +716,41 @@ export default function App() {
     autoConnectAttemptedRef.current = true;
     void connectSession();
   }, [connecting, initialDraft.inviteDetected, mobileToken, storedRelaySession]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return;
+    }
+
+    const handleSessionResume = () => {
+      if (document.visibilityState === 'hidden' || connecting || restoreInFlightRef.current) {
+        return;
+      }
+
+      if (mobileToken && relayServer && sessionId) {
+        if (!eventSourceRef.current || eventSourceRef.current.readyState !== EventSource.OPEN) {
+          queueSessionRestore();
+        }
+
+        return;
+      }
+
+      const nextStoredSession = readStoredRelaySession();
+
+      if (nextStoredSession) {
+        autoConnectAttemptedRef.current = true;
+        void restoreStoredSession(nextStoredSession);
+      }
+    };
+
+    window.addEventListener('focus', handleSessionResume);
+    document.addEventListener('visibilitychange', handleSessionResume);
+
+    return () => {
+      window.removeEventListener('focus', handleSessionResume);
+      document.removeEventListener('visibilitychange', handleSessionResume);
+    };
+  }, [connecting, mobileToken, relayServer, sessionId]);
 
   useEffect(() => {
     if (!mobileToken) {
@@ -790,6 +898,32 @@ export default function App() {
     }
   }
 
+  function clearReconnectTimer(): void {
+    if (reconnectTimerRef.current === null || typeof window === 'undefined') {
+      return;
+    }
+
+    window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  }
+
+  function closeEventStream(): void {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+  }
+
+  function queueSessionRestore(): void {
+    if (typeof window === 'undefined' || restoreInFlightRef.current || connecting) {
+      return;
+    }
+
+    clearReconnectTimer();
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void restoreLiveSession();
+    }, 500);
+  }
+
   function applyConnectionInput(rawInput: string): boolean {
     const nextInput = rawInput.trim();
 
@@ -817,8 +951,8 @@ export default function App() {
 
   function clearLocalSessionState(reason?: string): void {
     clearStoredRelaySession();
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
+    clearReconnectTimer();
+    closeEventStream();
     setMobileToken('');
     setClientId('');
     setSessionId('');
@@ -850,52 +984,74 @@ export default function App() {
     nextMobileToken: string,
     nextClientId: string,
     pairedChatId = '',
+    options: {
+      after?: number;
+      preserveState?: boolean;
+    } = {},
   ): Promise<void> {
+    const after = Math.max(0, Number(options.after ?? 0));
+    const preserveState = Boolean(options.preserveState);
     const backlog = await readEventBacklog({
       relayServer: nextRelayServer,
       sessionId: nextSessionId,
       mobileToken: nextMobileToken,
-      after: 0,
+      after,
     });
 
     const initialNotifications = await readNotifications({
       relayServer: nextRelayServer,
       sessionId: nextSessionId,
       mobileToken: nextMobileToken,
-      after: 0,
+      after: preserveState ? notificationCursorRef.current : 0,
     });
 
-    (backlog.events ?? []).forEach((event) => {
+    const backlogEvents = backlog.events ?? [];
+    const nextNotifications = initialNotifications.notifications ?? [];
+    const incomingEvents = preserveState
+      ? backlogEvents.filter((event) => Number(event.sequence) > eventCursorRef.current)
+      : backlogEvents;
+
+    incomingEvents.forEach((event) => {
       logRelayEvent(event);
       applyRelayEventState(event);
     });
-    (initialNotifications.notifications ?? []).forEach(logRelayNotification);
+    nextNotifications.forEach(logRelayNotification);
 
     setRelayServer(nextRelayServer);
     setSessionId(nextSessionId);
     setMobileToken(nextMobileToken);
-    setClientId(nextClientId);
-    setEvents(backlog.events ?? []);
-    setNotifications(initialNotifications.notifications ?? []);
-    setOutboundMessages([]);
-    setApprovalDecisions({});
-    setSharedInviteUrl('');
+    setClientId((previous) => nextClientId || previous);
 
-    const nextActiveChatId = pairedChatId
-      || String(
-        [...(backlog.events ?? [])]
-          .reverse()
-          .map((event) => String(event.payload?.activeChatId ?? event.payload?.chatId ?? ''))
-          .find(Boolean) ?? '',
-      ).trim();
+    if (preserveState) {
+      setEvents((previous) => mergeRelayEventList(previous, incomingEvents));
+      setNotifications((previous) => mergeRelayNotificationList(previous, nextNotifications));
+    } else {
+      setEvents(backlogEvents);
+      setNotifications(nextNotifications);
+      setOutboundMessages([]);
+      setApprovalDecisions({});
+      setSharedInviteUrl('');
+      setSelectedChatMessages([]);
+      setSelectedChatLoading(false);
+    }
+
+    const nextActiveChatId = pairedChatId || getLatestObservedChatId(backlogEvents, preserveState ? activeChatId : '');
 
     if (nextActiveChatId) {
       setActiveChatId(nextActiveChatId);
-      setSelectedChatId(nextActiveChatId);
+
+      if (preserveState) {
+        setSelectedChatId((previous) => previous || nextActiveChatId);
+      } else {
+        setSelectedChatId(nextActiveChatId);
+      }
     }
 
-    eventCursorRef.current = Number(backlog.cursor ?? 0);
-    notificationCursorRef.current = Number(initialNotifications.cursor ?? 0);
+    eventCursorRef.current = Math.max(eventCursorRef.current, Number(backlog.cursor ?? after));
+    notificationCursorRef.current = Math.max(
+      notificationCursorRef.current,
+      Number(initialNotifications.cursor ?? notificationCursorRef.current),
+    );
 
     const eventSource = createEventStream({
       relayServer: nextRelayServer,
@@ -904,22 +1060,46 @@ export default function App() {
       after: eventCursorRef.current,
     });
 
+    eventSource.onopen = () => {
+      clearReconnectTimer();
+      setConnectErrorText('');
+      setStatusText((previous) => (
+        previous === 'Live stream reconnecting...' || previous === 'Restoring live session...'
+          ? `Connected to session ${nextSessionId}.`
+          : previous
+      ));
+    };
+
     eventSource.addEventListener('remote', (eventMessage: Event) => {
       try {
         const messageEvent = eventMessage as MessageEvent<string>;
         const parsedEvent = JSON.parse(messageEvent.data) as RelayEvent;
+        const sequence = Number(parsedEvent.sequence) || 0;
+
+        if (sequence <= eventCursorRef.current) {
+          return;
+        }
+
         logRelayEvent(parsedEvent);
         applyRelayEventState(parsedEvent);
-        eventCursorRef.current = Math.max(eventCursorRef.current, Number(parsedEvent.sequence) || 0);
-        setEvents((previous) => [...previous, parsedEvent].slice(-250));
+        eventCursorRef.current = Math.max(eventCursorRef.current, sequence);
+        setEvents((previous) => mergeRelayEventList(previous, [parsedEvent]));
       } catch {
         setActionErrorText('Failed to parse an incoming relay event.');
       }
     });
 
     eventSource.onerror = () => {
-      setStatusText('Live stream interrupted. Retry connect to resubscribe.');
-      setConnectErrorText('Connection failed: the live relay stream disconnected.');
+      if (eventSourceRef.current !== eventSource) {
+        return;
+      }
+
+      setStatusText('Live stream reconnecting...');
+      setConnectErrorText('');
+
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        queueSessionRestore();
+      }
     };
 
     eventSourceRef.current = eventSource;
@@ -930,6 +1110,10 @@ export default function App() {
       mobileToken: nextMobileToken,
     });
     sanitizeConnectedLocation(nextSessionId);
+
+    if (preserveState) {
+      return;
+    }
 
     await requestChatList(nextRelayServer, nextSessionId, nextMobileToken);
 
@@ -942,21 +1126,85 @@ export default function App() {
     setConnectErrorText('');
     setActionErrorText('');
     setConnecting(true);
+    let shouldRetry = false;
 
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
+    clearReconnectTimer();
+    closeEventStream();
 
     try {
       await openConnectedSession(storedSession.relayServer, storedSession.sessionId, storedSession.mobileToken, '');
       setStatusText(`Restored session ${storedSession.sessionId}.`);
     } catch (error) {
-      if (isInvalidStoredRelaySession(error)) {
+      if (isTerminalRelaySessionError(error) || isInvalidStoredRelaySession(error)) {
         clearLocalSessionState('Saved relay session expired. Paste a fresh invite link to reconnect.');
+        setConnectErrorText(`Connection failed: ${getErrorMessage(error)}`);
+      } else {
+        shouldRetry = true;
+        setStatusText('Live stream reconnecting...');
+        setConnectErrorText('');
       }
-
-      setConnectErrorText(`Connection failed: ${getErrorMessage(error)}`);
     } finally {
       setConnecting(false);
+
+      if (shouldRetry && (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
+        queueSessionRestore();
+      }
+    }
+  }
+
+  async function restoreLiveSession(): Promise<void> {
+    if (restoreInFlightRef.current || connecting) {
+      return;
+    }
+
+    const nextRelayServer = relayServer.trim();
+    const nextSessionId = sessionId.trim();
+    const nextMobileToken = mobileToken.trim();
+
+    if (!nextRelayServer || !nextSessionId || !nextMobileToken) {
+      const nextStoredSession = readStoredRelaySession();
+
+      if (nextStoredSession) {
+        await restoreStoredSession(nextStoredSession);
+      }
+
+      return;
+    }
+
+    restoreInFlightRef.current = true;
+    let shouldRetry = false;
+    clearReconnectTimer();
+    closeEventStream();
+    setStatusText('Restoring live session...');
+    setConnectErrorText('');
+
+    try {
+      await openConnectedSession(
+        nextRelayServer,
+        nextSessionId,
+        nextMobileToken,
+        clientId,
+        activeChatId,
+        {
+          after: eventCursorRef.current,
+          preserveState: true,
+        },
+      );
+    } catch (error) {
+      if (isTerminalRelaySessionError(error)) {
+        clearLocalSessionState('Remote session ended. Paste a fresh invite link to reconnect.');
+        setConnectErrorText(`Connection failed: ${getErrorMessage(error)}`);
+      } else {
+        shouldRetry = true;
+        setStatusText('Live stream reconnecting...');
+        setConnectErrorText('');
+      }
+    } finally {
+      restoreInFlightRef.current = false;
+
+      if (shouldRetry && (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
+        queueSessionRestore();
+      }
     }
   }
 
@@ -965,8 +1213,8 @@ export default function App() {
     setActionErrorText('');
     setConnecting(true);
 
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
+    clearReconnectTimer();
+    closeEventStream();
 
     try {
       let nextRelayServer = relayServer.trim();

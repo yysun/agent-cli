@@ -31,6 +31,8 @@ Use `--remote` to host the current local chat through the optional relay server.
 
 One remote host session can now serve multiple paired clients at the same time. After the first client pairs, the web UI can mint an additional one-time invite link for another browser or device without restarting the local CLI host.
 
+Paired browsers observe the same shared remote session over SSE. Shared assistant output, run status, approvals, completion, failure, session snapshot, and active-chat changes fan out to every authorized paired browser, while requester-specific query results such as chat-list reads or command errors stay targeted to the requesting client.
+
 `agent-cli --remote` is a long-running host process. It stays alive after startup, keeps the local project root locked for that remote session, and continues serving relay commands until the host exits, a client disconnect ends the session, or you press `Ctrl+C`.
 
 Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
@@ -84,6 +86,8 @@ npm run dev
 
 Paste the `Client connection URL` printed by `agent-cli --remote` into the web app and pair. The UI can send remote user messages, approval decisions, cancel/resume commands, and disconnect requests for the active local remote session.
 
+If the browser is refreshed, the session URL is reopened, or the SSE stream drops transiently, the web client automatically restores the live session while the remote session is still valid. The relay sends heartbeat comments and resume-friendly event IDs so the browser can continue from its last confirmed event position without restarting the local CLI host.
+
 Paired clients can also:
 - request the local chat list
 - load persisted messages for a selected chat
@@ -91,7 +95,7 @@ Paired clients can also:
 - switch which local chat is active for subsequent remote turns
 - create a new one-time invite link for another paired client
 
-The deterministic remote-host e2e suite confirms that a real `agent-cli --remote` process stays up and serves client-driven chat listing, active-chat selection, and persisted chat-message reads through the relay.
+The deterministic relay and remote-host e2e coverage confirms that a real `agent-cli --remote` process stays up, serves client-driven chat listing and persisted chat-message reads, and supports resumed SSE streams through the relay.
 
 ### Agent Files
 

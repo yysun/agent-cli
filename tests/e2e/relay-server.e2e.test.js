@@ -178,6 +178,49 @@ async function createTempStaticDir() {
   return tempDir;
 }
 
+/**
+ * @param {Response} response
+ * @param {(text: string) => boolean} predicate
+ * @param {number} [timeoutMs]
+ */
+async function readStreamTextUntil(response, predicate, timeoutMs = 1500) {
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    throw new Error('Expected a readable response body.');
+  }
+
+  const decoder = new TextDecoder();
+  let text = '';
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const result = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`Timed out waiting for streamed text.\nReceived:\n${text}`)), remainingMs);
+      }),
+    ]);
+
+    if (!result || typeof result !== 'object' || !('done' in result) || !('value' in result)) {
+      continue;
+    }
+
+    if (result.done) {
+      break;
+    }
+
+    text += decoder.decode(result.value, { stream: true });
+
+    if (predicate(text)) {
+      return text;
+    }
+  }
+
+  throw new Error(`Timed out waiting for streamed text.\nReceived:\n${text}`);
+}
+
 describe('relay server binary', () => {
   it('coordinates a desktop and mobile relay session over HTTP', async () => {
     const { relayServer } = await startRelayServer();
@@ -441,6 +484,68 @@ describe('relay server binary', () => {
       notifications: [],
       cursor: 0,
     });
+  });
+
+  it('resumes SSE streams from the Last-Event-ID header', async () => {
+    const { relayServer } = await startRelayServer();
+
+    const session = await createRelaySession({
+      relayServer,
+      localSessionId: 'local-e2e-sse-resume',
+      chatId: 'chat-e2e-sse-resume',
+      ttlMs: 60000,
+      pairingTtlMs: 60000,
+      metadata: { source: 'relay-server-e2e-sse-resume' },
+    });
+    const pair = await pairRelaySession({
+      relayServer,
+      sessionId: session.sessionId,
+      pairingToken: session.pairingToken,
+      mobileName: 'e2e-mobile-sse-resume',
+    });
+
+    await postRelayEvent({
+      relayServer,
+      sessionId: session.sessionId,
+      desktopToken: session.desktopToken,
+      type: 'run_status',
+      payload: { status: 'started' },
+    });
+    await postRelayEvent({
+      relayServer,
+      sessionId: session.sessionId,
+      desktopToken: session.desktopToken,
+      type: 'run_status',
+      payload: { status: 'waiting_for_input' },
+    });
+    await postRelayEvent({
+      relayServer,
+      sessionId: session.sessionId,
+      desktopToken: session.desktopToken,
+      type: 'completion',
+      payload: { text: 'resume complete' },
+    });
+
+    const controller = new AbortController();
+    const response = await fetch(
+      `${relayServer}/v1/sessions/${encodeURIComponent(session.sessionId)}/events?mobileToken=${encodeURIComponent(pair.mobileToken)}&after=1`,
+      {
+        headers: {
+          accept: 'text/event-stream',
+          'last-event-id': '2',
+        },
+        signal: controller.signal,
+      },
+    );
+    const streamText = await readStreamTextUntil(
+      response,
+      (text) => text.includes('id: 3') && text.includes('"resume complete"'),
+    );
+    controller.abort();
+
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(streamText).toContain('id: 3');
+    expect(streamText).not.toContain('id: 2');
   });
 
   it('serves static files from the entrypoint while preserving API routes', async () => {

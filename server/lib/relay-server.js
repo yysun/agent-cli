@@ -14,6 +14,7 @@
  * - 2026-05-11: Added the initial optional remote-control relay server.
  * - 2026-05-11: Added CORS and preflight handling so browser UIs can access relay APIs and SSE.
  * - 2026-05-13: Added multi-client pairing, targeted event delivery, and invite minting.
+ * - 2026-05-13: Added SSE heartbeat and Last-Event-ID resume support for automatic reconnect.
  */
 import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -25,6 +26,8 @@ import { URL } from 'node:url';
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 25 * 1000;
+const DEFAULT_SSE_HEARTBEAT_MS = 15000;
+const DEFAULT_SSE_RETRY_MS = 3000;
 const MAX_QUEUE_ITEMS = 250;
 
 /**
@@ -244,6 +247,33 @@ function resolveTimeoutMs(timeoutMs, fallbackMs = DEFAULT_LONG_POLL_TIMEOUT_MS) 
   return clampPositiveInteger(Number(timeoutMs)) ?? fallbackMs;
 }
 
+/** @param {string | string[] | undefined} value */
+function readEventSequenceHeader(value) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  return Math.max(0, clampPositiveInteger(Number(rawValue)) ?? 0);
+}
+
+/** @param {import('node:http').ServerResponse} response */
+function writeSseConnected(response, retryMs) {
+  response.write(`retry: ${retryMs}\n`);
+  response.write(': connected\n\n');
+}
+
+/** @param {import('node:http').ServerResponse} response */
+function writeSseHeartbeat(response) {
+  response.write(': heartbeat\n\n');
+}
+
+/**
+ * @param {import('node:http').ServerResponse} response
+ * @param {{ sequence: number, type: string, payload: Record<string, unknown> }} event
+ */
+function writeSseEvent(response, event) {
+  response.write(`id: ${event.sequence}\n`);
+  response.write('event: remote\n');
+  response.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
 /**
  * @param {string | null | undefined} value
  * @param {Date} now
@@ -389,6 +419,7 @@ export class RelayService {
 
     for (const session of this.sessions.values()) {
       for (const client of session.eventClients) {
+        clearInterval(client.heartbeatTimer);
         client.response.end();
       }
 
@@ -434,6 +465,7 @@ export class RelayService {
       session.commandWaiters.clear();
 
       for (const client of session.eventClients) {
+        clearInterval(client.heartbeatTimer);
         client.response.end();
       }
 
@@ -965,13 +997,17 @@ export class RelayService {
    */
   broadcastEvent(session, event) {
     for (const client of session.eventClients) {
+      if (client.response.writableEnded || client.response.destroyed) {
+        clearInterval(client.heartbeatTimer);
+        session.eventClients.delete(client);
+        continue;
+      }
+
       if (!isEventVisibleToClient(event, client.clientId)) {
         continue;
       }
 
-      client.response.write(`id: ${event.sequence}\n`);
-      client.response.write(`event: remote\n`);
-      client.response.write(`data: ${JSON.stringify(event)}\n\n`);
+      writeSseEvent(client.response, event);
     }
   }
 }
@@ -1116,11 +1152,13 @@ async function tryServeStatic(request, response, staticDir, pathname) {
 }
 
 /**
- * @param {{ service?: RelayService, baseUrl?: string, staticDir?: string }} [options]
+ * @param {{ service?: RelayService, baseUrl?: string, staticDir?: string, sseHeartbeatMs?: number, sseRetryMs?: number }} [options]
  */
 export function createRelayHttpServer(options = {}) {
   const service = options.service ?? new RelayService();
   const staticDir = normalizeOptionalString(options.staticDir);
+  const sseHeartbeatMs = clampPositiveInteger(Number(options.sseHeartbeatMs)) ?? DEFAULT_SSE_HEARTBEAT_MS;
+  const sseRetryMs = clampPositiveInteger(Number(options.sseRetryMs)) ?? DEFAULT_SSE_RETRY_MS;
   const server = createServer(async (request, response) => {
     try {
       if (!request.url || !request.method) {
@@ -1214,9 +1252,11 @@ export function createRelayHttpServer(options = {}) {
 
           if (acceptHeader.includes('text/event-stream')) {
             const { session, clientId } = service.authenticateMobile(sessionId, mobileToken);
+            const lastEventId = readEventSequenceHeader(request.headers['last-event-id']);
+            const resumeAfter = Math.max(0, after || 0, lastEventId);
             const initialEvents = session.events.filter(
               /** @param {{ sequence: number, targetClientId?: string }} event */
-              (event) => event.sequence > Math.max(0, after || 0) && isEventVisibleToClient(event, clientId),
+              (event) => event.sequence > resumeAfter && isEventVisibleToClient(event, clientId),
             );
 
             response.writeHead(200, {
@@ -1225,23 +1265,38 @@ export function createRelayHttpServer(options = {}) {
               connection: 'keep-alive',
               'access-control-allow-origin': '*',
             });
-            response.write(': connected\n\n');
+            writeSseConnected(response, sseRetryMs);
 
             for (const event of initialEvents) {
-              response.write(`id: ${event.sequence}\n`);
-              response.write('event: remote\n');
-              response.write(`data: ${JSON.stringify(event)}\n\n`);
+              writeSseEvent(response, event);
             }
 
-            session.eventClients.add({ clientId, response });
-            request.on('close', () => {
+            const heartbeatTimer = setInterval(() => {
+              if (response.writableEnded || response.destroyed) {
+                clearInterval(heartbeatTimer);
+                return;
+              }
+
+              writeSseHeartbeat(response);
+            }, sseHeartbeatMs);
+            heartbeatTimer.unref?.();
+
+            const eventClient = { clientId, response, heartbeatTimer };
+            session.eventClients.add(eventClient);
+
+            const cleanupEventClient = () => {
+              clearInterval(heartbeatTimer);
+
               for (const eventClient of session.eventClients) {
                 if (eventClient.response === response) {
                   session.eventClients.delete(eventClient);
                   break;
                 }
               }
-            });
+            };
+
+            request.on('close', cleanupEventClient);
+            response.on('close', cleanupEventClient);
             return;
           }
 
