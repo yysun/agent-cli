@@ -494,6 +494,75 @@ h3 {
   margin-bottom: 0;
 }
 
+.markdown-content {
+  font-size: 0.9375rem;
+}
+
+.markdown-content> :first-child {
+  margin-top: 0;
+}
+
+.markdown-content> :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content pre,
+.markdown-content table {
+  margin: 0 0 0.8rem;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.3rem;
+}
+
+.markdown-content li+li {
+  margin-top: 0.22rem;
+}
+
+.markdown-content a {
+  color: var(--blue);
+}
+
+.markdown-content blockquote {
+  padding-left: 0.9rem;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-soft);
+}
+
+.markdown-content :not(pre)>code {
+  padding: 0.14rem 0.35rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface-soft);
+  font-size: 0.875em;
+}
+
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-content th,
+.markdown-content td {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content thead {
+  background: var(--surface-soft);
+}
+
 .agent-bubble {
   background: var(--surface-strong);
 }

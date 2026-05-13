@@ -13,6 +13,8 @@
  * - 2026-05-12: Kept the workspace title static and moved the session label into the subtitle.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import {
   createEventStream,
@@ -314,6 +316,18 @@ function sanitizeConnectedLocation(sessionId: string): void {
   } catch {
     // Ignore URL rewrite failures and continue with the live session.
   }
+}
+
+function renderMessageBody(role: 'assistant' | 'user' | 'system', text: string): JSX.Element {
+  if (role !== 'assistant') {
+    return <p>{text}</p>;
+  }
+
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
 }
 
 export default function App() {
@@ -976,7 +990,7 @@ export default function App() {
                     <span>{formatTime(entry.createdAt)}</span>
                   </div>
                   <article className={bubbleClassName}>
-                    <p>{entry.text}</p>
+                    {renderMessageBody(entry.role, entry.text)}
                     {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
                   </article>
                 </div>
