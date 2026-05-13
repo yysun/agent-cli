@@ -82,7 +82,11 @@ function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function formatTimestamp(value: string | undefined): string {
+function formatTimestamp(value: string | null | undefined): string {
+  if (value === null) {
+    return 'No timeout';
+  }
+
   if (!value) {
     return '--';
   }
@@ -94,6 +98,14 @@ function formatTimestamp(value: string | undefined): string {
   }
 
   return date.toLocaleString();
+}
+
+function formatExpiryStatus(value: string | null | undefined): string {
+  if (value === null) {
+    return 'No timeout.';
+  }
+
+  return `Expires ${formatTimestamp(value)}.`;
 }
 
 function formatTime(value: string | undefined): string {
@@ -733,7 +745,7 @@ export default function App() {
         throw new Error('Relay pairing succeeded without a mobile token.');
       }
       setPairingToken(nextPairingToken);
-      setStatusText(`Connected to session ${nextSessionId}. Expires ${formatTimestamp(pairResult.expiresAt)}.`);
+      setStatusText(`Connected to session ${nextSessionId}. ${formatExpiryStatus(pairResult.expiresAt)}`);
 
       await openConnectedSession(nextRelayServer, nextSessionId, nextMobileToken);
     } catch (error) {

@@ -39,7 +39,7 @@ export type ParsedClientConnection = {
 export type PairSessionResult = {
   sessionId: string;
   mobileToken: string;
-  expiresAt: string;
+  expiresAt: string | null;
   pairedAt?: string;
   chatId?: string;
   mobileName?: string;

@@ -272,6 +272,44 @@ describe('relay-server', () => {
     })).rejects.toThrow('Relay session not found.');
   });
 
+  it('keeps sessions and pairing tokens active when ttlMs and pairingTtlMs are set to 0', async () => {
+    let now = new Date('2026-05-11T12:00:00.000Z');
+    const service = new RelayService({
+      now: () => now,
+      sessionTtlMs: 1000,
+      pairingTtlMs: 1000,
+    });
+    servicesToClose.push(service);
+
+    const session = service.createSession({
+      baseUrl: 'http://127.0.0.1:8787',
+      chatId: 'chat-1',
+      ttlMs: 0,
+      pairingTtlMs: 0,
+    });
+
+    expect(session.expiresAt).toBeNull();
+    expect(session.pairingExpiresAt).toBeNull();
+
+    now = new Date('2026-05-11T12:30:00.000Z');
+    service.sweepExpiredSessions();
+
+    const pair = service.pairSession(session.sessionId, {
+      pairingToken: session.pairingToken,
+    });
+
+    expect(pair.expiresAt).toBeNull();
+
+    await expect(service.pollCommands(session.sessionId, {
+      desktopToken: session.desktopToken,
+      after: 0,
+      timeoutMs: 1,
+    })).resolves.toMatchObject({
+      commands: [],
+      timedOut: true,
+    });
+  });
+
   it('serves SPA assets while keeping API routes authoritative', async () => {
     const staticDir = await createTempStaticDir();
     await mkdir(staticDir, { recursive: true });

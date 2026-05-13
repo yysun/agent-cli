@@ -29,6 +29,8 @@ Streaming is enabled by default. While streaming, response text chunks stream on
 
 Use `--remote` to host the current local chat through the optional relay server. The CLI reads the relay URL from `AGENT_CLI_RELAY_SERVER_URL`, connects to the relay, and prints the client connection URL supervisors can use to pair.
 
+Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
+
 Runtime settings can be supplied on the command line or through environment defaults. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
 
 Remote hosting uses:

@@ -26,6 +26,18 @@ const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 25 * 1000;
 const MAX_QUEUE_ITEMS = 250;
 
+/**
+ * @param {number | undefined} value
+ * @param {number} fallbackMs
+ */
+function resolveSessionLifetimeMs(value, fallbackMs) {
+  if (value === 0) {
+    return null;
+  }
+
+  return clampPositiveInteger(Number(value)) ?? fallbackMs;
+}
+
 /** @param {number} value */
 function clampPositiveInteger(value) {
   if (!Number.isFinite(value) || value < 1) {
@@ -232,6 +244,18 @@ function resolveTimeoutMs(timeoutMs, fallbackMs = DEFAULT_LONG_POLL_TIMEOUT_MS) 
 }
 
 /**
+ * @param {string | null | undefined} value
+ * @param {Date} now
+ */
+function hasExpired(value, now) {
+  if (!value) {
+    return false;
+  }
+
+  return new Date(value).getTime() < now.getTime();
+}
+
+/**
  * @param {string} baseUrl
  * @param {string} sessionId
  * @param {string} pairingToken
@@ -358,7 +382,7 @@ export class RelayService {
     const now = this.now();
 
     for (const [sessionId, session] of this.sessions.entries()) {
-      if (new Date(session.expiresAt).getTime() > now.getTime()) {
+      if (!session.expiresAt || new Date(session.expiresAt).getTime() > now.getTime()) {
         continue;
       }
 
@@ -403,10 +427,19 @@ export class RelayService {
     const sessionId = randomUUID();
     const desktopToken = createToken();
     const pairingToken = createToken();
-    const ttlMs = clampPositiveInteger(Number(input.ttlMs)) ?? this.sessionTtlMs;
-    const pairingTtlMs = clampPositiveInteger(Number(input.pairingTtlMs)) ?? this.pairingTtlMs;
-    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
-    const pairingExpiresAt = new Date(now.getTime() + Math.min(ttlMs, pairingTtlMs)).toISOString();
+    const ttlMs = resolveSessionLifetimeMs(input.ttlMs, this.sessionTtlMs);
+    const pairingTtlMs = resolveSessionLifetimeMs(input.pairingTtlMs, this.pairingTtlMs);
+    const expiresAt = ttlMs === null
+      ? null
+      : new Date(now.getTime() + ttlMs).toISOString();
+    const effectivePairingTtlMs = ttlMs === null
+      ? pairingTtlMs
+      : pairingTtlMs === null
+        ? ttlMs
+        : Math.min(ttlMs, pairingTtlMs);
+    const pairingExpiresAt = effectivePairingTtlMs === null
+      ? null
+      : new Date(now.getTime() + effectivePairingTtlMs).toISOString();
     const session = {
       sessionId,
       desktopToken,
@@ -474,7 +507,7 @@ export class RelayService {
       throw new RelayServerError(401, 'Invalid pairing token.');
     }
 
-    if (new Date(session.pairingExpiresAt).getTime() < this.now().getTime()) {
+    if (hasExpired(session.pairingExpiresAt, this.now())) {
       throw new RelayServerError(410, 'Pairing token expired.');
     }
 
@@ -766,7 +799,7 @@ export class RelayService {
       throw new RelayServerError(410, `Relay session unavailable: ${session.revokeReason ?? 'revoked'}.`);
     }
 
-    if (new Date(session.expiresAt).getTime() < this.now().getTime()) {
+    if (hasExpired(session.expiresAt, this.now())) {
       throw new RelayServerError(410, 'Relay session expired.');
     }
   }

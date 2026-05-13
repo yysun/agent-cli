@@ -114,10 +114,63 @@ describe('remote-control', () => {
       relayClient,
     });
 
+    expect(relayClient.createRelaySession).toHaveBeenCalledWith({
+      relayServer: 'http://127.0.0.1:8787',
+      localSessionId: 'chat-1',
+      chatId: 'chat-1',
+      ttlMs: 0,
+      pairingTtlMs: 0,
+      metadata: {
+        mode: 'remote-control',
+      },
+    });
+
     expect(stdout).toContain('Client connection URL: http://127.0.0.1:8787/pair?sessionId=relay-session-1&pairingToken=pairing-token');
     expect(stdout).toContain('Scan this QR code from the client to connect:');
     expect(stdout).toContain('Remote host is running and will keep responding until the client disconnects or you press Ctrl+C.');
     expect(stdout.split(/\r?\n/u).length).toBeGreaterThan(8);
+  });
+
+  it('shows no-timeout in the session banner when the relay session does not expire', async () => {
+    const relayClient = {
+      createRelaySession: vi.fn().mockResolvedValue({
+        sessionId: 'relay-session-1',
+        desktopToken: 'desktop-token',
+        pairingToken: 'pairing-token',
+        clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1&pairingToken=pairing-token',
+        expiresAt: null,
+      }),
+      postRelayEvent: vi.fn().mockResolvedValue({ accepted: true }),
+      pollRelayCommands: vi.fn().mockResolvedValue({
+        commands: [{
+          sequence: 1,
+          type: 'disconnect',
+          payload: {},
+          createdAt: '2026-05-11T12:01:00.000Z',
+        }],
+      }),
+      revokeRelaySession: vi.fn().mockResolvedValue({ revoked: true }),
+    };
+    let stdout = '';
+
+    await runRemoteControlSession({
+      relayServer: 'http://127.0.0.1:8787',
+      chat: {
+        id: 'chat-1',
+        messages: [],
+      },
+      io: {
+        stdout: {
+          write(chunk) {
+            stdout += chunk;
+          },
+        },
+      },
+      executeTurn: vi.fn(),
+      relayClient,
+    });
+
+    expect(stdout).toContain('Expires at: No timeout');
   });
 
   it('keeps running and handles multiple remote messages before disconnect', async () => {
