@@ -11,6 +11,7 @@
  * Recent changes:
  * - 2026-05-11: Added initial web relay API wrapper for remote-control UI.
  * - 2026-05-11: Migrated helpers to TypeScript with typed relay contracts.
+ * - 2026-05-13: Added multi-client invite creation and targeted chat-management results.
  */
 export type RelayPayload = Record<string, unknown>;
 
@@ -38,11 +39,20 @@ export type ParsedClientConnection = {
 
 export type PairSessionResult = {
   sessionId: string;
+  clientId: string;
   mobileToken: string;
   expiresAt: string | null;
   pairedAt?: string;
   chatId?: string;
   mobileName?: string;
+};
+
+export type PairingInviteResult = {
+  sessionId: string;
+  pairingToken: string;
+  clientConnectionUrl: string;
+  pairingExpiresAt: string | null;
+  chatId?: string;
 };
 
 export type EventBacklogResult = {
@@ -185,6 +195,31 @@ export async function pairSession({
   });
 
   return await readJson<PairSessionResult>(response);
+}
+
+export async function createPairingInvite({
+  relayServer,
+  sessionId,
+  token,
+  idempotencyKey,
+}: {
+  relayServer: string;
+  sessionId: string;
+  token: string;
+  idempotencyKey?: string;
+}): Promise<PairingInviteResult> {
+  const response = await fetch(buildRelayUrl(relayServer, `/v1/sessions/${encodeURIComponent(sessionId)}/pairing-invites`), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      token,
+      idempotencyKey,
+    }),
+  });
+
+  return await readJson<PairingInviteResult>(response);
 }
 
 export async function readEventBacklog({

@@ -10,6 +10,7 @@
  *
  * Recent changes:
  * - 2026-05-11: Added remote payload summary coverage for relay-safe events.
+ * - 2026-05-13: Added multi-client chat-management coverage.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -316,5 +317,279 @@ describe('remote-control', () => {
       token: 'desktop-token',
       reason: 'remote_disconnect',
     });
+  });
+
+  it('routes chat-management commands through the session store and targets query responses', async () => {
+    const firstPoll = createDeferred();
+    const secondPoll = createDeferred();
+    const thirdPoll = createDeferred();
+    const fourthPoll = createDeferred();
+    const fifthPoll = createDeferred();
+    const pollQueue = [firstPoll, secondPoll, thirdPoll, fourthPoll, fifthPoll];
+
+    const relayClient = {
+      createRelaySession: vi.fn().mockResolvedValue({
+        sessionId: 'relay-session-1',
+        desktopToken: 'desktop-token',
+        pairingToken: 'pairing-token',
+        clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1&pairingToken=pairing-token',
+        expiresAt: '2026-05-11T12:15:00.000Z',
+      }),
+      postRelayEvent: vi.fn().mockResolvedValue({ accepted: true }),
+      pollRelayCommands: vi.fn().mockImplementation(() => {
+        const nextPoll = pollQueue.shift();
+
+        if (!nextPoll) {
+          return Promise.resolve({ commands: [] });
+        }
+
+        return nextPoll.promise;
+      }),
+      revokeRelaySession: vi.fn().mockResolvedValue({ revoked: true }),
+    };
+    const chatStore = {
+      listChats: vi.fn().mockResolvedValue([
+        { id: 'chat-1', createdAt: '2026-05-11T12:00:00.000Z', updatedAt: '2026-05-11T12:01:00.000Z', messageCount: 2, isCurrent: true },
+      ]),
+      loadChatById: vi.fn().mockResolvedValue({
+        id: 'chat-2',
+        createdAt: '2026-05-11T12:02:00.000Z',
+        updatedAt: '2026-05-11T12:03:00.000Z',
+        messages: [
+          { role: 'user', content: 'history', createdAt: '2026-05-11T12:02:00.000Z' },
+        ],
+      }),
+      createChat: vi.fn().mockResolvedValue({
+        id: 'chat-3',
+        createdAt: '2026-05-11T12:04:00.000Z',
+        updatedAt: '2026-05-11T12:04:00.000Z',
+        messages: [],
+      }),
+      setCurrentChat: vi.fn().mockResolvedValue({
+        id: 'chat-2',
+        createdAt: '2026-05-11T12:02:00.000Z',
+        updatedAt: '2026-05-11T12:03:00.000Z',
+        messages: [
+          { role: 'user', content: 'history', createdAt: '2026-05-11T12:02:00.000Z' },
+        ],
+      }),
+      updateRemoteHostLock: vi.fn().mockResolvedValue(true),
+    };
+
+    const sessionPromise = runRemoteControlSession({
+      relayServer: 'http://127.0.0.1:8787',
+      chat: {
+        id: 'chat-1',
+        messages: [],
+      },
+      chatStore,
+      io: {
+        stdout: { write() { } },
+        stderr: { write() { } },
+      },
+      executeTurn: vi.fn().mockResolvedValue({
+        assistantText: 'ok',
+        messages: [],
+      }),
+      relayClient,
+    });
+
+    firstPoll.resolve({
+      commands: [{
+        sequence: 1,
+        clientId: 'client-1',
+        type: 'list_chats',
+        payload: { requestId: 'request-list' },
+        createdAt: '2026-05-11T12:01:00.000Z',
+      }],
+    });
+
+    await vi.waitFor(() => {
+      expect(chatStore.listChats).toHaveBeenCalledTimes(1);
+    });
+
+    secondPoll.resolve({
+      commands: [{
+        sequence: 2,
+        clientId: 'client-1',
+        type: 'read_chat_messages',
+        payload: { requestId: 'request-read', chatId: 'chat-2' },
+        createdAt: '2026-05-11T12:02:00.000Z',
+      }],
+    });
+
+    await vi.waitFor(() => {
+      expect(chatStore.loadChatById).toHaveBeenCalledWith('chat-2');
+    });
+
+    thirdPoll.resolve({
+      commands: [{
+        sequence: 3,
+        clientId: 'client-1',
+        type: 'create_chat',
+        payload: { requestId: 'request-create' },
+        createdAt: '2026-05-11T12:03:00.000Z',
+      }],
+    });
+
+    await vi.waitFor(() => {
+      expect(chatStore.createChat).toHaveBeenCalledWith({ setCurrent: false });
+    });
+
+    fourthPoll.resolve({
+      commands: [{
+        sequence: 4,
+        clientId: 'client-1',
+        type: 'select_chat',
+        payload: { requestId: 'request-select', chatId: 'chat-2' },
+        createdAt: '2026-05-11T12:04:00.000Z',
+      }],
+    });
+
+    await vi.waitFor(() => {
+      expect(chatStore.setCurrentChat).toHaveBeenCalledWith('chat-2');
+      expect(chatStore.updateRemoteHostLock).toHaveBeenCalledWith({ chatId: 'chat-2' });
+    });
+
+    fifthPoll.resolve({
+      commands: [{
+        sequence: 5,
+        type: 'disconnect',
+        payload: {},
+        createdAt: '2026-05-11T12:05:00.000Z',
+      }],
+    });
+
+    await sessionPromise;
+
+    expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'chat_list_result',
+      targetClientId: 'client-1',
+      payload: expect.objectContaining({
+        requestId: 'request-list',
+        activeChatId: 'chat-1',
+      }),
+    }));
+    expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'chat_messages_result',
+      targetClientId: 'client-1',
+      payload: expect.objectContaining({
+        requestId: 'request-read',
+        chatId: 'chat-2',
+      }),
+    }));
+    expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'chat_created',
+      payload: expect.objectContaining({
+        requestId: 'request-create',
+        chat: expect.objectContaining({ id: 'chat-3' }),
+      }),
+    }));
+    expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'active_chat_changed',
+      payload: expect.objectContaining({
+        requestId: 'request-select',
+        chatId: 'chat-2',
+      }),
+    }));
+  });
+
+  it('runs subsequent user messages against the remotely selected chat', async () => {
+    const firstPoll = createDeferred();
+    const secondPoll = createDeferred();
+    const thirdPoll = createDeferred();
+    const pollQueue = [firstPoll, secondPoll, thirdPoll];
+
+    const relayClient = {
+      createRelaySession: vi.fn().mockResolvedValue({
+        sessionId: 'relay-session-1',
+        desktopToken: 'desktop-token',
+        pairingToken: 'pairing-token',
+        clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1&pairingToken=pairing-token',
+        expiresAt: '2026-05-11T12:15:00.000Z',
+      }),
+      postRelayEvent: vi.fn().mockResolvedValue({ accepted: true }),
+      pollRelayCommands: vi.fn().mockImplementation(() => {
+        const nextPoll = pollQueue.shift();
+
+        if (!nextPoll) {
+          return Promise.resolve({ commands: [] });
+        }
+
+        return nextPoll.promise;
+      }),
+      revokeRelaySession: vi.fn().mockResolvedValue({ revoked: true }),
+    };
+    const executeTurn = vi.fn().mockResolvedValue({
+      assistantText: 'reply',
+      messages: [
+        { role: 'assistant', content: 'reply' },
+      ],
+    });
+    const chatStore = {
+      setCurrentChat: vi.fn().mockResolvedValue({
+        id: 'chat-selected',
+        createdAt: '2026-05-11T12:02:00.000Z',
+        updatedAt: '2026-05-11T12:03:00.000Z',
+        messages: [],
+      }),
+      updateRemoteHostLock: vi.fn().mockResolvedValue(true),
+    };
+
+    const sessionPromise = runRemoteControlSession({
+      relayServer: 'http://127.0.0.1:8787',
+      chat: {
+        id: 'chat-1',
+        messages: [],
+      },
+      chatStore,
+      io: {
+        stdout: { write() { } },
+      },
+      executeTurn,
+      relayClient,
+    });
+
+    firstPoll.resolve({
+      commands: [{
+        sequence: 1,
+        clientId: 'client-1',
+        type: 'select_chat',
+        payload: { requestId: 'request-select', chatId: 'chat-selected' },
+        createdAt: '2026-05-11T12:01:00.000Z',
+      }],
+    });
+
+    await vi.waitFor(() => {
+      expect(chatStore.setCurrentChat).toHaveBeenCalledWith('chat-selected');
+    });
+
+    secondPoll.resolve({
+      commands: [{
+        sequence: 2,
+        clientId: 'client-1',
+        type: 'user_message',
+        payload: { text: 'hello' },
+        createdAt: '2026-05-11T12:02:00.000Z',
+      }],
+    });
+
+    await vi.waitFor(() => {
+      expect(executeTurn).toHaveBeenCalledWith(expect.objectContaining({
+        chat: expect.objectContaining({ id: 'chat-selected' }),
+        message: 'hello',
+      }));
+    });
+
+    thirdPoll.resolve({
+      commands: [{
+        sequence: 3,
+        type: 'disconnect',
+        payload: {},
+        createdAt: '2026-05-11T12:03:00.000Z',
+      }],
+    });
+
+    await sessionPromise;
   });
 });

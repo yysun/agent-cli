@@ -29,11 +29,16 @@ import { getBuiltInSystemPrompt, loadProjectSystemPrompt, loadSkillInventory } f
 import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
+  createPersistedChat,
+  loadChatById,
   loadRequestedChat,
+  listPersistedChats,
   persistCompletedChat,
   persistRemoteSessionState,
   releaseRemoteHostLock,
+  setCurrentChat,
   persistStreamTraceEvents,
+  updateRemoteHostLock,
 } from '../lib/session-store.js';
 import * as relayClient from '../lib/relay-client.js';
 import { runRemoteControlSession } from '../lib/remote-control.js';
@@ -614,6 +619,13 @@ export async function main(
       const relaySession = await runRemoteControlSession({
         relayServer,
         chat,
+        chatStore: {
+          listChats: listPersistedChats,
+          loadChatById,
+          createChat: createPersistedChat,
+          setCurrentChat,
+          updateRemoteHostLock,
+        },
         io,
         initialMessage: message || undefined,
         onSessionReady: async (startedRelaySession) => {

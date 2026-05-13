@@ -7,10 +7,11 @@
  * Key features:
  * - Reads relay invite details from the current /pair URL when available.
  * - Streams relay events into a chat-first transcript with inline approval handling.
- * - Sends remote messages, run controls, and disconnect requests for the active session.
+ * - Adds multi-client invite sharing plus remote chat list, history, creation, and selection controls.
  *
  * Recent changes:
  * - 2026-05-12: Kept the workspace title static and moved the session label into the subtitle.
+ * - 2026-05-13: Added multi-client chat management and share-invite controls.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -18,11 +19,11 @@ import remarkGfm from 'remark-gfm';
 
 import {
   createEventStream,
+  createPairingInvite,
   parseClientConnectionUrl,
   pairSession,
   readEventBacklog,
   readNotifications,
-  revokeSession,
   sendCommand,
   type RelayEvent,
   type RelayNotification,
@@ -67,6 +68,21 @@ type ChatEntry =
     decision?: boolean;
   };
 
+type RelayChatSummary = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  isCurrent?: boolean;
+};
+
+type RelayChatMessage = {
+  role: string;
+  content: string;
+  createdAt?: string;
+  toolCallId?: string;
+};
+
 type InitialConnectionDraft = {
   connectionUrlInput: string;
   relayServer: string;
@@ -102,7 +118,7 @@ function formatTimestamp(value: string | null | undefined): string {
 
 function formatExpiryStatus(value: string | null | undefined): string {
   if (value === null) {
-    return 'No timeout.';
+    return 'Expires never.';
   }
 
   return `Expires ${formatTimestamp(value)}.`;
@@ -257,12 +273,16 @@ function isInvalidStoredRelaySession(error: unknown): boolean {
     || message.includes('invalid relay session token');
 }
 
-function buildWorkspaceSubtitle(sessionId: string): string {
+function buildWorkspaceSubtitle(sessionId: string, activeChatId: string): string {
   if (!sessionId) {
     return 'Desktop + Web sync';
   }
 
-  return `Session ${sessionId.slice(0, 8)}`;
+  if (!activeChatId) {
+    return `Session ${sessionId.slice(0, 8)}`;
+  }
+
+  return `Session ${sessionId.slice(0, 8)} / Chat ${activeChatId.slice(0, 8)}`;
 }
 
 function logRelayMessage(label: string, details: Record<string, unknown>): void {
@@ -342,6 +362,70 @@ function renderMessageBody(role: 'assistant' | 'user' | 'system', text: string):
   );
 }
 
+function normalizeChatSummary(value: unknown): RelayChatSummary | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const chat = value as Partial<RelayChatSummary>;
+  const id = String(chat.id ?? '').trim();
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    createdAt: String(chat.createdAt ?? ''),
+    updatedAt: String(chat.updatedAt ?? ''),
+    messageCount: Number(chat.messageCount ?? 0) || 0,
+    isCurrent: Boolean(chat.isCurrent),
+  };
+}
+
+function normalizeChatMessageList(value: unknown): RelayChatMessage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((message) => {
+    const entry = message as Partial<RelayChatMessage>;
+
+    return {
+      role: String(entry.role ?? 'system'),
+      content: String(entry.content ?? ''),
+      createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : undefined,
+      toolCallId: typeof entry.toolCallId === 'string' ? entry.toolCallId : undefined,
+    };
+  });
+}
+
+function upsertChatSummary(chats: RelayChatSummary[], nextChat: RelayChatSummary): RelayChatSummary[] {
+  const remainingChats = chats.filter((chat) => chat.id !== nextChat.id);
+  const merged = [...remainingChats, nextChat];
+
+  return merged.sort((left, right) => {
+    const timestampDelta = toSortValue(right.updatedAt || right.createdAt) - toSortValue(left.updatedAt || left.createdAt);
+
+    if (timestampDelta !== 0) {
+      return timestampDelta;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function markCurrentChat(chats: RelayChatSummary[], activeChatId: string): RelayChatSummary[] {
+  return chats.map((chat) => ({
+    ...chat,
+    isCurrent: chat.id === activeChatId,
+  }));
+}
+
+function formatChatTitle(chat: RelayChatSummary): string {
+  return `${chat.id.slice(0, 8)} · ${chat.messageCount} msg`;
+}
+
 export default function App() {
   const initialDraft = useMemo(() => readInitialConnectionDraft(), []);
   const availableStoredRelaySession = useMemo(() => readStoredRelaySession(), []);
@@ -358,7 +442,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState<string>(storedRelaySession?.sessionId ?? initialDraft.sessionId);
   const [pairingToken, setPairingToken] = useState<string>(initialDraft.pairingToken);
   const [mobileToken, setMobileToken] = useState<string>('');
-  const mobileName = 'web-supervisor';
+  const [clientId, setClientId] = useState<string>('');
   const [events, setEvents] = useState<RelayEvent[]>([]);
   const [, setNotifications] = useState<RelayNotification[]>([]);
   const [outboundMessages, setOutboundMessages] = useState<OutboundMessage[]>([]);
@@ -370,12 +454,26 @@ export default function App() {
   const [connecting, setConnecting] = useState<boolean>(false);
   const [sendingMessage, setSendingMessage] = useState<boolean>(false);
   const [refreshingNotifications, setRefreshingNotifications] = useState<boolean>(false);
+  const [refreshingChats, setRefreshingChats] = useState<boolean>(false);
+  const [creatingChat, setCreatingChat] = useState<boolean>(false);
+  const [creatingInvite, setCreatingInvite] = useState<boolean>(false);
+  const [endingSession, setEndingSession] = useState<boolean>(false);
+  const [activeChatId, setActiveChatId] = useState<string>('');
+  const [availableChats, setAvailableChats] = useState<RelayChatSummary[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string>('');
+  const [selectedChatMessages, setSelectedChatMessages] = useState<RelayChatMessage[]>([]);
+  const [selectedChatLoading, setSelectedChatLoading] = useState<boolean>(false);
+  const [sharedInviteUrl, setSharedInviteUrl] = useState<string>('');
 
   const eventCursorRef = useRef<number>(0);
   const notificationCursorRef = useRef<number>(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const autoConnectAttemptedRef = useRef<boolean>(false);
+  const latestChatListRequestIdRef = useRef<string>('');
+  const latestChatMessagesRequestIdRef = useRef<string>('');
+
+  const mobileName = 'web-supervisor';
 
   const chatEntries = useMemo<ChatEntry[]>(() => {
     const derived: ChatEntry[] = [];
@@ -399,7 +497,7 @@ export default function App() {
         role: 'assistant',
         text,
         createdAt: assistantCreatedAt,
-        meta: 'Analyzing and streaming updates…',
+        meta: 'Analyzing and streaming updates...',
       });
 
       assistantText = '';
@@ -471,7 +569,17 @@ export default function App() {
 
       flushAssistantChunk();
 
-      if (event.type === 'run_status' || event.type === 'failure' || event.type === 'disconnect') {
+      if (
+        event.type === 'run_status'
+        || event.type === 'failure'
+        || event.type === 'disconnect'
+        || event.type === 'session_snapshot'
+        || event.type === 'active_chat_changed'
+        || event.type === 'chat_created'
+        || event.type === 'chat_list_result'
+        || event.type === 'chat_messages_result'
+        || event.type === 'command_error'
+      ) {
         continue;
       }
     }
@@ -486,7 +594,7 @@ export default function App() {
         text: message.text,
         createdAt: message.createdAt,
         meta: message.status === 'sending'
-          ? 'Sending…'
+          ? 'Sending...'
           : message.status === 'failed'
             ? `Failed: ${message.errorText ?? 'Unknown error'}`
             : undefined,
@@ -505,7 +613,7 @@ export default function App() {
     });
   }, [approvalDecisions, events, outboundMessages]);
 
-  const workspaceSubtitle = buildWorkspaceSubtitle(sessionId);
+  const workspaceSubtitle = buildWorkspaceSubtitle(sessionId, activeChatId);
 
   useEffect(() => {
     return () => {
@@ -547,6 +655,113 @@ export default function App() {
 
     return () => clearInterval(timer);
   }, [mobileToken, relayServer, sessionId]);
+
+  function applyRelayEventState(event: RelayEvent): void {
+    const payload = (event.payload ?? {}) as RelayPayload;
+
+    if (event.type === 'session_snapshot') {
+      const snapshotActiveChatId = String(payload.activeChatId ?? payload.chatId ?? '').trim();
+
+      if (snapshotActiveChatId) {
+        setActiveChatId(snapshotActiveChatId);
+        setAvailableChats((previous) => markCurrentChat(previous, snapshotActiveChatId));
+        setSelectedChatId((previous) => previous || snapshotActiveChatId);
+      }
+
+      const chatSummary = normalizeChatSummary(payload.chat);
+
+      if (chatSummary) {
+        setAvailableChats((previous) => markCurrentChat(upsertChatSummary(previous, {
+          ...chatSummary,
+          isCurrent: chatSummary.id === snapshotActiveChatId,
+        }), snapshotActiveChatId || chatSummary.id));
+      }
+
+      return;
+    }
+
+    if (event.type === 'active_chat_changed') {
+      const nextActiveChatId = String(payload.chatId ?? '').trim();
+      const chatSummary = normalizeChatSummary(payload.chat);
+
+      if (nextActiveChatId) {
+        setActiveChatId(nextActiveChatId);
+        setAvailableChats((previous) => markCurrentChat(previous, nextActiveChatId));
+        setSelectedChatId(nextActiveChatId);
+        void requestChatMessages(nextActiveChatId);
+      }
+
+      if (chatSummary) {
+        setAvailableChats((previous) => markCurrentChat(upsertChatSummary(previous, {
+          ...chatSummary,
+          isCurrent: chatSummary.id === nextActiveChatId,
+        }), nextActiveChatId || chatSummary.id));
+      }
+
+      return;
+    }
+
+    if (event.type === 'chat_created') {
+      const chatSummary = normalizeChatSummary(payload.chat);
+
+      if (chatSummary) {
+        setAvailableChats((previous) => upsertChatSummary(previous, chatSummary));
+      }
+
+      return;
+    }
+
+    if (event.type === 'chat_list_result') {
+      const requestId = String(payload.requestId ?? '');
+
+      if (latestChatListRequestIdRef.current && requestId && requestId !== latestChatListRequestIdRef.current) {
+        return;
+      }
+
+      const chats = Array.isArray(payload.chats)
+        ? payload.chats.map(normalizeChatSummary).filter((entry): entry is RelayChatSummary => entry !== null)
+        : [];
+      const nextActiveChatId = String(payload.activeChatId ?? activeChatId).trim();
+
+      setAvailableChats(markCurrentChat(chats, nextActiveChatId));
+
+      if (nextActiveChatId) {
+        setActiveChatId(nextActiveChatId);
+        setSelectedChatId((previous) => previous || nextActiveChatId || chats[0]?.id || '');
+      } else if (chats[0]?.id) {
+        setSelectedChatId((previous) => previous || chats[0].id);
+      }
+
+      setRefreshingChats(false);
+      return;
+    }
+
+    if (event.type === 'chat_messages_result') {
+      const requestId = String(payload.requestId ?? '');
+
+      if (latestChatMessagesRequestIdRef.current && requestId && requestId !== latestChatMessagesRequestIdRef.current) {
+        return;
+      }
+
+      const chatId = String(payload.chatId ?? '').trim();
+
+      if (chatId) {
+        setSelectedChatId(chatId);
+      }
+
+      setSelectedChatMessages(normalizeChatMessageList(payload.messages));
+      setSelectedChatLoading(false);
+      return;
+    }
+
+    if (event.type === 'command_error') {
+      setActionErrorText(String(payload.message ?? 'Remote command failed.'));
+      setRefreshingChats(false);
+      setSelectedChatLoading(false);
+      setCreatingChat(false);
+      setEndingSession(false);
+    }
+  }
 
   async function refreshNotificationList(): Promise<void> {
     if (!relayServer || !sessionId || !mobileToken) {
@@ -600,12 +815,25 @@ export default function App() {
     }
   }
 
-  function clearPersistedRelaySession(reason?: string): void {
+  function clearLocalSessionState(reason?: string): void {
     clearStoredRelaySession();
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
     setMobileToken('');
+    setClientId('');
     setSessionId('');
     setPairingToken('');
     setRelayServer(initialDraft.relayServer);
+    setEvents([]);
+    setNotifications([]);
+    setOutboundMessages([]);
+    setApprovalDecisions({});
+    setAvailableChats([]);
+    setSelectedChatId('');
+    setSelectedChatMessages([]);
+    setSelectedChatLoading(false);
+    setActiveChatId('');
+    setSharedInviteUrl('');
 
     if (!initialDraft.inviteDetected) {
       setConnectionInput('');
@@ -616,7 +844,13 @@ export default function App() {
     }
   }
 
-  async function openConnectedSession(nextRelayServer: string, nextSessionId: string, nextMobileToken: string): Promise<void> {
+  async function openConnectedSession(
+    nextRelayServer: string,
+    nextSessionId: string,
+    nextMobileToken: string,
+    nextClientId: string,
+    pairedChatId = '',
+  ): Promise<void> {
     const backlog = await readEventBacklog({
       relayServer: nextRelayServer,
       sessionId: nextSessionId,
@@ -631,16 +865,34 @@ export default function App() {
       after: 0,
     });
 
-    (backlog.events ?? []).forEach(logRelayEvent);
+    (backlog.events ?? []).forEach((event) => {
+      logRelayEvent(event);
+      applyRelayEventState(event);
+    });
     (initialNotifications.notifications ?? []).forEach(logRelayNotification);
 
     setRelayServer(nextRelayServer);
     setSessionId(nextSessionId);
     setMobileToken(nextMobileToken);
+    setClientId(nextClientId);
     setEvents(backlog.events ?? []);
     setNotifications(initialNotifications.notifications ?? []);
     setOutboundMessages([]);
     setApprovalDecisions({});
+    setSharedInviteUrl('');
+
+    const nextActiveChatId = pairedChatId
+      || String(
+        [...(backlog.events ?? [])]
+          .reverse()
+          .map((event) => String(event.payload?.activeChatId ?? event.payload?.chatId ?? ''))
+          .find(Boolean) ?? '',
+      ).trim();
+
+    if (nextActiveChatId) {
+      setActiveChatId(nextActiveChatId);
+      setSelectedChatId(nextActiveChatId);
+    }
 
     eventCursorRef.current = Number(backlog.cursor ?? 0);
     notificationCursorRef.current = Number(initialNotifications.cursor ?? 0);
@@ -657,6 +909,7 @@ export default function App() {
         const messageEvent = eventMessage as MessageEvent<string>;
         const parsedEvent = JSON.parse(messageEvent.data) as RelayEvent;
         logRelayEvent(parsedEvent);
+        applyRelayEventState(parsedEvent);
         eventCursorRef.current = Math.max(eventCursorRef.current, Number(parsedEvent.sequence) || 0);
         setEvents((previous) => [...previous, parsedEvent].slice(-250));
       } catch {
@@ -677,6 +930,12 @@ export default function App() {
       mobileToken: nextMobileToken,
     });
     sanitizeConnectedLocation(nextSessionId);
+
+    await requestChatList(nextRelayServer, nextSessionId, nextMobileToken);
+
+    if (nextActiveChatId) {
+      await requestChatMessages(nextActiveChatId, nextRelayServer, nextSessionId, nextMobileToken);
+    }
   }
 
   async function restoreStoredSession(storedSession: StoredRelaySession): Promise<void> {
@@ -688,11 +947,11 @@ export default function App() {
     eventSourceRef.current = null;
 
     try {
-      await openConnectedSession(storedSession.relayServer, storedSession.sessionId, storedSession.mobileToken);
+      await openConnectedSession(storedSession.relayServer, storedSession.sessionId, storedSession.mobileToken, '');
       setStatusText(`Restored session ${storedSession.sessionId}.`);
     } catch (error) {
       if (isInvalidStoredRelaySession(error)) {
-        clearPersistedRelaySession('Saved relay session expired. Paste a fresh invite link to reconnect.');
+        clearLocalSessionState('Saved relay session expired. Paste a fresh invite link to reconnect.');
       }
 
       setConnectErrorText(`Connection failed: ${getErrorMessage(error)}`);
@@ -744,10 +1003,17 @@ export default function App() {
       if (!nextMobileToken) {
         throw new Error('Relay pairing succeeded without a mobile token.');
       }
+
       setPairingToken(nextPairingToken);
       setStatusText(`Connected to session ${nextSessionId}. ${formatExpiryStatus(pairResult.expiresAt)}`);
 
-      await openConnectedSession(nextRelayServer, nextSessionId, nextMobileToken);
+      await openConnectedSession(
+        nextRelayServer,
+        nextSessionId,
+        nextMobileToken,
+        String(pairResult.clientId ?? ''),
+        String(pairResult.chatId ?? ''),
+      );
     } catch (error) {
       setMobileToken('');
       setStatusText('Connection failed. Review the session details and retry.');
@@ -757,20 +1023,128 @@ export default function App() {
     }
   }
 
-  async function postCommand(type: string, payload: RelayPayload = {}): Promise<void> {
-    if (!relayServer || !sessionId || !mobileToken) {
+  async function postCommand(
+    type: string,
+    payload: RelayPayload = {},
+    nextRelayServer = relayServer,
+    nextSessionId = sessionId,
+    nextMobileToken = mobileToken,
+  ): Promise<void> {
+    if (!nextRelayServer || !nextSessionId || !nextMobileToken) {
       setActionErrorText('Connect first before sending commands.');
       throw new Error('Connect first before sending commands.');
     }
 
     await sendCommand({
-      relayServer,
-      sessionId,
-      mobileToken,
+      relayServer: nextRelayServer,
+      sessionId: nextSessionId,
+      mobileToken: nextMobileToken,
       type,
       payload,
       idempotencyKey: makeIdempotencyKey(type),
     });
+  }
+
+  async function requestChatList(
+    nextRelayServer = relayServer,
+    nextSessionId = sessionId,
+    nextMobileToken = mobileToken,
+  ): Promise<void> {
+    setRefreshingChats(true);
+    setActionErrorText('');
+
+    try {
+      const requestId = makeIdempotencyKey('list-chats');
+      latestChatListRequestIdRef.current = requestId;
+      await postCommand('list_chats', { requestId }, nextRelayServer, nextSessionId, nextMobileToken);
+    } catch (error) {
+      setRefreshingChats(false);
+      setActionErrorText(`Chat list failed: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function requestChatMessages(
+    chatId: string,
+    nextRelayServer = relayServer,
+    nextSessionId = sessionId,
+    nextMobileToken = mobileToken,
+  ): Promise<void> {
+    if (!chatId) {
+      return;
+    }
+
+    setSelectedChatId(chatId);
+    setSelectedChatLoading(true);
+    setActionErrorText('');
+
+    try {
+      const requestId = makeIdempotencyKey('read-chat');
+      latestChatMessagesRequestIdRef.current = requestId;
+      await postCommand('read_chat_messages', { requestId, chatId }, nextRelayServer, nextSessionId, nextMobileToken);
+    } catch (error) {
+      setSelectedChatLoading(false);
+      setActionErrorText(`Chat history failed: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function requestCreateChat(): Promise<void> {
+    setCreatingChat(true);
+    setActionErrorText('');
+
+    try {
+      await postCommand('create_chat', {
+        requestId: makeIdempotencyKey('create-chat'),
+      });
+      setStatusText('New chat requested from the local host.');
+      await requestChatList();
+    } catch (error) {
+      setActionErrorText(`Create chat failed: ${getErrorMessage(error)}`);
+    } finally {
+      setCreatingChat(false);
+    }
+  }
+
+  async function requestSelectChat(chatId: string): Promise<void> {
+    if (!chatId) {
+      return;
+    }
+
+    setActionErrorText('');
+
+    try {
+      await postCommand('select_chat', {
+        requestId: makeIdempotencyKey('select-chat'),
+        chatId,
+      });
+      setStatusText(`Requested switch to chat ${chatId.slice(0, 8)}.`);
+    } catch (error) {
+      setActionErrorText(`Select chat failed: ${getErrorMessage(error)}`);
+    }
+  }
+
+  async function createShareInvite(): Promise<void> {
+    if (!relayServer || !sessionId || !mobileToken) {
+      return;
+    }
+
+    setCreatingInvite(true);
+    setActionErrorText('');
+
+    try {
+      const invite = await createPairingInvite({
+        relayServer,
+        sessionId,
+        token: mobileToken,
+        idempotencyKey: makeIdempotencyKey('pairing-invite'),
+      });
+
+      setSharedInviteUrl(invite.clientConnectionUrl);
+      setStatusText(`Created a new invite for this session. ${formatExpiryStatus(invite.pairingExpiresAt)}`);
+    } catch (error) {
+      setActionErrorText(`Invite creation failed: ${getErrorMessage(error)}`);
+    } finally {
+      setCreatingInvite(false);
+    }
   }
 
   async function submitMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -836,28 +1210,27 @@ export default function App() {
     }
   }
 
-  async function disconnectSession(): Promise<void> {
-    if (!relayServer || !sessionId || !mobileToken) {
-      return;
-    }
+  async function leaveSession(): Promise<void> {
+    clearLocalSessionState('Left the relay session in this browser.');
+  }
 
+  async function endSession(): Promise<void> {
+    setEndingSession(true);
     setActionErrorText('');
-    setConnectErrorText('');
 
     try {
-      await revokeSession({
-        relayServer,
-        sessionId,
-        token: mobileToken,
-        reason: 'web_disconnect',
+      await postCommand('disconnect', {
+        requestId: makeIdempotencyKey('disconnect'),
       });
-      clearPersistedRelaySession('Session disconnected from the web UI.');
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
+      setStatusText('Requested relay session shutdown from the local host.');
     } catch (error) {
-      setActionErrorText(`Disconnect failed: ${getErrorMessage(error)}`);
+      setActionErrorText(`End session failed: ${getErrorMessage(error)}`);
+    } finally {
+      setEndingSession(false);
     }
   }
+
+  const selectedChatSummary = availableChats.find((chat) => chat.id === selectedChatId) ?? null;
 
   return (
     <div className="workspace-page">
@@ -877,14 +1250,23 @@ export default function App() {
 
           <div className="conversation-actions">
             {mobileToken ? (
-              <button
-                type="button"
-                className="icon-action"
-                onClick={() => void disconnectSession()}
-                aria-label="Disconnect session"
-              >
-                Disconnect
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void createShareInvite()}
+                  disabled={creatingInvite}
+                >
+                  {creatingInvite ? 'Creating invite...' : 'Share invite'}
+                </button>
+                <button
+                  type="button"
+                  className="icon-action"
+                  onClick={() => void leaveSession()}
+                >
+                  Leave
+                </button>
+              </>
             ) : (
               <div className="header-connect-row">
                 <label className="header-session-field" htmlFor="session-id-input">
@@ -933,112 +1315,213 @@ export default function App() {
 
         {connectErrorText ? <p className="error page-error">{connectErrorText}</p> : null}
 
-        <section className="message-stream">
-          {chatEntries.map((entry) => {
-            if (entry.kind === 'approval') {
-              const decisionLabel = entry.decision === undefined
-                ? 'Pending'
-                : entry.decision
-                  ? 'Approved'
-                  : 'Rejected';
+        {mobileToken ? (
+          <section className="workspace-status-strip">
+            <p className="notification-pill">
+              <span className="notification-pill-title">Status</span>
+              {statusText}
+            </p>
+            <p className="notification-pill">
+              <span className="notification-pill-title">Client</span>
+              {clientId ? clientId.slice(0, 8) : 'Connected'}
+            </p>
+            <p className="notification-pill">
+              <span className="notification-pill-title">Notifications</span>
+              {refreshingNotifications ? 'Refreshing...' : 'Polling relay summaries'}
+            </p>
+          </section>
+        ) : null}
 
-              return (
-                <section key={entry.id} className="message-row agent-row approval-row">
-                  <div className="avatar agent-avatar">AI</div>
-                  <div className="message-stack">
-                    <div className="message-meta">
-                      <span>Agent</span>
-                      <span>{formatTime(entry.createdAt)}</span>
+        {sharedInviteUrl ? (
+          <section className="workspace-share-strip">
+            <label className="share-invite-field" htmlFor="share-invite-output">
+              <span>Share this invite with another client</span>
+              <input id="share-invite-output" type="text" readOnly value={sharedInviteUrl} />
+            </label>
+          </section>
+        ) : null}
+
+        <div className="workspace-body">
+          <aside className="chat-sidebar">
+            <div className="sidebar-card">
+              <div className="sidebar-card-header">
+                <div>
+                  <h2>Chats</h2>
+                  <p>Browse local chats exposed by the remote host.</p>
+                </div>
+                <div className="sidebar-actions">
+                  <button type="button" className="secondary" onClick={() => void requestChatList()} disabled={!mobileToken || refreshingChats}>
+                    {refreshingChats ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                  <button type="button" onClick={() => void requestCreateChat()} disabled={!mobileToken || creatingChat}>
+                    {creatingChat ? 'Creating...' : 'New chat'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="chat-list">
+                {availableChats.length === 0 ? (
+                  <p className="sidebar-empty">No chats loaded yet.</p>
+                ) : availableChats.map((chat) => (
+                  <article key={chat.id} className={`chat-list-card ${selectedChatId === chat.id ? 'selected' : ''}`}>
+                    <div className="chat-list-header">
+                      <strong>{formatChatTitle(chat)}</strong>
+                      {chat.id === activeChatId ? <span className="chat-badge">Active</span> : null}
+                    </div>
+                    <p className="chat-list-meta">Updated {formatTimestamp(chat.updatedAt)}</p>
+                    <div className="chat-list-actions">
+                      <button type="button" className="secondary" onClick={() => void requestChatMessages(chat.id)} disabled={!mobileToken}>
+                        View
+                      </button>
+                      <button type="button" onClick={() => void requestSelectChat(chat.id)} disabled={!mobileToken || chat.id === activeChatId}>
+                        Use
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="sidebar-card preview-card">
+              <div className="sidebar-card-header">
+                <div>
+                  <h2>Chat Preview</h2>
+                  <p>{selectedChatSummary ? selectedChatSummary.id : 'Select a chat to inspect its stored messages.'}</p>
+                </div>
+              </div>
+
+              <div className="chat-preview-list">
+                {selectedChatLoading ? <p className="sidebar-empty">Loading chat history...</p> : null}
+                {!selectedChatLoading && selectedChatMessages.length === 0 ? (
+                  <p className="sidebar-empty">No chat messages loaded.</p>
+                ) : selectedChatMessages.map((message, index) => (
+                  <article key={`${selectedChatId}-${message.createdAt ?? index}-${index}`} className="chat-preview-entry">
+                    <div className="chat-preview-meta">
+                      <span>{message.role}</span>
+                      <span>{formatTime(message.createdAt)}</span>
+                    </div>
+                    <p>{message.content || '(empty message)'}</p>
+                  </article>
+                ))}
+              </div>
+
+              <div className="sidebar-actions sidebar-footer-actions">
+                <button type="button" className="ghost destructive" onClick={() => void endSession()} disabled={!mobileToken || endingSession}>
+                  {endingSession ? 'Ending...' : 'End session'}
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          <section className="workspace-main-column">
+            <section className="message-stream">
+              {chatEntries.map((entry) => {
+                if (entry.kind === 'approval') {
+                  const decisionLabel = entry.decision === undefined
+                    ? 'Pending'
+                    : entry.decision
+                      ? 'Approved'
+                      : 'Rejected';
+
+                  return (
+                    <section key={entry.id} className="message-row agent-row approval-row">
+                      <div className="avatar agent-avatar">AI</div>
+                      <div className="message-stack">
+                        <div className="message-meta">
+                          <span>Agent</span>
+                          <span>{formatTime(entry.createdAt)}</span>
+                        </div>
+
+                        <article className="approval-card mock-card">
+                          <div className="approval-card-header">
+                            <div>
+                              <h3>Approval required</h3>
+                              <p>Allow {entry.approval.toolName} for this relay session?</p>
+                            </div>
+                            <span className={`approval-state ${entry.decision === undefined ? 'pending' : entry.decision ? 'approved' : 'rejected'}`}>
+                              {decisionLabel}
+                            </span>
+                          </div>
+
+                          <p className="approval-token mono">{entry.approval.approvalId}</p>
+                          <pre>{JSON.stringify(entry.approval.argumentSummary, null, 2)}</pre>
+
+                          <div className="approval-actions mock-actions">
+                            <button
+                              type="button"
+                              onClick={() => void sendApprovalDecision(entry.approval.approvalId, true)}
+                              disabled={!mobileToken || entry.decision !== undefined}
+                            >
+                              Approve once
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => void sendApprovalDecision(entry.approval.approvalId, false)}
+                              disabled={!mobileToken || entry.decision !== undefined}
+                            >
+                              Deny
+                            </button>
+                          </div>
+                        </article>
+                      </div>
+                    </section>
+                  );
+                }
+
+                const isUser = entry.role === 'user';
+                const rowClassName = `message-row ${isUser ? 'user-row' : 'agent-row'}`;
+                const bubbleClassName = `message-bubble ${isUser ? 'user-bubble' : entry.role === 'system' ? 'system-bubble' : 'agent-bubble'}${entry.tone === 'error' ? ' bubble-error' : ''}`;
+
+                return (
+                  <section key={entry.id} className={rowClassName}>
+                    {!isUser ? <div className={`avatar ${entry.role === 'system' ? 'system-avatar' : 'agent-avatar'}`}>{entry.role === 'system' ? '•' : 'AI'}</div> : null}
+
+                    <div className="message-stack">
+                      <div className={`message-meta ${isUser ? 'align-end' : ''}`}>
+                        <span>{isUser ? 'You' : entry.role === 'assistant' ? 'Agent' : 'Relay'}</span>
+                        <span>{formatTime(entry.createdAt)}</span>
+                      </div>
+                      <article className={bubbleClassName}>
+                        {renderMessageBody(entry.role, entry.text)}
+                        {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
+                      </article>
                     </div>
 
-                    <article className="approval-card mock-card">
-                      <div className="approval-card-header">
-                        <div>
-                          <h3>Approval required</h3>
-                          <p>Allow {entry.approval.toolName} for this relay session?</p>
-                        </div>
-                        <span className={`approval-state ${entry.decision === undefined ? 'pending' : entry.decision ? 'approved' : 'rejected'}`}>
-                          {decisionLabel}
-                        </span>
-                      </div>
+                    {isUser ? <div className="avatar user-avatar">Y</div> : null}
+                  </section>
+                );
+              })}
 
-                      <p className="approval-token mono">{entry.approval.approvalId}</p>
-                      <pre>{JSON.stringify(entry.approval.argumentSummary, null, 2)}</pre>
+              <div ref={transcriptEndRef} />
+            </section>
 
-                      <div className="approval-actions mock-actions">
-                        <button
-                          type="button"
-                          onClick={() => void sendApprovalDecision(entry.approval.approvalId, true)}
-                          disabled={!mobileToken || entry.decision !== undefined}
-                        >
-                          Approve once
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => void sendApprovalDecision(entry.approval.approvalId, false)}
-                          disabled={!mobileToken || entry.decision !== undefined}
-                        >
-                          Deny
-                        </button>
-                      </div>
-                    </article>
-                  </div>
-                </section>
-              );
-            }
+            <form className="composer-panel" onSubmit={(event) => void submitMessage(event)}>
+              <label className="sr-only" htmlFor="message-input">Message Agent</label>
+              <textarea
+                id="message-input"
+                value={messageInput}
+                onChange={(event) => setMessageInput(event.target.value)}
+                rows={3}
+                placeholder={mobileToken ? 'Message Agent...' : 'Connect to a live session to send messages'}
+                disabled={!mobileToken}
+              />
 
-            const isUser = entry.role === 'user';
-            const rowClassName = `message-row ${isUser ? 'user-row' : 'agent-row'}`;
-            const bubbleClassName = `message-bubble ${isUser ? 'user-bubble' : entry.role === 'system' ? 'system-bubble' : 'agent-bubble'}${entry.tone === 'error' ? ' bubble-error' : ''}`;
+              {actionErrorText ? <p className="error composer-error">{actionErrorText}</p> : null}
 
-            return (
-              <section key={entry.id} className={rowClassName}>
-                {!isUser ? <div className={`avatar ${entry.role === 'system' ? 'system-avatar' : 'agent-avatar'}`}>{entry.role === 'system' ? '•' : 'AI'}</div> : null}
-
-                <div className="message-stack">
-                  <div className={`message-meta ${isUser ? 'align-end' : ''}`}>
-                    <span>{isUser ? 'You' : entry.role === 'assistant' ? 'Agent' : 'Relay'}</span>
-                    <span>{formatTime(entry.createdAt)}</span>
-                  </div>
-                  <article className={bubbleClassName}>
-                    {renderMessageBody(entry.role, entry.text)}
-                    {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
-                  </article>
+              <div className="composer-footer">
+                <div className="composer-send">
+                  <button type="button" className="secondary" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
+                    Stop
+                  </button>
+                  <button type="submit" disabled={sendingMessage || !mobileToken}>
+                    {sendingMessage ? 'Sending...' : 'Send'}
+                  </button>
                 </div>
-
-                {isUser ? <div className="avatar user-avatar">Y</div> : null}
-              </section>
-            );
-          })}
-
-          <div ref={transcriptEndRef} />
-        </section>
-
-        <form className="composer-panel" onSubmit={(event) => void submitMessage(event)}>
-          <label className="sr-only" htmlFor="message-input">Message Agent</label>
-          <textarea
-            id="message-input"
-            value={messageInput}
-            onChange={(event) => setMessageInput(event.target.value)}
-            rows={3}
-            placeholder={mobileToken ? 'Message Agent...' : 'Connect to a live session to send messages'}
-            disabled={!mobileToken}
-          />
-
-          {actionErrorText ? <p className="error composer-error">{actionErrorText}</p> : null}
-
-          <div className="composer-footer">
-            <div className="composer-send">
-              <button type="button" className="secondary" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
-                Stop
-              </button>
-              <button type="submit" disabled={sendingMessage || !mobileToken}>
-                {sendingMessage ? 'Sending...' : 'Send'}
-              </button>
-            </div>
-          </div>
-        </form>
+              </div>
+            </form>
+          </section>
+        </div>
       </main>
     </div>
   );

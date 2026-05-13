@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   createRelaySession,
+  createRelayPairingInvite,
   pairRelaySession,
   pollRelayCommands,
   postRelayEvent,
@@ -220,7 +221,7 @@ describe('relay server binary', () => {
       relayServer,
       sessionId: session.sessionId,
       pairingToken: session.pairingToken,
-    })).rejects.toMatchObject({ statusCode: 410, message: 'Pairing token already used.' });
+    })).rejects.toMatchObject({ statusCode: 401, message: 'Invalid pairing token.' });
 
     const commandPoll = pollRelayCommands({
       relayServer,
@@ -324,6 +325,122 @@ describe('relay server binary', () => {
       mobileToken: firstPair.mobileToken,
       after: 0,
     })).rejects.toMatchObject({ statusCode: 410, message: 'Relay session unavailable: e2e-finished.' });
+  });
+
+  it('allows a paired client to invite another client and filters targeted events over HTTP', async () => {
+    const { relayServer } = await startRelayServer();
+
+    const session = await createRelaySession({
+      relayServer,
+      localSessionId: 'local-e2e-multi-client',
+      chatId: 'chat-e2e-multi-client',
+      ttlMs: 60000,
+      pairingTtlMs: 60000,
+      metadata: { source: 'relay-server-e2e-multi-client' },
+    });
+
+    const firstPair = await pairRelaySession({
+      relayServer,
+      sessionId: session.sessionId,
+      pairingToken: session.pairingToken,
+      mobileName: 'e2e-mobile-a',
+      idempotencyKey: 'pair-e2e-multi-a',
+    });
+    const secondInvite = await createRelayPairingInvite({
+      relayServer,
+      sessionId: session.sessionId,
+      token: firstPair.mobileToken,
+      idempotencyKey: 'invite-e2e-multi-b',
+    });
+    const secondPair = await pairRelaySession({
+      relayServer,
+      sessionId: session.sessionId,
+      pairingToken: secondInvite.pairingToken,
+      mobileName: 'e2e-mobile-b',
+      idempotencyKey: 'pair-e2e-multi-b',
+    });
+
+    expect(secondInvite.clientConnectionUrl).toContain('/pair?sessionId=');
+    expect(secondPair.clientId).toBeTruthy();
+    expect(secondPair.clientId).not.toBe(firstPair.clientId);
+
+    const commandPoll = pollRelayCommands({
+      relayServer,
+      sessionId: session.sessionId,
+      desktopToken: session.desktopToken,
+      after: 0,
+      timeoutMs: 5000,
+    });
+    const queuedCommand = await sendRelayCommand({
+      relayServer,
+      sessionId: session.sessionId,
+      mobileToken: secondPair.mobileToken,
+      type: 'list_chats',
+      payload: { requestId: 'request-e2e-multi' },
+      idempotencyKey: 'command-e2e-multi',
+    });
+    const polledCommands = await commandPoll;
+
+    expect(queuedCommand).toMatchObject({ accepted: true, sequence: 1, duplicate: false });
+    expect(polledCommands).toMatchObject({ cursor: 1, timedOut: false });
+    expect(polledCommands.commands).toEqual([
+      expect.objectContaining({
+        sequence: 1,
+        type: 'list_chats',
+        clientId: secondPair.clientId,
+        payload: { requestId: 'request-e2e-multi' },
+      }),
+    ]);
+
+    await postRelayEvent({
+      relayServer,
+      sessionId: session.sessionId,
+      desktopToken: session.desktopToken,
+      type: 'run_status',
+      payload: { status: 'started' },
+    });
+    await postRelayEvent({
+      relayServer,
+      sessionId: session.sessionId,
+      desktopToken: session.desktopToken,
+      type: 'chat_list_result',
+      payload: {
+        requestId: 'request-e2e-multi',
+        chats: [{ id: 'chat-e2e-multi-client', messageCount: 0 }],
+      },
+      targetClientId: firstPair.clientId,
+    });
+
+    const firstClientEvents = await readRelayEvents({
+      relayServer,
+      sessionId: session.sessionId,
+      mobileToken: firstPair.mobileToken,
+      after: 0,
+    });
+    const secondClientEvents = await readRelayEvents({
+      relayServer,
+      sessionId: session.sessionId,
+      mobileToken: secondPair.mobileToken,
+      after: 0,
+    });
+    const firstClientNotifications = await readRelayNotifications({
+      relayServer,
+      sessionId: session.sessionId,
+      mobileToken: firstPair.mobileToken,
+      after: 0,
+    });
+
+    expect(firstClientEvents.events.map((event) => event.type)).toEqual([
+      'run_status',
+      'chat_list_result',
+    ]);
+    expect(secondClientEvents.events.map((event) => event.type)).toEqual([
+      'run_status',
+    ]);
+    expect(firstClientNotifications).toEqual({
+      notifications: [],
+      cursor: 0,
+    });
   });
 
   it('serves static files from the entrypoint while preserving API routes', async () => {

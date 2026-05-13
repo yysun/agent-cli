@@ -13,6 +13,7 @@
  * Recent changes:
  * - 2026-05-11: Added the initial optional remote-control relay server.
  * - 2026-05-11: Added CORS and preflight handling so browser UIs can access relay APIs and SSE.
+ * - 2026-05-13: Added multi-client pairing, targeted event delivery, and invite minting.
  */
 import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -266,6 +267,28 @@ function buildClientConnectionUrl(baseUrl, sessionId, pairingToken) {
 }
 
 /**
+ * @param {Date} now
+ * @param {number | null} ttlMs
+ */
+function buildPairingInvite(now, ttlMs) {
+  return {
+    pairingToken: createToken(),
+    createdAt: now.toISOString(),
+    expiresAt: ttlMs === null
+      ? null
+      : new Date(now.getTime() + ttlMs).toISOString(),
+  };
+}
+
+/**
+ * @param {{ targetClientId?: string }} event
+ * @param {string} clientId
+ */
+function isEventVisibleToClient(event, clientId) {
+  return !event.targetClientId || event.targetClientId === clientId;
+}
+
+/**
  * @param {string} eventType
  * @param {Record<string, unknown>} payload
  */
@@ -366,7 +389,7 @@ export class RelayService {
 
     for (const session of this.sessions.values()) {
       for (const client of session.eventClients) {
-        client.end();
+        client.response.end();
       }
 
       for (const waiter of session.commandWaiters) {
@@ -382,6 +405,12 @@ export class RelayService {
     const now = this.now();
 
     for (const [sessionId, session] of this.sessions.entries()) {
+      for (const [pairingToken, invite] of session.pairingInvites.entries()) {
+        if (hasExpired(invite.expiresAt, now)) {
+          session.pairingInvites.delete(pairingToken);
+        }
+      }
+
       if (!session.expiresAt || new Date(session.expiresAt).getTime() > now.getTime()) {
         continue;
       }
@@ -405,7 +434,7 @@ export class RelayService {
       session.commandWaiters.clear();
 
       for (const client of session.eventClients) {
-        client.end();
+        client.response.end();
       }
 
       this.sessions.delete(sessionId);
@@ -426,7 +455,6 @@ export class RelayService {
     const now = this.now();
     const sessionId = randomUUID();
     const desktopToken = createToken();
-    const pairingToken = createToken();
     const ttlMs = resolveSessionLifetimeMs(input.ttlMs, this.sessionTtlMs);
     const pairingTtlMs = resolveSessionLifetimeMs(input.pairingTtlMs, this.pairingTtlMs);
     const expiresAt = ttlMs === null
@@ -440,18 +468,16 @@ export class RelayService {
     const pairingExpiresAt = effectivePairingTtlMs === null
       ? null
       : new Date(now.getTime() + effectivePairingTtlMs).toISOString();
+    const initialInvite = buildPairingInvite(now, effectivePairingTtlMs);
     const session = {
       sessionId,
       desktopToken,
-      pairingToken,
-      mobileToken: null,
       localSessionId: normalizeOptionalString(input.localSessionId),
       chatId: normalizeOptionalString(input.chatId),
       metadata: isPlainObject(input.metadata) ? input.metadata : {},
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       expiresAt,
-      pairingExpiresAt,
       pairedAt: null,
       revokedAt: null,
       revokeReason: null,
@@ -461,10 +487,14 @@ export class RelayService {
       events: [],
       commands: [],
       notifications: [],
+      pairingInvites: new Map([[initialInvite.pairingToken, initialInvite]]),
+      mobileClients: new Map(),
+      mobileTokenIndex: new Map(),
       eventClients: new Set(),
       commandWaiters: new Set(),
       idempotency: {
         pair: new Map(),
+        pairingInvite: new Map(),
         event: new Map(),
         command: new Map(),
       },
@@ -475,8 +505,8 @@ export class RelayService {
     return {
       sessionId,
       desktopToken,
-      pairingToken,
-      clientConnectionUrl: buildClientConnectionUrl(input.baseUrl, sessionId, pairingToken),
+      pairingToken: initialInvite.pairingToken,
+      clientConnectionUrl: buildClientConnectionUrl(input.baseUrl, sessionId, initialInvite.pairingToken),
       expiresAt,
       pairingExpiresAt,
       chatId: session.chatId,
@@ -499,30 +529,47 @@ export class RelayService {
     this.assertSessionActive(session);
     const pairingToken = normalizeOptionalString(input.pairingToken);
 
-    if (session.mobileToken) {
-      throw new RelayServerError(410, 'Pairing token already used.');
-    }
-
-    if (!pairingToken || pairingToken !== session.pairingToken) {
+    if (!pairingToken) {
       throw new RelayServerError(401, 'Invalid pairing token.');
     }
 
-    if (hasExpired(session.pairingExpiresAt, this.now())) {
+    const invite = session.pairingInvites.get(pairingToken);
+
+    if (!invite) {
+      throw new RelayServerError(401, 'Invalid pairing token.');
+    }
+
+    if (hasExpired(invite.expiresAt, this.now())) {
+      session.pairingInvites.delete(pairingToken);
       throw new RelayServerError(410, 'Pairing token expired.');
     }
 
-    session.mobileToken = createToken();
-    session.pairingToken = null;
-    session.pairedAt = this.now().toISOString();
-    session.updatedAt = session.pairedAt;
+    session.pairingInvites.delete(pairingToken);
+
+    const pairedAt = this.now().toISOString();
+    const clientId = randomUUID();
+    const mobileToken = createToken();
+    const mobileName = normalizeOptionalString(input.mobileName);
+
+    session.mobileClients.set(clientId, {
+      clientId,
+      mobileToken,
+      mobileName,
+      pairedAt,
+      lastSeenAt: pairedAt,
+    });
+    session.mobileTokenIndex.set(mobileToken, clientId);
+    session.pairedAt = session.pairedAt ?? pairedAt;
+    session.updatedAt = pairedAt;
 
     const result = {
       sessionId: session.sessionId,
-      mobileToken: session.mobileToken,
+      clientId,
+      mobileToken,
       expiresAt: session.expiresAt,
-      pairedAt: session.pairedAt,
+      pairedAt,
       chatId: session.chatId,
-      mobileName: normalizeOptionalString(input.mobileName),
+      mobileName,
     };
 
     if (idempotencyKey) {
@@ -534,7 +581,43 @@ export class RelayService {
 
   /**
    * @param {string} sessionId
-   * @param {{ desktopToken: string, type: string, payload?: Record<string, unknown>, idempotencyKey?: string }} input
+   * @param {{ token: string, idempotencyKey?: string, baseUrl: string }} input
+   */
+  createPairingInvite(sessionId, input) {
+    const { session } = this.authenticateSessionToken(sessionId, input.token);
+    const idempotencyKey = normalizeOptionalString(input.idempotencyKey);
+
+    if (idempotencyKey && session.idempotency.pairingInvite.has(idempotencyKey)) {
+      return session.idempotency.pairingInvite.get(idempotencyKey);
+    }
+
+    const now = this.now();
+    const effectivePairingTtlMs = session.expiresAt
+      ? Math.max(1, new Date(session.expiresAt).getTime() - now.getTime())
+      : this.pairingTtlMs;
+    const invite = buildPairingInvite(now, effectivePairingTtlMs === null ? null : effectivePairingTtlMs);
+
+    session.pairingInvites.set(invite.pairingToken, invite);
+    session.updatedAt = invite.createdAt;
+
+    const result = {
+      sessionId: session.sessionId,
+      pairingToken: invite.pairingToken,
+      clientConnectionUrl: buildClientConnectionUrl(input.baseUrl, session.sessionId, invite.pairingToken),
+      pairingExpiresAt: invite.expiresAt,
+      chatId: session.chatId,
+    };
+
+    if (idempotencyKey) {
+      session.idempotency.pairingInvite.set(idempotencyKey, result);
+    }
+
+    return result;
+  }
+
+  /**
+   * @param {string} sessionId
+   * @param {{ desktopToken: string, type: string, payload?: Record<string, unknown>, idempotencyKey?: string, targetClientId?: string }} input
    */
   postEvent(sessionId, input) {
     const session = this.authenticateDesktop(sessionId, input.desktopToken);
@@ -558,15 +641,27 @@ export class RelayService {
       type: eventType,
       createdAt: this.now().toISOString(),
       payload: isPlainObject(input.payload) ? input.payload : {},
+      ...(normalizeOptionalString(input.targetClientId) ? { targetClientId: normalizeOptionalString(input.targetClientId) } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
     };
 
     session.events.push(event);
     trimQueue(session.events, this.queueLimit);
     session.updatedAt = event.createdAt;
+
+    if (event.type === 'active_chat_changed') {
+      session.chatId = normalizeOptionalString(String(event.payload.chatId ?? '')) ?? session.chatId;
+    }
+
+    if (event.type === 'session_snapshot') {
+      session.chatId = normalizeOptionalString(String(event.payload.activeChatId ?? event.payload.chatId ?? '')) ?? session.chatId;
+    }
+
     this.broadcastEvent(session, event);
 
-    const notification = buildNotificationFromEvent(event.type, event.payload);
+    const notification = event.targetClientId
+      ? null
+      : buildNotificationFromEvent(event.type, event.payload);
 
     if (notification) {
       session.notifications.push({
@@ -596,7 +691,7 @@ export class RelayService {
    * @param {{ mobileToken: string, type: string, payload?: Record<string, unknown>, idempotencyKey?: string }} input
    */
   enqueueCommand(sessionId, input) {
-    const session = this.authenticateMobile(sessionId, input.mobileToken);
+    const { session, clientId } = this.authenticateMobile(sessionId, input.mobileToken);
     const commandType = normalizeOptionalString(input.type);
 
     if (!commandType) {
@@ -616,6 +711,7 @@ export class RelayService {
       sequence: ++session.commandSequence,
       type: commandType,
       createdAt: this.now().toISOString(),
+      clientId,
       payload: isPlainObject(input.payload) ? input.payload : {},
       ...(idempotencyKey ? { idempotencyKey } : {}),
     };
@@ -698,12 +794,14 @@ export class RelayService {
    * @param {{ mobileToken: string, after?: number }} input
    */
   readEvents(sessionId, input) {
-    const session = this.authenticateMobile(sessionId, input.mobileToken);
+    const { session, clientId, client } = this.authenticateMobile(sessionId, input.mobileToken);
     const after = Math.max(0, Number(input.after) || 0);
     const events = session.events.filter(
       /** @param {{ sequence: number }} event */
-      (event) => event.sequence > after,
+      (event) => event.sequence > after && isEventVisibleToClient(event, clientId),
     );
+
+    client.lastSeenAt = this.now().toISOString();
 
     return {
       events,
@@ -716,12 +814,14 @@ export class RelayService {
    * @param {{ mobileToken: string, after?: number }} input
    */
   readNotifications(sessionId, input) {
-    const session = this.authenticateMobile(sessionId, input.mobileToken);
+    const { session, client } = this.authenticateMobile(sessionId, input.mobileToken);
     const after = Math.max(0, Number(input.after) || 0);
     const notifications = session.notifications.filter(
       /** @param {{ sequence: number }} entry */
       (entry) => entry.sequence > after,
     );
+
+    client.lastSeenAt = this.now().toISOString();
 
     return {
       notifications,
@@ -734,11 +834,7 @@ export class RelayService {
    * @param {{ token: string, reason?: string }} input
    */
   revokeSession(sessionId, input) {
-    const session = this.requireSession(sessionId);
-
-    if (input.token !== session.desktopToken && input.token !== session.mobileToken) {
-      throw new RelayServerError(401, 'Invalid relay session token.');
-    }
+    const { session } = this.authenticateSessionToken(sessionId, input.token);
 
     this.assertSessionActive(session);
     const reason = normalizeOptionalString(input.reason) ?? 'revoked';
@@ -827,11 +923,40 @@ export class RelayService {
     const session = this.requireSession(sessionId);
     this.assertSessionActive(session);
 
-    if (!session.mobileToken || mobileToken !== session.mobileToken) {
+    const clientId = session.mobileTokenIndex.get(mobileToken);
+
+    if (!clientId) {
       throw new RelayServerError(401, 'Invalid mobile token.');
     }
 
-    return session;
+    const client = session.mobileClients.get(clientId);
+
+    if (!client) {
+      throw new RelayServerError(401, 'Invalid mobile token.');
+    }
+
+    return { session, clientId, client };
+  }
+
+  /**
+   * @param {string} sessionId
+   * @param {string} token
+   */
+  authenticateSessionToken(sessionId, token) {
+    const session = this.requireSession(sessionId);
+    this.assertSessionActive(session);
+
+    if (token === session.desktopToken) {
+      return { session, clientId: null };
+    }
+
+    const clientId = session.mobileTokenIndex.get(token);
+
+    if (!clientId) {
+      throw new RelayServerError(401, 'Invalid relay session token.');
+    }
+
+    return { session, clientId };
   }
 
   /**
@@ -839,10 +964,14 @@ export class RelayService {
    * @param {{ sequence: number, type: string, createdAt: string, payload: Record<string, unknown> }} event
    */
   broadcastEvent(session, event) {
-    for (const response of session.eventClients) {
-      response.write(`id: ${event.sequence}\n`);
-      response.write(`event: remote\n`);
-      response.write(`data: ${JSON.stringify(event)}\n\n`);
+    for (const client of session.eventClients) {
+      if (!isEventVisibleToClient(event, client.clientId)) {
+        continue;
+      }
+
+      client.response.write(`id: ${event.sequence}\n`);
+      client.response.write(`event: remote\n`);
+      client.response.write(`data: ${JSON.stringify(event)}\n\n`);
     }
   }
 }
@@ -1031,7 +1160,7 @@ export function createRelayHttpServer(options = {}) {
         return;
       }
 
-      const pathMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/(pair|events|commands|notifications|revoke)$/);
+      const pathMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/(pair|events|commands|notifications|revoke|pairing-invites)$/);
       const pollMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/commands\/poll$/);
 
       if (pathMatch) {
@@ -1049,6 +1178,17 @@ export function createRelayHttpServer(options = {}) {
           return;
         }
 
+        if (action === 'pairing-invites' && request.method === 'POST') {
+          const body = await readRequestBody(request);
+          const result = service.createPairingInvite(sessionId, {
+            token: readRequiredString(body, 'token'),
+            idempotencyKey: normalizeOptionalString(String(body.idempotencyKey ?? '')),
+            baseUrl: origin,
+          });
+          writeJson(response, 201, result);
+          return;
+        }
+
         if (action === 'events' && request.method === 'POST') {
           const body = await readRequestBody(request);
           const result = service.postEvent(sessionId, {
@@ -1056,6 +1196,7 @@ export function createRelayHttpServer(options = {}) {
             type: readRequiredString(body, 'type'),
             payload: isPlainObject(body.payload) ? body.payload : {},
             idempotencyKey: normalizeOptionalString(String(body.idempotencyKey ?? '')),
+            targetClientId: normalizeOptionalString(String(body.targetClientId ?? '')),
           });
           writeJson(response, 202, result);
           return;
@@ -1072,10 +1213,10 @@ export function createRelayHttpServer(options = {}) {
           const acceptHeader = String(request.headers.accept ?? '').toLowerCase();
 
           if (acceptHeader.includes('text/event-stream')) {
-            const session = service.authenticateMobile(sessionId, mobileToken);
+            const { session, clientId } = service.authenticateMobile(sessionId, mobileToken);
             const initialEvents = session.events.filter(
-              /** @param {{ sequence: number }} event */
-              (event) => event.sequence > Math.max(0, after || 0),
+              /** @param {{ sequence: number, targetClientId?: string }} event */
+              (event) => event.sequence > Math.max(0, after || 0) && isEventVisibleToClient(event, clientId),
             );
 
             response.writeHead(200, {
@@ -1092,9 +1233,14 @@ export function createRelayHttpServer(options = {}) {
               response.write(`data: ${JSON.stringify(event)}\n\n`);
             }
 
-            session.eventClients.add(response);
+            session.eventClients.add({ clientId, response });
             request.on('close', () => {
-              session.eventClients.delete(response);
+              for (const eventClient of session.eventClients) {
+                if (eventClient.response === response) {
+                  session.eventClients.delete(eventClient);
+                  break;
+                }
+              }
             });
             return;
           }

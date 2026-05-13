@@ -11,6 +11,7 @@
  *
  * Recent changes:
  * - 2026-05-07: Added targeted Vitest coverage for session persistence.
+ * - 2026-05-13: Added chat list and explicit selection coverage for remote multi-client flows.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -217,6 +218,93 @@ describe('session-store', () => {
     });
   });
 
+  it('lists persisted chats and marks the current chat', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const {
+      createPersistedChat,
+      listPersistedChats,
+      loadRequestedChat,
+      persistCompletedChat,
+    } = await loadSessionStore(rootPath);
+    const activeChat = await loadRequestedChat({ newChat: true });
+
+    await persistCompletedChat({
+      chat: activeChat,
+      messages: [
+        { role: 'user', content: 'Current chat message' },
+      ],
+    });
+
+    const inactiveChat = await createPersistedChat({ setCurrent: false });
+    await persistCompletedChat({
+      chat: inactiveChat,
+      messages: [
+        { role: 'assistant', content: 'Inactive chat message' },
+      ],
+      setCurrent: false,
+    });
+
+    const chats = await listPersistedChats();
+
+    expect(chats).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: activeChat.id,
+        messageCount: 1,
+        isCurrent: true,
+      }),
+      expect.objectContaining({
+        id: inactiveChat.id,
+        messageCount: 1,
+        isCurrent: false,
+      }),
+    ]));
+  });
+
+  it('loads chats by id and can switch the current chat explicitly', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const {
+      createPersistedChat,
+      loadChatById,
+      loadRequestedChat,
+      persistCompletedChat,
+      setCurrentChat,
+    } = await loadSessionStore(rootPath);
+    const firstChat = await loadRequestedChat({ newChat: true });
+
+    await persistCompletedChat({
+      chat: firstChat,
+      messages: [
+        { role: 'user', content: 'First chat' },
+      ],
+    });
+
+    const secondChat = await createPersistedChat({ setCurrent: false });
+    await persistCompletedChat({
+      chat: secondChat,
+      messages: [
+        { role: 'assistant', content: 'Second chat' },
+      ],
+      setCurrent: false,
+    });
+
+    const loadedSecondChat = await loadChatById(secondChat.id);
+    expect(loadedSecondChat.messages).toEqual([
+      expect.objectContaining({ role: 'assistant', content: 'Second chat' }),
+    ]);
+
+    await setCurrentChat(secondChat.id);
+
+    const current = await loadRequestedChat({ newChat: false });
+    expect(current.id).toBe(secondChat.id);
+    expect(current.messages).toEqual([
+      expect.objectContaining({ role: 'assistant', content: 'Second chat' }),
+    ]);
+  });
+
   it('acquires and releases the remote host lock for the current root', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -238,6 +326,30 @@ describe('session-store', () => {
 
     await expect(releaseRemoteHostLock()).resolves.toBe(true);
     await expect(readFile(path.join(rootPath, '.chats', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+  });
+
+  it('updates the remote host lock when the active chat changes', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const {
+      acquireRemoteHostLock,
+      loadRequestedChat,
+      releaseRemoteHostLock,
+      updateRemoteHostLock,
+    } = await loadSessionStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: true });
+
+    await acquireRemoteHostLock({ chat });
+    await expect(updateRemoteHostLock({ chatId: 'chat-switched-1' })).resolves.toBe(true);
+
+    const remoteLock = await readJson(path.join(rootPath, '.chats', 'remote-host.lock.json'));
+    expect(remoteLock).toMatchObject({
+      chatId: 'chat-switched-1',
+      pid: process.pid,
+    });
+
+    await expect(releaseRemoteHostLock()).resolves.toBe(true);
   });
 
   it('rejects when a live remote host lock already exists', async () => {

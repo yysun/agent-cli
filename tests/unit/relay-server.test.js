@@ -11,6 +11,7 @@
  * Recent changes:
  * - 2026-05-11: Added relay server coverage for the optional remote supervision flow.
  * - 2026-05-11: Added static SPA fallback and API-precedence regression coverage.
+ * - 2026-05-13: Added multi-client pairing and targeted event delivery coverage.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -135,6 +136,7 @@ describe('relay-server', () => {
       idempotencyKey: 'pair-1',
     });
 
+    expect(firstPair.clientId).toBeTruthy();
     expect(firstPair.mobileToken).toBeTruthy();
     expect(secondPair.mobileToken).toBe(firstPair.mobileToken);
   });
@@ -154,7 +156,85 @@ describe('relay-server', () => {
 
     expect(() => service.pairSession(session.sessionId, {
       pairingToken: session.pairingToken,
-    })).toThrow('Pairing token already used.');
+    })).toThrow('Invalid pairing token.');
+  });
+
+  it('mints additional invites and supports multiple paired clients with targeted events', async () => {
+    const service = new RelayService();
+    servicesToClose.push(service);
+
+    const session = service.createSession({
+      baseUrl: 'http://127.0.0.1:8787',
+      chatId: 'chat-1',
+    });
+    const firstPair = service.pairSession(session.sessionId, {
+      pairingToken: session.pairingToken,
+    });
+    const secondInvite = service.createPairingInvite(session.sessionId, {
+      token: firstPair.mobileToken,
+      baseUrl: 'http://127.0.0.1:8787',
+    });
+    const secondPair = service.pairSession(session.sessionId, {
+      pairingToken: secondInvite.pairingToken,
+    });
+
+    expect(secondInvite.clientConnectionUrl).toContain('/pair?sessionId=');
+
+    service.postEvent(session.sessionId, {
+      desktopToken: session.desktopToken,
+      type: 'run_status',
+      payload: { status: 'started' },
+    });
+    service.postEvent(session.sessionId, {
+      desktopToken: session.desktopToken,
+      type: 'chat_list_result',
+      payload: { requestId: 'request-1', chats: [{ id: 'chat-1', messageCount: 1 }] },
+      targetClientId: firstPair.clientId,
+    });
+
+    expect(service.readNotifications(session.sessionId, {
+      mobileToken: firstPair.mobileToken,
+      after: 0,
+    })).toEqual({
+      notifications: [],
+      cursor: 0,
+    });
+
+    const firstClientEvents = service.readEvents(session.sessionId, {
+      mobileToken: firstPair.mobileToken,
+      after: 0,
+    });
+    const secondClientEvents = service.readEvents(session.sessionId, {
+      mobileToken: secondPair.mobileToken,
+      after: 0,
+    });
+
+    expect(firstClientEvents.events).toHaveLength(2);
+    expect(firstClientEvents.events[1]).toMatchObject({
+      type: 'chat_list_result',
+      targetClientId: firstPair.clientId,
+    });
+    expect(secondClientEvents.events).toHaveLength(1);
+    expect(secondClientEvents.events[0].type).toBe('run_status');
+
+    service.enqueueCommand(session.sessionId, {
+      mobileToken: secondPair.mobileToken,
+      type: 'list_chats',
+      payload: { requestId: 'request-2' },
+    });
+
+    await expect(service.pollCommands(session.sessionId, {
+      desktopToken: session.desktopToken,
+      after: 0,
+      timeoutMs: 1,
+    })).resolves.toMatchObject({
+      commands: [
+        expect.objectContaining({
+          type: 'list_chats',
+          clientId: secondPair.clientId,
+        }),
+      ],
+    });
   });
 
   it('deduplicates events and commands by idempotency key', () => {

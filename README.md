@@ -29,6 +29,10 @@ Streaming is enabled by default. While streaming, response text chunks stream on
 
 Use `--remote` to host the current local chat through the optional relay server. The CLI reads the relay URL from `AGENT_CLI_RELAY_SERVER_URL`, connects to the relay, and prints the client connection URL supervisors can use to pair.
 
+One remote host session can now serve multiple paired clients at the same time. After the first client pairs, the web UI can mint an additional one-time invite link for another browser or device without restarting the local CLI host.
+
+`agent-cli --remote` is a long-running host process. It stays alive after startup, keeps the local project root locked for that remote session, and continues serving relay commands until the host exits, a client disconnect ends the session, or you press `Ctrl+C`.
+
 Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
 
 Runtime settings can be supplied on the command line or through environment defaults. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
@@ -79,6 +83,15 @@ npm run dev
 `npm run dev` starts the relay server first, waits for `/healthz`, then starts the web UI and `agent-cli --remote`.
 
 Paste the `Client connection URL` printed by `agent-cli --remote` into the web app and pair. The UI can send remote user messages, approval decisions, cancel/resume commands, and disconnect requests for the active local remote session.
+
+Paired clients can also:
+- request the local chat list
+- load persisted messages for a selected chat
+- create a new chat on the local host
+- switch which local chat is active for subsequent remote turns
+- create a new one-time invite link for another paired client
+
+The deterministic remote-host e2e suite confirms that a real `agent-cli --remote` process stays up and serves client-driven chat listing, active-chat selection, and persisted chat-message reads through the relay.
 
 ### Agent Files
 
@@ -140,9 +153,11 @@ Supported provider env vars:
 
 ### Tests
 
-- `npm test`: targeted checks (syntax, unit tests, and web typecheck)
+- `npm test`: targeted checks (syntax, unit tests, deterministic relay and remote-host e2e, and web typecheck)
 - `npm run test:unit`: targeted module tests
-- `npm run test:e2e`: end-to-end CLI flows against a real LLM provider
+- `npm run test:e2e`: deterministic relay e2e plus live-provider CLI e2e
+- `npm run test:e2e:relay`: deterministic relay-server and remote-host end-to-end coverage
+- `npm run test:e2e:live`: end-to-end CLI flows against a real LLM provider
 - `npm run relay-server`: run the optional relay server locally
 - `npm run dev`: start relay + web + remote CLI together for local development
 - `npm run web:install`: install React/Vite web UI dependencies under `./web`
@@ -183,8 +198,10 @@ npm run relay-server:prod -- --host 0.0.0.0 --port 8080
 
 ### Remote Safety
 
-`--remote` does not move agent execution, tools, workspace files, `.env` contents, provider API keys, or long-term memory off the local machine. The relay only receives short-lived normalized coordination data for the active local chat, including status changes, assistant output, approval requests, and remote commands.
+`--remote` does not move agent execution, tools, workspace files, `.env` contents, provider API keys, or long-term memory off the local machine. The relay only receives short-lived normalized coordination data for the active local host session, including status changes, assistant output, approval requests, remote commands, and per-client chat-management responses.
 
 The repo now uses package-level ESM via `"type": "module"`, so local modules use `.js` files instead of `.mjs`.
 
-The e2e suite uses the same runtime validation path as the CLI and always expects a usable live provider configuration. It prefers the configured provider when that configuration is complete; otherwise it falls back to another available live provider for the test process when possible. If no usable provider configuration is available, `npm run test:e2e` fails fast instead of skipping.
+`npm test` includes the deterministic relay and remote-host e2e suite, so the default path now exercises the real relay binary and `agent-cli --remote` long-running host loop without requiring external model credentials.
+
+The live CLI e2e suite uses the same runtime validation path as the CLI and always expects a usable live provider configuration. It prefers the configured provider when that configuration is complete; otherwise it falls back to another available live provider for the test process when possible. If no usable provider configuration is available, `npm run test:e2e:live` fails fast instead of skipping, and `npm run test:e2e` will fail at that step as well.

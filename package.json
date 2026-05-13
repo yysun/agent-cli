@@ -8,11 +8,12 @@
     "agent-cli-relay": "./server/bin/relay-server.js"
   },
   "scripts": {
-    "test": "npm run test:syntax && npm run test:unit && npm run web:typecheck",
-    "test:syntax": "node --check ./bin/agent-cli.js && node --check ./server/bin/relay-server.js && node --check ./lib/agent-config.js && node --check ./lib/paths.js && node --check ./lib/agent-files.js && node --check ./lib/session-store.js && node --check ./lib/runtime-client.js && node --check ./lib/relay-client.js && node --check ./server/lib/relay-server.js && node --check ./lib/remote-control.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-cli.test.js && node --check ./tests/unit/agent-config.test.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/paths.test.js && node --check ./tests/unit/session-store.test.js && node --check ./tests/unit/runtime-client.test.js && node --check ./tests/unit/relay-server.test.js && node --check ./tests/unit/remote-control.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js && node --check ./tests/e2e/relay-server.e2e.test.js",
+    "test": "npm run test:syntax && npm run test:unit && npm run test:e2e:relay && npm run web:typecheck",
+    "test:syntax": "node --check ./bin/agent-cli.js && node --check ./server/bin/relay-server.js && node --check ./lib/agent-config.js && node --check ./lib/paths.js && node --check ./lib/agent-files.js && node --check ./lib/session-store.js && node --check ./lib/runtime-client.js && node --check ./lib/relay-client.js && node --check ./server/lib/relay-server.js && node --check ./lib/remote-control.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-cli.test.js && node --check ./tests/unit/agent-config.test.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/paths.test.js && node --check ./tests/unit/session-store.test.js && node --check ./tests/unit/runtime-client.test.js && node --check ./tests/unit/relay-server.test.js && node --check ./tests/unit/remote-control.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js && node --check ./tests/e2e/agent-cli-remote.e2e.test.js && node --check ./tests/e2e/relay-server.e2e.test.js",
     "test:unit": "vitest run tests/unit",
-    "test:e2e": "vitest run tests/e2e",
-    "test:e2e:relay": "vitest run tests/e2e/relay-server.e2e.test.js",
+    "test:e2e": "npm run test:e2e:relay && npm run test:e2e:live",
+    "test:e2e:live": "vitest run tests/e2e/agent-cli.e2e.test.js",
+    "test:e2e:relay": "vitest run tests/e2e/relay-server.e2e.test.js tests/e2e/agent-cli-remote.e2e.test.js",
     "agent-cli": "node ./bin/agent-cli.js",
     "dev": "concurrently -k -s first -n RELAY,WEB,CLI \"npm run dev:relay\" \"npm run dev:web\" \"npm run dev:cli\"",
     "dev:relay": "npm run relay-server --",
