@@ -12,6 +12,7 @@
  * - 2026-05-11: Added relay server coverage for the optional remote supervision flow.
  * - 2026-05-11: Added static SPA fallback and API-precedence regression coverage.
  * - 2026-05-13: Added multi-client pairing and targeted event delivery coverage.
+ * - 2026-05-13: Updated protocol coverage for generic input commands and targeted command_result events.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -230,8 +231,8 @@ describe('relay-server', () => {
     });
     service.postEvent(session.sessionId, {
       desktopToken: session.desktopToken,
-      type: 'chat_list_result',
-      payload: { requestId: 'request-1', chats: [{ id: 'chat-1', messageCount: 1 }] },
+      type: 'command_result',
+      payload: { requestId: 'request-1', kind: 'chat_list', chats: [{ id: 'chat-1', messageCount: 1 }] },
       targetClientId: firstPair.clientId,
     });
 
@@ -254,7 +255,7 @@ describe('relay-server', () => {
 
     expect(firstClientEvents.events).toHaveLength(2);
     expect(firstClientEvents.events[1]).toMatchObject({
-      type: 'chat_list_result',
+      type: 'command_result',
       targetClientId: firstPair.clientId,
     });
     expect(secondClientEvents.events).toHaveLength(1);
@@ -262,8 +263,8 @@ describe('relay-server', () => {
 
     service.enqueueCommand(session.sessionId, {
       mobileToken: secondPair.mobileToken,
-      type: 'list_chats',
-      payload: { requestId: 'request-2' },
+      type: 'input',
+      payload: { requestId: 'request-2', text: '/chats' },
     });
 
     await expect(service.pollCommands(session.sessionId, {
@@ -273,7 +274,7 @@ describe('relay-server', () => {
     })).resolves.toMatchObject({
       commands: [
         expect.objectContaining({
-          type: 'list_chats',
+          type: 'input',
           clientId: secondPair.clientId,
         }),
       ],
@@ -307,13 +308,13 @@ describe('relay-server', () => {
 
     const firstCommand = service.enqueueCommand(session.sessionId, {
       mobileToken: pair.mobileToken,
-      type: 'user_message',
+      type: 'input',
       payload: { text: 'hello' },
       idempotencyKey: 'command-1',
     });
     const secondCommand = service.enqueueCommand(session.sessionId, {
       mobileToken: pair.mobileToken,
-      type: 'user_message',
+      type: 'input',
       payload: { text: 'hello' },
       idempotencyKey: 'command-1',
     });

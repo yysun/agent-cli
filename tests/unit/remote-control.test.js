@@ -11,6 +11,7 @@
  * Recent changes:
  * - 2026-05-11: Added remote payload summary coverage for relay-safe events.
  * - 2026-05-13: Added multi-client chat-management coverage.
+ * - 2026-05-13: Updated coverage for slash-command chat operations over the generic relay input path.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -227,7 +228,7 @@ describe('remote-control', () => {
     firstPoll.resolve({
       commands: [{
         sequence: 1,
-        type: 'user_message',
+        type: 'input',
         payload: { text: 'first' },
         createdAt: '2026-05-11T12:01:00.000Z',
       }],
@@ -240,7 +241,7 @@ describe('remote-control', () => {
     secondPoll.resolve({
       commands: [{
         sequence: 2,
-        type: 'user_message',
+        type: 'input',
         payload: { text: 'second' },
         createdAt: '2026-05-11T12:02:00.000Z',
       }],
@@ -319,7 +320,7 @@ describe('remote-control', () => {
     });
   });
 
-  it('routes chat-management commands through the session store and targets query responses', async () => {
+  it('routes slash commands through the session store and targets requester-only results', async () => {
     const firstPoll = createDeferred();
     const secondPoll = createDeferred();
     const thirdPoll = createDeferred();
@@ -398,8 +399,8 @@ describe('remote-control', () => {
       commands: [{
         sequence: 1,
         clientId: 'client-1',
-        type: 'list_chats',
-        payload: { requestId: 'request-list' },
+        type: 'input',
+        payload: { requestId: 'request-list', text: '/chats' },
         createdAt: '2026-05-11T12:01:00.000Z',
       }],
     });
@@ -412,8 +413,8 @@ describe('remote-control', () => {
       commands: [{
         sequence: 2,
         clientId: 'client-1',
-        type: 'read_chat_messages',
-        payload: { requestId: 'request-read', chatId: 'chat-2' },
+        type: 'input',
+        payload: { requestId: 'request-read', text: '/messages chat-2' },
         createdAt: '2026-05-11T12:02:00.000Z',
       }],
     });
@@ -426,22 +427,22 @@ describe('remote-control', () => {
       commands: [{
         sequence: 3,
         clientId: 'client-1',
-        type: 'create_chat',
-        payload: { requestId: 'request-create' },
+        type: 'input',
+        payload: { requestId: 'request-create', text: '/new' },
         createdAt: '2026-05-11T12:03:00.000Z',
       }],
     });
 
     await vi.waitFor(() => {
-      expect(chatStore.createChat).toHaveBeenCalledWith({ setCurrent: false });
+      expect(chatStore.createChat).toHaveBeenCalledWith({ setCurrent: true });
     });
 
     fourthPoll.resolve({
       commands: [{
         sequence: 4,
         clientId: 'client-1',
-        type: 'select_chat',
-        payload: { requestId: 'request-select', chatId: 'chat-2' },
+        type: 'input',
+        payload: { requestId: 'request-select', text: '/use chat-2' },
         createdAt: '2026-05-11T12:04:00.000Z',
       }],
     });
@@ -463,33 +464,38 @@ describe('remote-control', () => {
     await sessionPromise;
 
     expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'chat_list_result',
+      type: 'command_result',
       targetClientId: 'client-1',
       payload: expect.objectContaining({
         requestId: 'request-list',
-        activeChatId: 'chat-1',
+        kind: 'chat_list',
       }),
     }));
     expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'chat_messages_result',
+      type: 'command_result',
       targetClientId: 'client-1',
       payload: expect.objectContaining({
         requestId: 'request-read',
+        kind: 'chat_messages',
         chatId: 'chat-2',
       }),
     }));
     expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'chat_created',
+      type: 'command_result',
+      targetClientId: 'client-1',
       payload: expect.objectContaining({
         requestId: 'request-create',
+        kind: 'chat_selected',
         chat: expect.objectContaining({ id: 'chat-3' }),
       }),
     }));
     expect(relayClient.postRelayEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'active_chat_changed',
+      type: 'command_result',
+      targetClientId: 'client-1',
       payload: expect.objectContaining({
         requestId: 'request-select',
-        chatId: 'chat-2',
+        kind: 'chat_selected',
+        chat: expect.objectContaining({ id: 'chat-2' }),
       }),
     }));
   });
@@ -554,8 +560,8 @@ describe('remote-control', () => {
       commands: [{
         sequence: 1,
         clientId: 'client-1',
-        type: 'select_chat',
-        payload: { requestId: 'request-select', chatId: 'chat-selected' },
+        type: 'input',
+        payload: { requestId: 'request-select', text: '/use chat-selected' },
         createdAt: '2026-05-11T12:01:00.000Z',
       }],
     });
@@ -568,7 +574,7 @@ describe('remote-control', () => {
       commands: [{
         sequence: 2,
         clientId: 'client-1',
-        type: 'user_message',
+        type: 'input',
         payload: { text: 'hello' },
         createdAt: '2026-05-11T12:02:00.000Z',
       }],

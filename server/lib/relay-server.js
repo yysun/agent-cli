@@ -15,6 +15,7 @@
  * - 2026-05-11: Added CORS and preflight handling so browser UIs can access relay APIs and SSE.
  * - 2026-05-13: Added multi-client pairing, targeted event delivery, and invite minting.
  * - 2026-05-13: Added SSE heartbeat and Last-Event-ID resume support for automatic reconnect.
+ * - 2026-05-13: Reduced host-specific state coupling so chat metadata now follows shared session snapshots.
  */
 import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -680,10 +681,6 @@ export class RelayService {
     session.events.push(event);
     trimQueue(session.events, this.queueLimit);
     session.updatedAt = event.createdAt;
-
-    if (event.type === 'active_chat_changed') {
-      session.chatId = normalizeOptionalString(String(event.payload.chatId ?? '')) ?? session.chatId;
-    }
 
     if (event.type === 'session_snapshot') {
       session.chatId = normalizeOptionalString(String(event.payload.activeChatId ?? event.payload.chatId ?? '')) ?? session.chatId;

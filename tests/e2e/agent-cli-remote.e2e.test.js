@@ -10,7 +10,7 @@
  * - Verifies remote clients can list chats, select the active chat, and load persisted chat history.
  *
  * Recent changes:
- * - 2026-05-13: Added deterministic e2e coverage for long-running remote host chat management.
+ * - 2026-05-13: Added deterministic e2e coverage for long-running remote host slash-command chat management.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
@@ -379,8 +379,8 @@ describe('agent-cli --remote host', () => {
       relayServer,
       sessionId,
       mobileToken: pairResult.mobileToken,
-      type: 'list_chats',
-      payload: { requestId: listRequestId },
+      type: 'input',
+      payload: { requestId: listRequestId, text: '/chats' },
     });
 
     const chatListResult = await waitForMatchingEvent({
@@ -388,7 +388,9 @@ describe('agent-cli --remote host', () => {
       sessionId,
       mobileToken: pairResult.mobileToken,
       after: cursor,
-      matchEvent: (event) => event.type === 'chat_list_result' && event.payload?.requestId === listRequestId,
+      matchEvent: (event) => event.type === 'command_result'
+        && event.payload?.kind === 'chat_list'
+        && event.payload?.requestId === listRequestId,
     });
     cursor = chatListResult.cursor;
 
@@ -407,10 +409,10 @@ describe('agent-cli --remote host', () => {
       relayServer,
       sessionId,
       mobileToken: pairResult.mobileToken,
-      type: 'select_chat',
+      type: 'input',
       payload: {
         requestId: selectRequestId,
-        chatId: archivedChatId,
+        text: `/use ${archivedChatId}`,
       },
     });
 
@@ -419,7 +421,9 @@ describe('agent-cli --remote host', () => {
       sessionId,
       mobileToken: pairResult.mobileToken,
       after: cursor,
-      matchEvent: (event) => event.type === 'active_chat_changed' && event.payload?.requestId === selectRequestId,
+      matchEvent: (event) => event.type === 'command_result'
+        && event.payload?.kind === 'chat_selected'
+        && event.payload?.requestId === selectRequestId,
     });
     cursor = activeChatChanged.cursor;
 
@@ -439,10 +443,10 @@ describe('agent-cli --remote host', () => {
       relayServer,
       sessionId,
       mobileToken: pairResult.mobileToken,
-      type: 'read_chat_messages',
+      type: 'input',
       payload: {
         requestId: readMessagesRequestId,
-        chatId: archivedChatId,
+        text: `/messages ${archivedChatId}`,
       },
     });
 
@@ -451,7 +455,9 @@ describe('agent-cli --remote host', () => {
       sessionId,
       mobileToken: pairResult.mobileToken,
       after: cursor,
-      matchEvent: (event) => event.type === 'chat_messages_result' && event.payload?.requestId === readMessagesRequestId,
+      matchEvent: (event) => event.type === 'command_result'
+        && event.payload?.kind === 'chat_messages'
+        && event.payload?.requestId === readMessagesRequestId,
     });
     cursor = chatMessagesResult.cursor;
 

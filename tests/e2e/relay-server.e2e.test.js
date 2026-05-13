@@ -277,7 +277,7 @@ describe('relay server binary', () => {
       relayServer,
       sessionId: session.sessionId,
       mobileToken: firstPair.mobileToken,
-      type: 'user_message',
+      type: 'input',
       payload: { text: 'continue from e2e' },
       idempotencyKey: 'command-e2e',
     });
@@ -285,7 +285,7 @@ describe('relay server binary', () => {
       relayServer,
       sessionId: session.sessionId,
       mobileToken: firstPair.mobileToken,
-      type: 'user_message',
+      type: 'input',
       payload: { text: 'continue from e2e' },
       idempotencyKey: 'command-e2e',
     });
@@ -297,7 +297,7 @@ describe('relay server binary', () => {
     expect(polledCommands.commands).toEqual([
       expect.objectContaining({
         sequence: 1,
-        type: 'user_message',
+        type: 'input',
         payload: { text: 'continue from e2e' },
       }),
     ]);
@@ -418,8 +418,8 @@ describe('relay server binary', () => {
       relayServer,
       sessionId: session.sessionId,
       mobileToken: secondPair.mobileToken,
-      type: 'list_chats',
-      payload: { requestId: 'request-e2e-multi' },
+      type: 'input',
+      payload: { requestId: 'request-e2e-multi', text: '/chats' },
       idempotencyKey: 'command-e2e-multi',
     });
     const polledCommands = await commandPoll;
@@ -429,9 +429,9 @@ describe('relay server binary', () => {
     expect(polledCommands.commands).toEqual([
       expect.objectContaining({
         sequence: 1,
-        type: 'list_chats',
+        type: 'input',
         clientId: secondPair.clientId,
-        payload: { requestId: 'request-e2e-multi' },
+        payload: { requestId: 'request-e2e-multi', text: '/chats' },
       }),
     ]);
 
@@ -446,9 +446,10 @@ describe('relay server binary', () => {
       relayServer,
       sessionId: session.sessionId,
       desktopToken: session.desktopToken,
-      type: 'chat_list_result',
+      type: 'command_result',
       payload: {
         requestId: 'request-e2e-multi',
+        kind: 'chat_list',
         chats: [{ id: 'chat-e2e-multi-client', messageCount: 0 }],
       },
       targetClientId: firstPair.clientId,
@@ -475,7 +476,7 @@ describe('relay server binary', () => {
 
     expect(firstClientEvents.events.map((event) => event.type)).toEqual([
       'run_status',
-      'chat_list_result',
+      'command_result',
     ]);
     expect(secondClientEvents.events.map((event) => event.type)).toEqual([
       'run_status',

@@ -31,7 +31,7 @@ Use `--remote` to host the current local chat through the optional relay server.
 
 One remote host session can now serve multiple paired clients at the same time. After the first client pairs, the web UI can mint an additional one-time invite link for another browser or device without restarting the local CLI host.
 
-Paired browsers observe the same shared remote session over SSE. Shared assistant output, run status, approvals, completion, failure, session snapshot, and active-chat changes fan out to every authorized paired browser, while requester-specific query results such as chat-list reads or command errors stay targeted to the requesting client.
+Paired browsers observe the same shared remote session over SSE. Shared assistant output, run status, approvals, completion, failure, disconnect, and session snapshots fan out to every authorized paired browser, while requester-specific slash-command results and command errors stay targeted to the requesting client.
 
 `agent-cli --remote` is a long-running host process. It stays alive after startup, keeps the local project root locked for that remote session, and continues serving relay commands until the host exits, a client disconnect ends the session, or you press `Ctrl+C`.
 
@@ -84,18 +84,21 @@ npm run dev
 
 `npm run dev` starts the relay server first, waits for `/healthz`, then starts the web UI and `agent-cli --remote`.
 
-Paste the `Client connection URL` printed by `agent-cli --remote` into the web app and pair. The UI can send remote user messages, approval decisions, cancel/resume commands, and disconnect requests for the active local remote session.
+Paste the `Client connection URL` printed by `agent-cli --remote` into the web app and pair. The UI can send generic remote text input, approval decisions, cancel/resume commands, and disconnect requests for the active local remote session.
 
 If the browser is refreshed, the session URL is reopened, or the SSE stream drops transiently, the web client automatically restores the live session while the remote session is still valid. The relay sends heartbeat comments and resume-friendly event IDs so the browser can continue from its last confirmed event position without restarting the local CLI host.
 
-Paired clients can also:
-- request the local chat list
-- load persisted messages for a selected chat
-- create a new chat on the local host
-- switch which local chat is active for subsequent remote turns
-- create a new one-time invite link for another paired client
+Paired clients can also drive local chat-management through slash commands sent over the same generic input path:
+- `/chats`
+- `/messages <chatId>`
+- `/new`
+- `/use <chatId>`
 
-The deterministic relay and remote-host e2e coverage confirms that a real `agent-cli --remote` process stays up, serves client-driven chat listing and persisted chat-message reads, and supports resumed SSE streams through the relay.
+The browser UI uses that same slash-command path underneath its chat sidebar controls, so the relay stays transport-oriented instead of defining chat-specific remote command types.
+
+Paired clients can still create a new one-time invite link for another paired client.
+
+The deterministic relay and remote-host e2e coverage confirms that a real `agent-cli --remote` process stays up, serves slash-command-driven chat listing and persisted chat-message reads, and supports resumed SSE streams through the relay.
 
 ### Agent Files
 

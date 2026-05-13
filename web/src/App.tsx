@@ -13,6 +13,7 @@
  * - 2026-05-12: Kept the workspace title static and moved the session label into the subtitle.
  * - 2026-05-13: Added multi-client chat management and share-invite controls.
  * - 2026-05-13: Added automatic session restore for refresh/foreground resume plus reconnect-safe SSE handling.
+ * - 2026-05-13: Moved remote chat operations onto slash commands over a generic relay input path.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -636,6 +637,27 @@ export default function App() {
         continue;
       }
 
+      if (event.type === 'command_result') {
+        flushAssistantChunk();
+
+        const text = String(event.payload?.text ?? '').trim();
+
+        if (!text) {
+          continue;
+        }
+
+        derived.push({
+          id: `event-${event.sequence}`,
+          kind: 'message',
+          role: 'system',
+          text,
+          createdAt: event.createdAt,
+          meta: typeof event.payload?.commandText === 'string' ? event.payload.commandText : undefined,
+          tone: 'muted',
+        });
+        continue;
+      }
+
       flushAssistantChunk();
 
       if (
@@ -643,10 +665,7 @@ export default function App() {
         || event.type === 'failure'
         || event.type === 'disconnect'
         || event.type === 'session_snapshot'
-        || event.type === 'active_chat_changed'
-        || event.type === 'chat_created'
-        || event.type === 'chat_list_result'
-        || event.type === 'chat_messages_result'
+        || event.type === 'command_result'
         || event.type === 'command_error'
       ) {
         continue;
@@ -788,77 +807,92 @@ export default function App() {
       return;
     }
 
-    if (event.type === 'active_chat_changed') {
-      const nextActiveChatId = String(payload.chatId ?? '').trim();
-      const chatSummary = normalizeChatSummary(payload.chat);
-
-      if (nextActiveChatId) {
-        setActiveChatId(nextActiveChatId);
-        setAvailableChats((previous) => markCurrentChat(previous, nextActiveChatId));
-        setSelectedChatId(nextActiveChatId);
-        void requestChatMessages(nextActiveChatId);
-      }
-
-      if (chatSummary) {
-        setAvailableChats((previous) => markCurrentChat(upsertChatSummary(previous, {
-          ...chatSummary,
-          isCurrent: chatSummary.id === nextActiveChatId,
-        }), nextActiveChatId || chatSummary.id));
-      }
-
-      return;
-    }
-
-    if (event.type === 'chat_created') {
-      const chatSummary = normalizeChatSummary(payload.chat);
-
-      if (chatSummary) {
-        setAvailableChats((previous) => upsertChatSummary(previous, chatSummary));
-      }
-
-      return;
-    }
-
-    if (event.type === 'chat_list_result') {
+    if (event.type === 'command_result') {
       const requestId = String(payload.requestId ?? '');
-
-      if (latestChatListRequestIdRef.current && requestId && requestId !== latestChatListRequestIdRef.current) {
-        return;
-      }
-
-      const chats = Array.isArray(payload.chats)
-        ? payload.chats.map(normalizeChatSummary).filter((entry): entry is RelayChatSummary => entry !== null)
-        : [];
+      const resultKind = String(payload.kind ?? '');
       const nextActiveChatId = String(payload.activeChatId ?? activeChatId).trim();
 
-      setAvailableChats(markCurrentChat(chats, nextActiveChatId));
+      setActionErrorText('');
 
-      if (nextActiveChatId) {
-        setActiveChatId(nextActiveChatId);
-        setSelectedChatId((previous) => previous || nextActiveChatId || chats[0]?.id || '');
-      } else if (chats[0]?.id) {
-        setSelectedChatId((previous) => previous || chats[0].id);
-      }
+      if (resultKind === 'chat_list') {
+        if (latestChatListRequestIdRef.current && requestId && requestId !== latestChatListRequestIdRef.current) {
+          return;
+        }
 
-      setRefreshingChats(false);
-      return;
-    }
+        const chats = Array.isArray(payload.chats)
+          ? payload.chats.map(normalizeChatSummary).filter((entry): entry is RelayChatSummary => entry !== null)
+          : [];
 
-    if (event.type === 'chat_messages_result') {
-      const requestId = String(payload.requestId ?? '');
+        setAvailableChats(markCurrentChat(chats, nextActiveChatId));
 
-      if (latestChatMessagesRequestIdRef.current && requestId && requestId !== latestChatMessagesRequestIdRef.current) {
+        if (nextActiveChatId) {
+          setActiveChatId(nextActiveChatId);
+          setSelectedChatId((previous) => previous || nextActiveChatId || chats[0]?.id || '');
+        } else if (chats[0]?.id) {
+          setSelectedChatId((previous) => previous || chats[0].id);
+        }
+
+        setRefreshingChats(false);
+
+        if (typeof payload.text === 'string' && payload.text.trim()) {
+          setStatusText(payload.text);
+        }
+
         return;
       }
 
-      const chatId = String(payload.chatId ?? '').trim();
+      if (resultKind === 'chat_messages') {
+        if (latestChatMessagesRequestIdRef.current && requestId && requestId !== latestChatMessagesRequestIdRef.current) {
+          return;
+        }
 
-      if (chatId) {
-        setSelectedChatId(chatId);
+        const chatId = String(payload.chatId ?? '').trim();
+
+        if (chatId) {
+          setSelectedChatId(chatId);
+        }
+
+        setSelectedChatMessages(normalizeChatMessageList(payload.messages));
+        setSelectedChatLoading(false);
+
+        if (typeof payload.text === 'string' && payload.text.trim()) {
+          setStatusText(payload.text);
+        }
+
+        return;
       }
 
-      setSelectedChatMessages(normalizeChatMessageList(payload.messages));
-      setSelectedChatLoading(false);
+      if (resultKind === 'chat_selected') {
+        const chatSummary = normalizeChatSummary(payload.chat);
+
+        if (nextActiveChatId) {
+          setActiveChatId(nextActiveChatId);
+          setSelectedChatId(nextActiveChatId);
+          setSelectedChatMessages([]);
+          void requestChatMessages(nextActiveChatId);
+        }
+
+        if (chatSummary) {
+          setAvailableChats((previous) => markCurrentChat(upsertChatSummary(previous, {
+            ...chatSummary,
+            isCurrent: chatSummary.id === nextActiveChatId,
+          }), nextActiveChatId || chatSummary.id));
+        }
+
+        setRefreshingChats(false);
+        setCreatingChat(false);
+
+        if (typeof payload.text === 'string' && payload.text.trim()) {
+          setStatusText(payload.text);
+        }
+
+        return;
+      }
+
+      if (typeof payload.text === 'string' && payload.text.trim()) {
+        setStatusText(payload.text);
+      }
+
       return;
     }
 
@@ -1293,6 +1327,19 @@ export default function App() {
     });
   }
 
+  async function postInputCommand(
+    text: string,
+    requestId?: string,
+    nextRelayServer = relayServer,
+    nextSessionId = sessionId,
+    nextMobileToken = mobileToken,
+  ): Promise<void> {
+    await postCommand('input', {
+      text,
+      ...(requestId ? { requestId } : {}),
+    }, nextRelayServer, nextSessionId, nextMobileToken);
+  }
+
   async function requestChatList(
     nextRelayServer = relayServer,
     nextSessionId = sessionId,
@@ -1304,7 +1351,7 @@ export default function App() {
     try {
       const requestId = makeIdempotencyKey('list-chats');
       latestChatListRequestIdRef.current = requestId;
-      await postCommand('list_chats', { requestId }, nextRelayServer, nextSessionId, nextMobileToken);
+      await postInputCommand('/chats', requestId, nextRelayServer, nextSessionId, nextMobileToken);
     } catch (error) {
       setRefreshingChats(false);
       setActionErrorText(`Chat list failed: ${getErrorMessage(error)}`);
@@ -1328,7 +1375,7 @@ export default function App() {
     try {
       const requestId = makeIdempotencyKey('read-chat');
       latestChatMessagesRequestIdRef.current = requestId;
-      await postCommand('read_chat_messages', { requestId, chatId }, nextRelayServer, nextSessionId, nextMobileToken);
+      await postInputCommand(`/messages ${chatId}`, requestId, nextRelayServer, nextSessionId, nextMobileToken);
     } catch (error) {
       setSelectedChatLoading(false);
       setActionErrorText(`Chat history failed: ${getErrorMessage(error)}`);
@@ -1340,11 +1387,8 @@ export default function App() {
     setActionErrorText('');
 
     try {
-      await postCommand('create_chat', {
-        requestId: makeIdempotencyKey('create-chat'),
-      });
+      await postInputCommand('/new', makeIdempotencyKey('create-chat'));
       setStatusText('New chat requested from the local host.');
-      await requestChatList();
     } catch (error) {
       setActionErrorText(`Create chat failed: ${getErrorMessage(error)}`);
     } finally {
@@ -1360,10 +1404,7 @@ export default function App() {
     setActionErrorText('');
 
     try {
-      await postCommand('select_chat', {
-        requestId: makeIdempotencyKey('select-chat'),
-        chatId,
-      });
+      await postInputCommand(`/use ${chatId}`, makeIdempotencyKey('select-chat'));
       setStatusText(`Requested switch to chat ${chatId.slice(0, 8)}.`);
     } catch (error) {
       setActionErrorText(`Select chat failed: ${getErrorMessage(error)}`);
@@ -1418,7 +1459,7 @@ export default function App() {
     setOutboundMessages((previous) => [...previous, nextOutboundMessage].slice(-100));
 
     try {
-      await postCommand('user_message', { text });
+      await postInputCommand(text, messageId);
       setOutboundMessages((previous) => previous.map((message) => (
         message.id === messageId
           ? { ...message, status: 'sent' }
@@ -1751,7 +1792,7 @@ export default function App() {
                 value={messageInput}
                 onChange={(event) => setMessageInput(event.target.value)}
                 rows={3}
-                placeholder={mobileToken ? 'Message Agent...' : 'Connect to a live session to send messages'}
+                placeholder={mobileToken ? 'Send a prompt or slash command...' : 'Connect to a live session to send messages'}
                 disabled={!mobileToken}
               />
 
