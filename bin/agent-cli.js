@@ -27,9 +27,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { normalizeAgentConfig } from '../lib/agent-config.js';
 import { getBuiltInSystemPrompt, loadProjectSystemPrompt, loadSkillInventory } from '../lib/agent-files.js';
 import {
+  acquireRemoteHostLock,
+  assertNoActiveRemoteHost,
   loadRequestedChat,
   persistCompletedChat,
   persistRemoteSessionState,
+  releaseRemoteHostLock,
   persistStreamTraceEvents,
 } from '../lib/session-store.js';
 import * as relayClient from '../lib/relay-client.js';
@@ -579,6 +582,11 @@ export async function main(
     ...baseAgentConfig,
     ...runtimeOverrides,
   };
+
+  if (!remoteControl) {
+    await assertNoActiveRemoteHost();
+  }
+
   const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
     loadProjectSystemPrompt(),
     loadSkillInventory(),
@@ -594,34 +602,39 @@ export async function main(
   });
 
   if (remoteControl) {
+    await acquireRemoteHostLock({ chat });
     const relayServer = readRemoteRelayServerUrl(process.env);
 
-    await persistCompletedChat({
-      chat,
-      messages: chat.messages,
-    });
+    try {
+      await persistCompletedChat({
+        chat,
+        messages: chat.messages,
+      });
 
-    const relaySession = await runRemoteControlSession({
-      relayServer,
-      chat,
-      io,
-      initialMessage: message || undefined,
-      onSessionReady: async (startedRelaySession) => {
-        await persistRemoteSessionState({
-          chat,
-          remoteSession: startedRelaySession,
-        });
-      },
-      executeTurn,
-      relayClient,
-    });
+      const relaySession = await runRemoteControlSession({
+        relayServer,
+        chat,
+        io,
+        initialMessage: message || undefined,
+        onSessionReady: async (startedRelaySession) => {
+          await persistRemoteSessionState({
+            chat,
+            remoteSession: startedRelaySession,
+          });
+        },
+        executeTurn,
+        relayClient,
+      });
 
-    await persistRemoteSessionState({
-      chat,
-      remoteSession: relaySession,
-    });
+      await persistRemoteSessionState({
+        chat,
+        remoteSession: relaySession,
+      });
 
-    return relaySession;
+      return relaySession;
+    } finally {
+      await releaseRemoteHostLock();
+    }
   }
 
   return await executeTurn({

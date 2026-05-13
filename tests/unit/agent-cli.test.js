@@ -14,7 +14,7 @@
  * - 2026-05-07: Added flag coverage for the verbose CLI diagnostics mode.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -302,6 +302,30 @@ describe('agent-cli entrypoint', () => {
     await runCli(['--remote'], io);
 
     expect(io.getStderr()).toContain('Missing environment variable: AGENT_CLI_RELAY_SERVER_URL');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('rejects any CLI invocation when remote mode is already active for the root', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await mkdir(path.join(rootPath, '.chats'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.chats', 'remote-host.lock.json'),
+      `${JSON.stringify({ chatId: 'chat-remote-1', pid: process.pid }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const { runCli } = await loadCliModule(rootPath);
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['Inspect', 'status'], io);
+
+    expect(io.getStderr()).toContain('Remote mode already active for this project root');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;

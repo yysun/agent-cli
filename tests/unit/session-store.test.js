@@ -13,7 +13,7 @@
  * - 2026-05-07: Added targeted Vitest coverage for session persistence.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.js';
@@ -215,5 +215,70 @@ describe('session-store', () => {
       sessionId: 'relay-session-1',
       clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
     });
+  });
+
+  it('acquires and releases the remote host lock for the current root', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const {
+      acquireRemoteHostLock,
+      loadRequestedChat,
+      releaseRemoteHostLock,
+    } = await loadSessionStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: true });
+
+    await acquireRemoteHostLock({ chat });
+
+    const remoteLock = await readJson(path.join(rootPath, '.chats', 'remote-host.lock.json'));
+    expect(remoteLock).toMatchObject({
+      chatId: chat.id,
+      pid: process.pid,
+    });
+
+    await expect(releaseRemoteHostLock()).resolves.toBe(true);
+    await expect(readFile(path.join(rootPath, '.chats', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+  });
+
+  it('rejects when a live remote host lock already exists', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { assertNoActiveRemoteHost } = await loadSessionStore(rootPath);
+    await mkdir(path.join(rootPath, '.chats'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.chats', 'remote-host.lock.json'),
+      JSON.stringify({ chatId: 'chat-remote-1', pid: process.pid }, null, 2),
+      'utf8',
+    );
+
+    await expect(assertNoActiveRemoteHost()).rejects.toThrow(
+      `Remote mode already active for this project root (chat chat-remote-1, pid ${process.pid}).`,
+    );
+  });
+
+  it('clears a stale remote host lock before continuing', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { assertNoActiveRemoteHost } = await loadSessionStore(rootPath);
+    await mkdir(path.join(rootPath, '.chats'), { recursive: true });
+    const processKillSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const error = new Error('ESRCH');
+      // @ts-expect-error test-only process error shape
+      error.code = 'ESRCH';
+      throw error;
+    });
+
+    await writeFile(
+      path.join(rootPath, '.chats', 'remote-host.lock.json'),
+      JSON.stringify({ chatId: 'chat-stale-1', pid: 999999 }, null, 2),
+      'utf8',
+    );
+
+    await expect(assertNoActiveRemoteHost()).resolves.toBeNull();
+    await expect(readFile(path.join(rootPath, '.chats', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+
+    processKillSpy.mockRestore();
   });
 });

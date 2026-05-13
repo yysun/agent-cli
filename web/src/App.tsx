@@ -8,6 +8,9 @@
  * - Reads relay invite details from the current /pair URL when available.
  * - Streams relay events into a chat-first transcript with inline approval handling.
  * - Sends remote messages, run controls, and disconnect requests for the active session.
+ *
+ * Recent changes:
+ * - 2026-05-12: Kept the workspace title static and moved the session label into the subtitle.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -23,6 +26,11 @@ import {
   type RelayNotification,
   type RelayPayload,
 } from './relay-api';
+import {
+  buildResumeLocationHref,
+  selectStoredRelaySession,
+  type StoredRelaySession,
+} from './relay-session';
 
 type ApprovalEntry = {
   approvalId: string;
@@ -64,12 +72,6 @@ type InitialConnectionDraft = {
   pairingToken: string;
   statusText: string;
   inviteDetected: boolean;
-};
-
-type StoredRelaySession = {
-  relayServer: string;
-  sessionId: string;
-  mobileToken: string;
 };
 
 const STORED_RELAY_SESSION_KEY = 'agent-cli.relay-web-session';
@@ -241,9 +243,9 @@ function isInvalidStoredRelaySession(error: unknown): boolean {
     || message.includes('invalid relay session token');
 }
 
-function buildWorkspaceTitle(sessionId: string): string {
+function buildWorkspaceSubtitle(sessionId: string): string {
   if (!sessionId) {
-    return 'Remote Workspace';
+    return 'Desktop + Web sync';
   }
 
   return `Session ${sessionId.slice(0, 8)}`;
@@ -298,11 +300,31 @@ function logRelayNotification(notification: RelayNotification): void {
   });
 }
 
+function sanitizeConnectedLocation(sessionId: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const nextHref = buildResumeLocationHref(window.location.href, sessionId);
+
+    if (nextHref !== window.location.href) {
+      window.history.replaceState(null, '', nextHref);
+    }
+  } catch {
+    // Ignore URL rewrite failures and continue with the live session.
+  }
+}
+
 export default function App() {
   const initialDraft = useMemo(() => readInitialConnectionDraft(), []);
+  const availableStoredRelaySession = useMemo(() => readStoredRelaySession(), []);
   const storedRelaySession = useMemo(
-    () => (initialDraft.inviteDetected ? null : readStoredRelaySession()),
-    [initialDraft.inviteDetected],
+    () => selectStoredRelaySession(availableStoredRelaySession, {
+      inviteDetected: initialDraft.inviteDetected,
+      sessionId: initialDraft.sessionId,
+    }),
+    [availableStoredRelaySession, initialDraft.inviteDetected, initialDraft.sessionId],
   );
 
   const [connectionInput, setConnectionInput] = useState<string>(initialDraft.connectionUrlInput);
@@ -457,7 +479,7 @@ export default function App() {
     });
   }, [approvalDecisions, events, outboundMessages]);
 
-  const workspaceTitle = buildWorkspaceTitle(sessionId);
+  const workspaceSubtitle = buildWorkspaceSubtitle(sessionId);
 
   useEffect(() => {
     return () => {
@@ -628,6 +650,7 @@ export default function App() {
       sessionId: nextSessionId,
       mobileToken: nextMobileToken,
     });
+    sanitizeConnectedLocation(nextSessionId);
   }
 
   async function restoreStoredSession(storedSession: StoredRelaySession): Promise<void> {
@@ -821,8 +844,8 @@ export default function App() {
               <span />
             </div>
             <div>
-              <h1>{workspaceTitle}</h1>
-              <p className="conversation-subtitle">Desktop + Web sync</p>
+              <h1>Remote Workspace</h1>
+              <p className="conversation-subtitle">{workspaceSubtitle}</p>
             </div>
           </div>
 
@@ -980,15 +1003,6 @@ export default function App() {
           {actionErrorText ? <p className="error composer-error">{actionErrorText}</p> : null}
 
           <div className="composer-footer">
-            <div className="composer-tools">
-              <button type="button" className="tool-pill" onClick={() => void refreshNotificationList()} disabled={!mobileToken || refreshingNotifications}>
-                Alerts
-              </button>
-              <button type="button" className="tool-pill" onClick={() => void postCommand('resume').catch(() => undefined)} disabled={!mobileToken}>
-                Resume
-              </button>
-            </div>
-
             <div className="composer-send">
               <button type="button" className="secondary" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
                 Stop

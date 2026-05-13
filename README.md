@@ -89,6 +89,8 @@ Session chats are stored under `./.chats/{chatId}/` with:
 - `events.json`: optional stream trace when enabled
 - `remote.json`: optional remote-session metadata when `--remote` is used
 
+While a CLI process is running in `--remote` mode for a project root, other CLI invocations from that same root are rejected until the remote host exits. A stale lock from a dead process is cleared automatically on the next start.
+
 The CLI always includes a built-in default system prompt.
 If `./AGENTS.md` is present and non-empty, its content is added after the built-in prompt and before tools/skills guidance.
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
@@ -169,6 +171,13 @@ npm run relay-server:prod
 ```
 
 This serves the fixed `./web/dist` bundle from the same process while keeping relay APIs available. You can also pass custom values with `--host` and `PORT`.
+
+Examples:
+
+```bash
+npm run relay-server:prod -- --port 8080
+npm run relay-server:prod -- --host 0.0.0.0 --port 8080
+```
 
 ### Remote Safety
 
