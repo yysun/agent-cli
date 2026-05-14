@@ -14,6 +14,9 @@
  * - 2026-05-13: Added multi-client chat management and share-invite controls.
  * - 2026-05-13: Added automatic session restore for refresh/foreground resume plus reconnect-safe SSE handling.
  * - 2026-05-13: Moved remote chat operations onto slash commands over a generic relay input path.
+ * - 2026-05-13: Reworked the web shell into a responsive ChatGPT-like split layout with desktop collapse and mobile drawer behavior.
+ * - 2026-05-14: Removed the outer framed shell, switched sidebar toggles to SVG icons, and moved sidebar branding into the header.
+ * - 2026-05-14: Simplified the sidebar by removing chat preview and refresh controls and turning New Chat into a persistent icon action.
  */
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -364,6 +367,58 @@ function renderMessageBody(role: 'assistant' | 'user' | 'system', text: string):
   );
 }
 
+function renderSidebarToggleIcon(options: {
+  isMobile: boolean;
+  isSidebarVisible: boolean;
+  isSidebarCollapsed: boolean;
+}): JSX.Element {
+  if (options.isMobile) {
+    if (options.isSidebarVisible) {
+      return (
+        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M5 5l10 10" />
+          <path d="M15 5L5 15" />
+        </svg>
+      );
+    }
+
+    return (
+      <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+        <path d="M3.75 5.75h12.5" />
+        <path d="M3.75 10h12.5" />
+        <path d="M3.75 14.25h12.5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <rect x="3.25" y="4.25" width="13.5" height="11.5" rx="2" />
+      <path d="M8 4.75v10.5" />
+      {options.isSidebarCollapsed ? (
+        <>
+          <path d="M10.75 10h3" />
+          <path d="M12.25 8.25 14 10l-1.75 1.75" />
+        </>
+      ) : (
+        <>
+          <path d="M13.75 10h-3" />
+          <path d="M12.25 8.25 10.5 10l1.75 1.75" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function renderNewChatIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <path d="M10 4.25v11.5" />
+      <path d="M4.25 10h11.5" />
+    </svg>
+  );
+}
+
 function normalizeChatSummary(value: unknown): RelayChatSummary | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -532,6 +587,21 @@ export default function App() {
   const [selectedChatMessages, setSelectedChatMessages] = useState<RelayChatMessage[]>([]);
   const [selectedChatLoading, setSelectedChatLoading] = useState<boolean>(false);
   const [sharedInviteUrl, setSharedInviteUrl] = useState<string>('');
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+
+    return window.matchMedia('(max-width: 900px)').matches;
+  });
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') {
+      return true;
+    }
+
+    return !window.matchMedia('(max-width: 900px)').matches;
+  });
 
   const eventCursorRef = useRef<number>(0);
   const notificationCursorRef = useRef<number>(0);
@@ -544,6 +614,39 @@ export default function App() {
   const reconnectTimerRef = useRef<number | null>(null);
 
   const mobileName = 'web-supervisor';
+  const isSidebarVisible = !isMobileViewport || isSidebarOpen;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 900px)');
+    const syncLayoutMode = (matches: boolean) => {
+      setIsMobileViewport(matches);
+      setIsSidebarOpen(!matches);
+
+      if (matches) {
+        setIsSidebarCollapsed(false);
+      }
+    };
+
+    syncLayoutMode(mediaQuery.matches);
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      syncLayoutMode(event.matches);
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
 
   const chatEntries = useMemo<ChatEntry[]>(() => {
     const derived: ChatEntry[] = [];
@@ -1376,6 +1479,10 @@ export default function App() {
       const requestId = makeIdempotencyKey('read-chat');
       latestChatMessagesRequestIdRef.current = requestId;
       await postInputCommand(`/messages ${chatId}`, requestId, nextRelayServer, nextSessionId, nextMobileToken);
+
+      if (isMobileViewport) {
+        setIsSidebarOpen(false);
+      }
     } catch (error) {
       setSelectedChatLoading(false);
       setActionErrorText(`Chat history failed: ${getErrorMessage(error)}`);
@@ -1389,6 +1496,10 @@ export default function App() {
     try {
       await postInputCommand('/new', makeIdempotencyKey('create-chat'));
       setStatusText('New chat requested from the local host.');
+
+      if (isMobileViewport) {
+        setIsSidebarOpen(false);
+      }
     } catch (error) {
       setActionErrorText(`Create chat failed: ${getErrorMessage(error)}`);
     } finally {
@@ -1406,6 +1517,10 @@ export default function App() {
     try {
       await postInputCommand(`/use ${chatId}`, makeIdempotencyKey('select-chat'));
       setStatusText(`Requested switch to chat ${chatId.slice(0, 8)}.`);
+
+      if (isMobileViewport) {
+        setIsSidebarOpen(false);
+      }
     } catch (error) {
       setActionErrorText(`Select chat failed: ${getErrorMessage(error)}`);
     }
@@ -1519,183 +1634,98 @@ export default function App() {
     }
   }
 
+  function toggleSidebar(): void {
+    if (isMobileViewport) {
+      setIsSidebarOpen((previous) => !previous);
+      return;
+    }
+
+    setIsSidebarCollapsed((previous) => !previous);
+  }
+
+  function closeSidebar(): void {
+    if (isMobileViewport) {
+      setIsSidebarOpen(false);
+    }
+  }
+
   const selectedChatSummary = availableChats.find((chat) => chat.id === selectedChatId) ?? null;
 
   return (
     <div className="workspace-page">
-      <main className="workspace-shell">
-        <header className="conversation-header">
-          <div className="conversation-title-group">
-            <div className="workspace-icon" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div>
-              <h1>Remote Workspace</h1>
-              <p className="conversation-subtitle">{workspaceSubtitle}</p>
-            </div>
-          </div>
-
-          <div className="conversation-actions">
-            {mobileToken ? (
-              <>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => void createShareInvite()}
-                  disabled={creatingInvite}
-                >
-                  {creatingInvite ? 'Creating invite...' : 'Share invite'}
-                </button>
-                <button
-                  type="button"
-                  className="icon-action"
-                  onClick={() => void leaveSession()}
-                >
-                  Leave
-                </button>
-              </>
-            ) : (
-              <div className="header-connect-row">
-                <label className="header-session-field" htmlFor="session-id-input">
-                  <span>Invite link</span>
-                  <input
-                    id="session-id-input"
-                    type="text"
-                    value={connectionInput}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setConnectionInput(nextValue);
-
-                      if (!nextValue.trim()) {
-                        setSessionId('');
-                        setPairingToken('');
-                        setRelayServer(initialDraft.relayServer);
-                        setConnectErrorText('');
-                        return;
-                      }
-
-                      try {
-                        const parsed = parseClientConnectionUrl(nextValue);
-                        setRelayServer(parsed.relayServer);
-                        setSessionId(parsed.sessionId);
-                        setPairingToken(parsed.pairingToken);
-                        setConnectErrorText('');
-                      } catch {
-                        // Keep the raw input while the user is still typing an invite.
-                      }
-                    }}
-                    placeholder="Paste invite link or sessionId=...&pairingToken=..."
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => void connectSession()}
-                  disabled={connecting || (!initialDraft.inviteDetected && !connectionInput.trim())}
-                >
-                  {connecting ? 'Connecting...' : 'Connect'}
-                </button>
-              </div>
-            )}
-          </div>
-        </header>
-
-        {connectErrorText ? <p className="error page-error">{connectErrorText}</p> : null}
-
-        {mobileToken ? (
-          <section className="workspace-status-strip">
-            <p className="notification-pill">
-              <span className="notification-pill-title">Status</span>
-              {statusText}
-            </p>
-            <p className="notification-pill">
-              <span className="notification-pill-title">Client</span>
-              {clientId ? clientId.slice(0, 8) : 'Connected'}
-            </p>
-            <p className="notification-pill">
-              <span className="notification-pill-title">Notifications</span>
-              {refreshingNotifications ? 'Refreshing...' : 'Polling relay summaries'}
-            </p>
-          </section>
+      <main className={`workspace-shell ${isMobileViewport ? 'is-mobile' : 'is-desktop'} ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        {isMobileViewport && isSidebarVisible ? (
+          <button type="button" className="workspace-backdrop" aria-label="Close chats" onClick={closeSidebar} />
         ) : null}
 
-        {sharedInviteUrl ? (
-          <section className="workspace-share-strip">
-            <label className="share-invite-field" htmlFor="share-invite-output">
-              <span>Share this invite with another client</span>
-              <input id="share-invite-output" type="text" readOnly value={sharedInviteUrl} />
-            </label>
-          </section>
-        ) : null}
-
-        <div className="workspace-body">
-          <aside className="chat-sidebar">
-            <div className="sidebar-card">
-              <div className="sidebar-card-header">
-                <div>
-                  <h2>Chats</h2>
-                  <p>Browse local chats exposed by the remote host.</p>
-                </div>
-                <div className="sidebar-actions">
-                  <button type="button" className="secondary" onClick={() => void requestChatList()} disabled={!mobileToken || refreshingChats}>
-                    {refreshingChats ? 'Refreshing...' : 'Refresh'}
-                  </button>
-                  <button type="button" onClick={() => void requestCreateChat()} disabled={!mobileToken || creatingChat}>
-                    {creatingChat ? 'Creating...' : 'New chat'}
-                  </button>
-                </div>
+        <div className="workspace-frame">
+          <aside className={`chat-sidebar ${isSidebarVisible ? 'visible' : 'hidden'}${isSidebarCollapsed && !isMobileViewport ? ' collapsed' : ''}`} aria-label="Chat list">
+            <div className="sidebar-shell">
+              <div className="sidebar-topbar">
+                <button
+                  type="button"
+                  className="ghost sidebar-toggle"
+                  onClick={toggleSidebar}
+                  aria-label={isMobileViewport ? 'Close sidebar' : isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                  title={isMobileViewport ? 'Close sidebar' : isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                >
+                  {renderSidebarToggleIcon({
+                    isMobile: isMobileViewport,
+                    isSidebarVisible,
+                    isSidebarCollapsed,
+                  })}
+                </button>
               </div>
 
-              <div className="chat-list">
-                {availableChats.length === 0 ? (
-                  <p className="sidebar-empty">No chats loaded yet.</p>
-                ) : availableChats.map((chat) => (
-                  <article key={chat.id} className={`chat-list-card ${selectedChatId === chat.id ? 'selected' : ''}`}>
-                    <div className="chat-list-header">
-                      <strong>{formatChatTitle(chat)}</strong>
-                      {chat.id === activeChatId ? <span className="chat-badge">Active</span> : null}
-                    </div>
-                    <p className="chat-list-meta">Updated {formatTimestamp(chat.updatedAt)}</p>
-                    <div className="chat-list-actions">
-                      <button type="button" className="secondary" onClick={() => void requestChatMessages(chat.id)} disabled={!mobileToken}>
-                        View
+              <div className="sidebar-primary-actions">
+                <button
+                  type="button"
+                  className="sidebar-action sidebar-action-primary"
+                  onClick={() => void requestCreateChat()}
+                  disabled={!mobileToken || creatingChat}
+                  aria-label={creatingChat ? 'Creating new chat' : 'New chat'}
+                  title={creatingChat ? 'Creating new chat' : 'New chat'}
+                >
+                  {renderNewChatIcon()}
+                  <span className="sidebar-action-label">{creatingChat ? 'Creating...' : 'New Chat'}</span>
+                </button>
+              </div>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section-header">
+                  <span>Chats</span>
+                  <span className="sidebar-section-meta">{availableChats.length}</span>
+                </div>
+
+                <div className="chat-list">
+                  {availableChats.length === 0 ? (
+                    <p className="sidebar-empty">No chats loaded yet.</p>
+                  ) : availableChats.map((chat) => (
+                    <article key={chat.id} className={`chat-list-card ${selectedChatId === chat.id ? 'selected' : ''} ${chat.id === activeChatId ? 'active' : ''}`}>
+                      <button
+                        type="button"
+                        className="chat-list-button"
+                        onClick={() => void requestSelectChat(chat.id)}
+                        disabled={!mobileToken || chat.id === activeChatId}
+                      >
+                        <div className="chat-list-header">
+                          <strong>{formatChatTitle(chat)}</strong>
+                          {chat.id === activeChatId ? <span className="chat-badge">Live</span> : null}
+                        </div>
+                        <p className="chat-list-meta">Updated {formatTimestamp(chat.updatedAt)}</p>
                       </button>
-                      <button type="button" onClick={() => void requestSelectChat(chat.id)} disabled={!mobileToken || chat.id === activeChatId}>
-                        Use
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-
-            <div className="sidebar-card preview-card">
-              <div className="sidebar-card-header">
-                <div>
-                  <h2>Chat Preview</h2>
-                  <p>{selectedChatSummary ? selectedChatSummary.id : 'Select a chat to inspect its stored messages.'}</p>
+                    </article>
+                  ))}
                 </div>
-              </div>
+              </section>
 
-              <div className="chat-preview-list">
-                {selectedChatLoading ? <p className="sidebar-empty">Loading chat history...</p> : null}
-                {!selectedChatLoading && selectedChatMessages.length === 0 ? (
-                  <p className="sidebar-empty">No chat messages loaded.</p>
-                ) : selectedChatMessages.map((message, index) => (
-                  <article key={`${selectedChatId}-${message.createdAt ?? index}-${index}`} className="chat-preview-entry">
-                    <div className="chat-preview-meta">
-                      <span>{message.role}</span>
-                      <span>{formatTime(message.createdAt)}</span>
-                    </div>
-                    <p>{message.content || '(empty message)'}</p>
-                  </article>
-                ))}
-              </div>
-
-              <div className="sidebar-actions sidebar-footer-actions">
-                <button type="button" className="ghost destructive" onClick={() => void endSession()} disabled={!mobileToken || endingSession}>
+              <div className="sidebar-session-actions">
+                <button
+                  type="button"
+                  className="ghost destructive"
+                  onClick={() => void endSession()}
+                  disabled={!mobileToken || endingSession}
+                >
                   {endingSession ? 'Ending...' : 'End session'}
                 </button>
               </div>
@@ -1703,109 +1733,234 @@ export default function App() {
           </aside>
 
           <section className="workspace-main-column">
-            <section className="message-stream">
-              {chatEntries.map((entry) => {
-                if (entry.kind === 'approval') {
-                  const decisionLabel = entry.decision === undefined
-                    ? 'Pending'
-                    : entry.decision
-                      ? 'Approved'
-                      : 'Rejected';
+            <header className="conversation-header">
+              <div className="conversation-leading">
+                {isMobileViewport && !isSidebarVisible ? (
+                  <div className="conversation-toolbar">
+                    <button
+                      type="button"
+                      className="ghost shell-toggle"
+                      onClick={toggleSidebar}
+                      aria-label="Open chats"
+                      title="Open chats"
+                    >
+                      {renderSidebarToggleIcon({
+                        isMobile: isMobileViewport,
+                        isSidebarVisible,
+                        isSidebarCollapsed,
+                      })}
+                    </button>
+                  </div>
+                ) : null}
+                <div className="conversation-title-group">
+                  <div>
+                    <p className="conversation-eyebrow">Agent CLI</p>
+                    <h1>{selectedChatSummary ? formatChatTitle(selectedChatSummary) : 'Remote Workspace'}</h1>
+                    <p className="conversation-subtitle">{mobileToken ? workspaceSubtitle : 'Paste an invite to connect'}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="conversation-actions">
+                {mobileToken ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void createShareInvite()}
+                      disabled={creatingInvite}
+                    >
+                      {creatingInvite ? 'Creating invite...' : 'Share'}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void leaveSession()}
+                    >
+                      Leave
+                    </button>
+                  </>
+                ) : (
+                  <div className="header-connect-row">
+                    <label className="header-session-field" htmlFor="session-id-input">
+                      <span>Invite link</span>
+                      <input
+                        id="session-id-input"
+                        type="text"
+                        value={connectionInput}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setConnectionInput(nextValue);
+
+                          if (!nextValue.trim()) {
+                            setSessionId('');
+                            setPairingToken('');
+                            setRelayServer(initialDraft.relayServer);
+                            setConnectErrorText('');
+                            return;
+                          }
+
+                          try {
+                            const parsed = parseClientConnectionUrl(nextValue);
+                            setRelayServer(parsed.relayServer);
+                            setSessionId(parsed.sessionId);
+                            setPairingToken(parsed.pairingToken);
+                            setConnectErrorText('');
+                          } catch {
+                            // Keep the raw input while the user is still typing an invite.
+                          }
+                        }}
+                        placeholder="Paste invite link or sessionId=...&pairingToken=..."
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => void connectSession()}
+                      disabled={connecting || (!initialDraft.inviteDetected && !connectionInput.trim())}
+                    >
+                      {connecting ? 'Connecting...' : 'Connect'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </header>
+
+            {connectErrorText ? <p className="error page-error">{connectErrorText}</p> : null}
+
+            {sharedInviteUrl ? (
+              <section className="workspace-share-strip">
+                <label className="share-invite-field" htmlFor="share-invite-output">
+                  <span>Share this invite with another client</span>
+                  <input id="share-invite-output" type="text" readOnly value={sharedInviteUrl} />
+                </label>
+              </section>
+            ) : null}
+
+            <section className="message-stream-shell">
+              <section className="message-stream">
+                {chatEntries.length === 0 ? (
+                  <section className="message-row agent-row empty-row">
+                    <div className="message-stack shell-empty-state">
+                      <p className="shell-eyebrow">Agent CLI relay</p>
+                      <h2>{mobileToken ? 'Start the next turn' : 'Connect to a relay session'}</h2>
+                      <p>
+                        {mobileToken
+                          ? 'Use the sidebar to browse chats, then send a prompt or slash command from the composer below.'
+                          : 'Paste an invite link to pair this browser with a live local agent-cli --remote session.'}
+                      </p>
+                    </div>
+                  </section>
+                ) : null}
+
+                {chatEntries.map((entry) => {
+                  if (entry.kind === 'approval') {
+                    const decisionLabel = entry.decision === undefined
+                      ? 'Pending'
+                      : entry.decision
+                        ? 'Approved'
+                        : 'Rejected';
+
+                    return (
+                      <section key={entry.id} className="message-row agent-row approval-row">
+                        <div className="avatar agent-avatar">AI</div>
+                        <div className="message-stack">
+                          <div className="message-meta">
+                            <span>Agent</span>
+                            <span>{formatTime(entry.createdAt)}</span>
+                          </div>
+
+                          <article className="approval-card mock-card">
+                            <div className="approval-card-header">
+                              <div>
+                                <h3>Approval required</h3>
+                                <p>Allow {entry.approval.toolName} for this relay session?</p>
+                              </div>
+                              <span className={`approval-state ${entry.decision === undefined ? 'pending' : entry.decision ? 'approved' : 'rejected'}`}>
+                                {decisionLabel}
+                              </span>
+                            </div>
+
+                            <p className="approval-token mono">{entry.approval.approvalId}</p>
+                            <pre>{JSON.stringify(entry.approval.argumentSummary, null, 2)}</pre>
+
+                            <div className="approval-actions mock-actions">
+                              <button
+                                type="button"
+                                onClick={() => void sendApprovalDecision(entry.approval.approvalId, true)}
+                                disabled={!mobileToken || entry.decision !== undefined}
+                              >
+                                Approve once
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => void sendApprovalDecision(entry.approval.approvalId, false)}
+                                disabled={!mobileToken || entry.decision !== undefined}
+                              >
+                                Deny
+                              </button>
+                            </div>
+                          </article>
+                        </div>
+                      </section>
+                    );
+                  }
+
+                  const isUser = entry.role === 'user';
+                  const rowClassName = `message-row ${isUser ? 'user-row' : 'agent-row'}`;
+                  const bubbleClassName = `message-bubble ${isUser ? 'user-bubble' : entry.role === 'system' ? 'system-bubble' : 'agent-bubble'}${entry.tone === 'error' ? ' bubble-error' : ''}`;
 
                   return (
-                    <section key={entry.id} className="message-row agent-row approval-row">
-                      <div className="avatar agent-avatar">AI</div>
+                    <section key={entry.id} className={rowClassName}>
+                      {!isUser ? <div className={`avatar ${entry.role === 'system' ? 'system-avatar' : 'agent-avatar'}`}>{entry.role === 'system' ? 'R' : 'AI'}</div> : null}
+
                       <div className="message-stack">
-                        <div className="message-meta">
-                          <span>Agent</span>
+                        <div className={`message-meta ${isUser ? 'align-end' : ''}`}>
+                          <span>{isUser ? 'You' : entry.role === 'assistant' ? 'Agent' : 'Relay'}</span>
                           <span>{formatTime(entry.createdAt)}</span>
                         </div>
-
-                        <article className="approval-card mock-card">
-                          <div className="approval-card-header">
-                            <div>
-                              <h3>Approval required</h3>
-                              <p>Allow {entry.approval.toolName} for this relay session?</p>
-                            </div>
-                            <span className={`approval-state ${entry.decision === undefined ? 'pending' : entry.decision ? 'approved' : 'rejected'}`}>
-                              {decisionLabel}
-                            </span>
-                          </div>
-
-                          <p className="approval-token mono">{entry.approval.approvalId}</p>
-                          <pre>{JSON.stringify(entry.approval.argumentSummary, null, 2)}</pre>
-
-                          <div className="approval-actions mock-actions">
-                            <button
-                              type="button"
-                              onClick={() => void sendApprovalDecision(entry.approval.approvalId, true)}
-                              disabled={!mobileToken || entry.decision !== undefined}
-                            >
-                              Approve once
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() => void sendApprovalDecision(entry.approval.approvalId, false)}
-                              disabled={!mobileToken || entry.decision !== undefined}
-                            >
-                              Deny
-                            </button>
-                          </div>
+                        <article className={bubbleClassName}>
+                          {renderMessageBody(entry.role, entry.text)}
+                          {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
                         </article>
                       </div>
+
+                      {isUser ? <div className="avatar user-avatar">Y</div> : null}
                     </section>
                   );
-                }
+                })}
 
-                const isUser = entry.role === 'user';
-                const rowClassName = `message-row ${isUser ? 'user-row' : 'agent-row'}`;
-                const bubbleClassName = `message-bubble ${isUser ? 'user-bubble' : entry.role === 'system' ? 'system-bubble' : 'agent-bubble'}${entry.tone === 'error' ? ' bubble-error' : ''}`;
-
-                return (
-                  <section key={entry.id} className={rowClassName}>
-                    {!isUser ? <div className={`avatar ${entry.role === 'system' ? 'system-avatar' : 'agent-avatar'}`}>{entry.role === 'system' ? '•' : 'AI'}</div> : null}
-
-                    <div className="message-stack">
-                      <div className={`message-meta ${isUser ? 'align-end' : ''}`}>
-                        <span>{isUser ? 'You' : entry.role === 'assistant' ? 'Agent' : 'Relay'}</span>
-                        <span>{formatTime(entry.createdAt)}</span>
-                      </div>
-                      <article className={bubbleClassName}>
-                        {renderMessageBody(entry.role, entry.text)}
-                        {entry.meta ? <p className="bubble-footnote">{entry.meta}</p> : null}
-                      </article>
-                    </div>
-
-                    {isUser ? <div className="avatar user-avatar">Y</div> : null}
-                  </section>
-                );
-              })}
-
-              <div ref={transcriptEndRef} />
+                <div ref={transcriptEndRef} />
+              </section>
             </section>
 
             <form className="composer-panel" onSubmit={(event) => void submitMessage(event)}>
-              <label className="sr-only" htmlFor="message-input">Message Agent</label>
-              <textarea
-                id="message-input"
-                value={messageInput}
-                onChange={(event) => setMessageInput(event.target.value)}
-                rows={3}
-                placeholder={mobileToken ? 'Send a prompt or slash command...' : 'Connect to a live session to send messages'}
-                disabled={!mobileToken}
-              />
+              <div className="composer-shell">
+                <label className="sr-only" htmlFor="message-input">Message Agent</label>
+                <textarea
+                  id="message-input"
+                  value={messageInput}
+                  onChange={(event) => setMessageInput(event.target.value)}
+                  rows={3}
+                  placeholder={mobileToken ? 'Message the local agent or run a slash command...' : 'Connect to a live session to send messages'}
+                  disabled={!mobileToken}
+                />
 
-              {actionErrorText ? <p className="error composer-error">{actionErrorText}</p> : null}
+                {actionErrorText ? <p className="error composer-error">{actionErrorText}</p> : null}
 
-              <div className="composer-footer">
-                <div className="composer-send">
-                  <button type="button" className="secondary" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
-                    Stop
-                  </button>
-                  <button type="submit" disabled={sendingMessage || !mobileToken}>
-                    {sendingMessage ? 'Sending...' : 'Send'}
-                  </button>
+                <div className="composer-footer">
+                  <div className="composer-tools">
+                    <span className="composer-hint">{selectedChatId ? `Selected chat ${selectedChatId.slice(0, 8)}` : 'No chat selected'}</span>
+                  </div>
+                  <div className="composer-send">
+                    <button type="button" className="ghost" onClick={() => void postCommand('cancel').catch(() => undefined)} disabled={!mobileToken}>
+                      Stop
+                    </button>
+                    <button type="submit" disabled={sendingMessage || !mobileToken}>
+                      {sendingMessage ? 'Sending...' : 'Send'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </form>
