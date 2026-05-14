@@ -5,6 +5,7 @@ import { config as loadDotEnvConfig } from 'dotenv';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
 import { loadProjectSystemPrompt, loadSkillInventory } from '../../core/agent-files.js';
+import { REPO_ROOT } from '../../core/paths.js';
 import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
@@ -59,7 +60,10 @@ export interface MainOptions {
 }
 
 function loadAllowedDotEnvEnvironment(): void {
-  const parsed = loadDotEnvConfig({ processEnv: {} }).parsed ?? {};
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path.join(REPO_ROOT, '.env'),
+  }).parsed ?? {};
 
   for (const [key, value] of Object.entries(parsed)) {
     if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
@@ -101,7 +105,7 @@ export function usageText(): string {
   ].join('\n');
 }
 
-export function startupText(cwd = process.cwd()): string {
+export function startupText(cwd = REPO_ROOT): string {
   return `Agent CLI starting in ${cwd}`;
 }
 

@@ -7,7 +7,7 @@
  *
  * Key features:
  * - Prefers `process.cwd()` for normal execution.
- * - Re-resolves paths from the active cwd after module reloads.
+ * - Prefers `AGENT_CLI_ROOT` over `process.cwd()` when the override is present.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
@@ -15,6 +15,7 @@ import path from 'node:path';
 const originalCwd = process.cwd();
 
 afterEach(() => {
+  delete process.env.AGENT_CLI_ROOT;
   vi.resetModules();
   process.chdir(originalCwd);
 });
@@ -38,24 +39,20 @@ describe('paths', () => {
     );
   });
 
-  it('re-resolves the project root from the latest current working directory after a module reload', async () => {
-    const firstRoot = path.join(originalCwd, 'tests');
-    const secondRoot = path.join(originalCwd, 'web');
+  it('prefers AGENT_CLI_ROOT over the current working directory', async () => {
+    const overrideRoot = path.join(originalCwd, 'agent');
+    const cwdRoot = path.join(originalCwd, 'tests');
 
-    process.chdir(firstRoot);
-    const firstPaths = await import('../../core/paths.js');
+    process.env.AGENT_CLI_ROOT = overrideRoot;
+    process.chdir(cwdRoot);
 
-    expect(firstPaths.REPO_ROOT).toBe(firstRoot);
+    const paths = await import('../../core/paths.js');
 
-    vi.resetModules();
-    process.chdir(secondRoot);
-    const secondPaths = await import('../../core/paths.js');
-
-    expect(secondPaths.REPO_ROOT).toBe(secondRoot);
-    expect(secondPaths.SYSTEM_PROMPT_PATH).toBe(path.join(secondRoot, 'AGENTS.md'));
-    expect(secondPaths.ROOT_RUNTIME_CONFIG_PATH).toBe(path.join(secondRoot, 'runtime.json'));
-    expect(secondPaths.SKILLS_ROOT).toBe(path.join(secondRoot, '.agents', 'skills'));
-    expect(secondPaths.WORLD_STATE_PATH).toBe(path.join(secondRoot, '.agent-world', 'world.json'));
-    expect(secondPaths.REMOTE_HOST_LOCK_PATH).toBe(path.join(secondRoot, '.agent-world', 'remote-host.lock.json'));
+    expect(paths.REPO_ROOT).toBe(overrideRoot);
+    expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'AGENTS.md'));
+    expect(paths.ROOT_RUNTIME_CONFIG_PATH).toBe(path.join(overrideRoot, 'runtime.json'));
+    expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agents', 'skills'));
+    expect(paths.WORLD_STATE_PATH).toBe(path.join(overrideRoot, '.agent-world', 'world.json'));
+    expect(paths.REMOTE_HOST_LOCK_PATH).toBe(path.join(overrideRoot, '.agent-world', 'remote-host.lock.json'));
   });
 });

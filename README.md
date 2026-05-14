@@ -128,7 +128,7 @@ If `./AGENTS.md` is present and non-empty, its content is added after the built-
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
 
-The CLI treats the current working directory as the project root. Run it from the folder that contains `./AGENTS.md` when you want prompts, skills, runtime files, and `.agent-world/` storage to stay together.
+The CLI uses `AGENT_CLI_ROOT` as the project root when that environment variable is set. Otherwise it falls back to the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
 
 Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agents/skills/`.
 
@@ -164,7 +164,7 @@ The runtime file schema currently supports:
 
 The CLI parser accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
-Provider credentials still come from environment variables. When a local `.env` file is present, Agent CLI only loads provider credential keys and relay configuration from it.
+Provider credentials still come from environment variables. When a local `.env` file is present at the resolved project root, Agent CLI only loads provider credential keys and relay configuration from it.
 
 Non-credential runtime defaults such as provider selection, model, temperature, tool mode, search mode, history depth, streaming, and stream tracing should be set in `runtime.json` or on the command line rather than in `.env`.
 

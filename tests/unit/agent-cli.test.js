@@ -31,6 +31,7 @@ const tempPathsToClean = [];
 const rootsToClean = [];
 const originalCwd = process.cwd();
 const CLI_ENVIRONMENT_KEYS = [
+  'AGENT_CLI_ROOT',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
   'OPENAI_API_KEY',
@@ -526,6 +527,20 @@ describe('agent-cli entrypoint', () => {
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
+  });
+
+  it('loads .env from AGENT_CLI_ROOT and uses that root in startup diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+
+    delete process.env.GOOGLE_API_KEY;
+    process.env.AGENT_CLI_ROOT = rootPath;
+
+    const { startupText } = await loadCliModule();
+
+    expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
+    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
   });
 
   it('applies CLI runtime overrides over runtime.json defaults', async () => {

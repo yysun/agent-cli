@@ -16,7 +16,8 @@ import { promises as fs } from "node:fs";
 
 // core/paths.js
 import path from "node:path";
-var REPO_ROOT = process.cwd();
+var configuredRoot = String(process.env.AGENT_CLI_ROOT ?? "").trim();
+var REPO_ROOT = configuredRoot ? path.resolve(configuredRoot) : process.cwd();
 var SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, "AGENTS.md");
 var ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, "runtime.json");
 var SKILLS_ROOT = path.join(REPO_ROOT, ".agents", "skills");
@@ -2128,7 +2129,10 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AZURE_OPENAI_API_VERSION"
 ]);
 function loadAllowedDotEnvEnvironment() {
-  const parsed = loadDotEnvConfig({ processEnv: {} }).parsed ?? {};
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path4.join(REPO_ROOT, ".env")
+  }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
     if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
       continue;
@@ -2164,7 +2168,7 @@ function usageText() {
     "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
   ].join("\n");
 }
-function startupText(cwd = process.cwd()) {
+function startupText(cwd = REPO_ROOT) {
   return `Agent CLI starting in ${cwd}`;
 }
 function runtimeSelectionText(runtimeSettings) {
