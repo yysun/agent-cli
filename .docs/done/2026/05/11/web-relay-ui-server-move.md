@@ -21,7 +21,7 @@
    - remote command sending (`user_message`, `approval_decision`, `cancel`, `resume`)
    - session disconnect/revoke action
    - notification polling
-6. Added production static hosting support so the relay can serve the compiled React app from `web/dist`.
+6. Added production static hosting support so the relay can serve the compiled React app from `bin/public`.
 7. Fixed SPA routing so API routes remain authoritative and non-API routes fall back to `index.html`.
 8. Added relay server host/static-dir flags and a `relay-server:prod` helper script.
 9. Updated README with relay + web startup instructions and production static hosting guidance.

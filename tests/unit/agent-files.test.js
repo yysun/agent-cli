@@ -21,16 +21,17 @@ import { createTestRoot, ensureSkillsRoot, removeTestRoot, writeSkill, writeSyst
 
 /** @type {string[]} */
 const rootsToClean = [];
+const originalCwd = process.cwd();
 
 /** @param {string} rootPath */
 async function loadAgentFiles(rootPath) {
-  process.env.AGENT_CLI_ROOT = rootPath;
+  process.chdir(rootPath);
   vi.resetModules();
-  return await import('../../lib/agent-files.js');
+  return await import('../../core/agent-files.js');
 }
 
 afterEach(async () => {
-  delete process.env.AGENT_CLI_ROOT;
+  process.chdir(originalCwd);
   vi.doUnmock('node:fs');
 
   while (rootsToClean.length > 0) {

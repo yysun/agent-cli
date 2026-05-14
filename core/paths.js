@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Agent CLI Path Constants
  *
@@ -26,45 +27,45 @@ export const AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, 'agents');
 export const REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, 'remote-host.lock.json');
 /** @param {string} chatId */
 export function buildWorldChatDirectoryPath(chatId) {
-  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
+    return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
 /** @param {string} chatId */
 export function buildWorldChatMetadataPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), 'chat.json');
+    return path.join(buildWorldChatDirectoryPath(chatId), 'chat.json');
 }
 /** @param {string} chatId */
 export function buildWorldChatMessagesPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), 'messages.jsonl');
+    return path.join(buildWorldChatDirectoryPath(chatId), 'messages.jsonl');
 }
 /** @param {string} chatId */
 export function buildWorldChatSummaryPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), 'summary.md');
+    return path.join(buildWorldChatDirectoryPath(chatId), 'summary.md');
 }
 /** @param {string} agentId */
 export function buildAgentDirectoryPath(agentId) {
-  return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
+    return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
 }
 /** @param {string} agentId */
 export function buildAgentMetadataPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'agent.json');
+    return path.join(buildAgentDirectoryPath(agentId), 'agent.json');
 }
 /** @param {string} agentId */
 export function buildAgentInboxPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'inbox.jsonl');
+    return path.join(buildAgentDirectoryPath(agentId), 'inbox.jsonl');
 }
 /** @param {string} agentId */
 export function buildAgentStatePath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'state.json');
+    return path.join(buildAgentDirectoryPath(agentId), 'state.json');
 }
 /** @param {string} agentId */
 export function buildAgentEventsPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'events.jsonl');
+    return path.join(buildAgentDirectoryPath(agentId), 'events.jsonl');
 }
 /** @param {string} agentId */
 export function buildAgentMemoryPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'memory.md');
+    return path.join(buildAgentDirectoryPath(agentId), 'memory.md');
 }
 /** @param {string} agentId */
 export function buildAgentRuntimeConfigPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'runtime.json');
+    return path.join(buildAgentDirectoryPath(agentId), 'runtime.json');
 }

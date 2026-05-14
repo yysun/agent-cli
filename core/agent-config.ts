@@ -3,16 +3,27 @@
  * Agent CLI Agent Config Loading
  *
  * Purpose:
- * - Normalize runtime overrides from CLI flags.
+ * - Normalize runtime overrides from CLI flags and optional runtime.json files.
  *
  * Key features:
  * - Normalizes common aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
+ * - Loads repo-root runtime defaults from `./runtime.json` when present.
+ * - Applies an optional default-agent runtime override from `./.agent-world/agents/{agentId}/runtime.json`.
  * - Validates supported enum values before runtime calls.
  * - Keeps runtime override parsing separate from provider credential environment variables.
  *
  * Recent changes:
- * - 2026-05-07: Retired JSON config-file loading in favor of CLI+env runtime config.
+ * - 2026-05-07: Retired JSON config-file loading in favor of CLI/runtime-file config.
+ * - 2026-05-14: Restored optional runtime.json defaults at the repo root and default-agent scope.
  */
+
+import { promises as fs } from 'node:fs';
+
+import {
+  buildAgentRuntimeConfigPath,
+  ROOT_RUNTIME_CONFIG_PATH,
+  WORLD_STATE_PATH,
+} from './paths.js';
 
 const REASONING_EFFORTS = new Set(['default', 'none', 'low', 'medium', 'high']);
 const TOOL_PERMISSIONS = new Set(['auto', 'ask', 'read']);
@@ -234,20 +245,22 @@ function normalizeWebSearch(value) {
  *   reasoningEffort?: 'default' | 'none' | 'low' | 'medium' | 'high',
  *   webSearch?: boolean | { searchContextSize?: 'low' | 'medium' | 'high' },
  *   pastMessages?: number,
+ *   stream?: boolean,
  *   streamTrace?: boolean,
  * }} AgentConfig
  */
 
 const AGENT_CONFIG_ALIASES = {
-  provider: ['provider', 'LLM_PROVIDER'],
-  model: ['model', 'modal', 'LLM_MODEL'],
-  temperature: ['temperature', 'LLM_TEMPERATURE'],
-  maxTokens: ['maxTokens', 'maxOutputTokens', 'tokens', 'max-tokens', 'max-output-tokens', 'LLM_MAX_TOKENS'],
-  toolPermission: ['toolPermission', 'permission', 'permissions', 'tool-permission', 'LLM_TOOL_PERMISSION'],
-  reasoningEffort: ['reasoningEffort', 'reasoning', 'reasoning-effort', 'LLM_REASONING_EFFORT'],
-  pastMessages: ['pastMessages', 'historyMessages', 'past_messages', 'past-messages', 'history-messages', 'LLM_PAST_MESSAGES'],
-  streamTrace: ['streamTrace', 'stream_trace', 'stream-trace', 'LLM_STREAM_TRACE'],
-  webSearch: ['webSearch', 'web_search', 'web-search', 'LLM_WEB_SEARCH'],
+  provider: ['provider'],
+  model: ['model', 'modal'],
+  temperature: ['temperature'],
+  maxTokens: ['maxTokens', 'maxOutputTokens', 'tokens', 'max-tokens', 'max-output-tokens'],
+  toolPermission: ['toolPermission', 'permission', 'permissions', 'tool-permission'],
+  reasoningEffort: ['reasoningEffort', 'reasoning', 'reasoning-effort'],
+  pastMessages: ['pastMessages', 'historyMessages', 'past_messages', 'past-messages', 'history-messages'],
+  stream: ['stream'],
+  streamTrace: ['streamTrace', 'stream_trace', 'stream-trace'],
+  webSearch: ['webSearch', 'web_search', 'web-search'],
 };
 
 /**
@@ -280,6 +293,10 @@ export function normalizeAgentConfig(source) {
       readAliasedValue(configSource, AGENT_CONFIG_ALIASES.pastMessages),
       'pastMessages',
     ),
+    stream: normalizeBoolean(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.stream),
+      'stream',
+    ),
     streamTrace: normalizeBoolean(
       readAliasedValue(configSource, AGENT_CONFIG_ALIASES.streamTrace),
       'streamTrace',
@@ -295,4 +312,112 @@ export function normalizeAgentConfig(source) {
   return Object.fromEntries(
     Object.entries(normalizedConfig).filter(([, value]) => value !== undefined),
   );
+}
+
+/**
+ * @param {string} filePath
+ * @param {string} label
+ */
+async function readJsonFileIfPresent(filePath, label) {
+  let content;
+
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return null;
+    }
+
+    throw error;
+  }
+
+  let parsed;
+
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error(`Invalid ${label}: ${filePath}`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error(`Invalid ${label}: ${filePath}`);
+  }
+
+  return parsed;
+}
+
+/**
+ * @param {unknown} schemaVersion
+ * @param {string} filePath
+ */
+function validateRuntimeSchemaVersion(schemaVersion, filePath) {
+  if (schemaVersion === undefined || schemaVersion === null || schemaVersion === '') {
+    return;
+  }
+
+  const normalizedSchemaVersion = Number(schemaVersion);
+
+  if (normalizedSchemaVersion !== 1) {
+    throw new Error(`Unsupported runtime config schemaVersion in ${filePath}: expected 1.`);
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} source
+ * @param {string} filePath
+ */
+function normalizeRuntimeConfigFile(source, filePath) {
+  validateRuntimeSchemaVersion(source.schemaVersion, filePath);
+  return normalizeAgentConfig(source);
+}
+
+/** @param {string} filePath */
+async function loadRuntimeConfigFile(filePath) {
+  const config = await readJsonFileIfPresent(filePath, 'runtime config');
+
+  if (!config) {
+    return {};
+  }
+
+  return normalizeRuntimeConfigFile(config, filePath);
+}
+
+/** @param {string | undefined} agentId */
+function normalizeAgentId(agentId) {
+  if (agentId === undefined || agentId === null) {
+    return '';
+  }
+
+  const normalizedAgentId = String(agentId).trim();
+  return normalizedAgentId;
+}
+
+async function loadDefaultAgentIdFromWorld() {
+  const world = await readJsonFileIfPresent(WORLD_STATE_PATH, 'world metadata');
+
+  if (!world) {
+    return '';
+  }
+
+  return normalizeAgentId(world.defaultAgentId);
+}
+
+/**
+ * @param {{ agentId?: string }} [options]
+ */
+export async function loadPersistedRuntimeConfig(options = {}) {
+  const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
+  const configuredAgentId = normalizeAgentId(options.agentId);
+  const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
+
+  if (!defaultAgentId) {
+    return rootRuntimeConfig;
+  }
+
+  const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
+
+  return {
+    ...rootRuntimeConfig,
+    ...agentRuntimeConfig,
+  };
 }

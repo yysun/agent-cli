@@ -1,0 +1,287 @@
+import { loadPersistedRuntimeConfig } from '../../core/agent-config.js';
+import { getBuiltInSystemPrompt } from '../../core/agent-files.js';
+import {
+  persistCompletedChat,
+  persistStreamTraceEvents,
+} from '../../core/session-store.js';
+import { runChatTurn } from '../../core/runtime-client.js';
+
+export interface WritableSink {
+  write(chunk: string): void;
+}
+
+export interface CliIo {
+  stdout: WritableSink;
+  stderr?: WritableSink;
+}
+
+export interface SkillInventoryItem {
+  skillId: string;
+  description?: string;
+}
+
+export interface PersistedMessage extends Record<string, unknown> {
+  role?: string;
+  content?: string;
+  createdAt?: string;
+}
+
+export interface PersistedChat {
+  id: string;
+  messages: PersistedMessage[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ApprovalGate {
+  requestApproval?: (
+    request: Record<string, unknown>,
+  ) => Promise<{ approved?: boolean; reason?: string }>;
+}
+
+export interface StreamTraceEvent {
+  type: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface ResolveEffectiveAgentConfigOptions {
+  optionAgentConfig?: Record<string, unknown>;
+  runtimeOverrides?: Record<string, unknown>;
+  agentId?: string;
+}
+
+export interface CreateTurnExecutorOptions {
+  io: CliIo;
+  verbose: boolean;
+  streamOff: boolean;
+  agentConfig: Record<string, unknown>;
+  projectSystemPrompt?: string;
+  skillInventory: SkillInventoryItem[];
+}
+
+export interface ExecuteTurnParams {
+  chat: PersistedChat;
+  message: string;
+  approvalGate?: ApprovalGate;
+  abortSignal?: AbortSignal;
+  onAssistantChunk?: (chunkText: string) => Promise<void> | void;
+}
+
+function writeTypeTransitionSeparator(
+  stdout: WritableSink,
+  previousType: string | null,
+  nextType: string,
+): void {
+  if (previousType && previousType !== nextType) {
+    stdout.write('\n');
+  }
+}
+
+function writeDiagnostic(stderr: WritableSink, kind: string, text: string): void {
+  stderr.write(`${kind}: ${text}\n`);
+}
+
+export async function resolveEffectiveAgentConfig(
+  options: ResolveEffectiveAgentConfigOptions = {},
+): Promise<Record<string, unknown>> {
+  const persistedAgentConfig = await loadPersistedRuntimeConfig({
+    agentId: options.agentId,
+  });
+  const baseAgentConfig = {
+    ...persistedAgentConfig,
+    ...(options.optionAgentConfig ?? {}),
+  };
+
+  return {
+    ...baseAgentConfig,
+    ...(options.runtimeOverrides ?? {}),
+  };
+}
+
+export function createTurnExecutor(options: CreateTurnExecutorOptions) {
+  const builtInSystemPrompt = getBuiltInSystemPrompt();
+  const stderr = options.io.stderr ?? process.stderr;
+
+  return async function executeTurn({
+    chat,
+    message,
+    approvalGate,
+    abortSignal,
+    onAssistantChunk,
+  }: ExecuteTurnParams) {
+    const streamTraceEnabled = options.agentConfig.streamTrace === true;
+    const streamTraceEvents: StreamTraceEvent[] = [];
+    let lastStreamType: string | null = null;
+    let wroteTextChunk = false;
+    const pastMessages = Number(options.agentConfig.pastMessages);
+    const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
+      ? pastMessages
+      : 0;
+
+    try {
+      const turnResult = await runChatTurn({
+        chat,
+        userMessage: message,
+        stream: !options.streamOff,
+        approvalGate,
+        abortSignal,
+        onStreamChunk: options.streamOff
+          ? undefined
+          : async (chunk) => {
+            const reasoningText = [
+              chunk.reasoningContent,
+              chunk.reasoning,
+              chunk.reasoningText,
+              chunk.thinking,
+            ].find((value) => typeof value === 'string' && value.length > 0);
+            const streamErrors = [
+              ...(Array.isArray(chunk.errors) ? chunk.errors : []),
+              ...(chunk.error ? [chunk.error] : []),
+            ];
+
+            for (const warning of chunk.warnings ?? []) {
+              const warningText = String(
+                warning && typeof warning === 'object' && 'message' in warning
+                  ? warning.message
+                  : JSON.stringify(warning ?? null),
+              );
+
+              if (options.verbose) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
+                writeDiagnostic(stderr, 'warning', warningText);
+              }
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'warning',
+                  text: warningText,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'warning';
+            }
+
+            for (const streamError of streamErrors) {
+              const errorText = String(
+                streamError && typeof streamError === 'object' && 'message' in streamError
+                  ? streamError.message
+                  : JSON.stringify(streamError ?? null),
+              );
+
+              if (options.verbose) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
+                writeDiagnostic(stderr, 'error', errorText);
+              }
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'error',
+                  text: errorText,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'error';
+            }
+
+            if (reasoningText) {
+              if (options.verbose) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
+                writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
+              }
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'reasoning',
+                  text: reasoningText,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'reasoningContent';
+            }
+
+            if (chunk.content) {
+              options.io.stdout.write(chunk.content);
+              wroteTextChunk = true;
+              await onAssistantChunk?.(chunk.content);
+
+              if (streamTraceEnabled) {
+                streamTraceEvents.push({
+                  type: 'text',
+                  text: chunk.content,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+
+              lastStreamType = 'text';
+            }
+          },
+        onToolCall: options.streamOff
+          ? undefined
+          : (toolCall) => {
+            if (options.verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
+              writeDiagnostic(stderr, 'tool', toolCall.name);
+            }
+
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: 'tool',
+                text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
+                createdAt: new Date().toISOString(),
+              });
+            }
+
+            lastStreamType = 'tool';
+          },
+        historyMessageLimit,
+        builtInSystemPrompt,
+        projectSystemPrompt: options.projectSystemPrompt,
+        skillInventory: options.skillInventory,
+        agentConfig: options.agentConfig,
+      });
+
+      await persistCompletedChat({
+        chat,
+        messages: turnResult.messages,
+      });
+
+      if (streamTraceEnabled) {
+        await persistStreamTraceEvents({
+          chat,
+          streamTraceEvents,
+        });
+      }
+
+      chat.messages = turnResult.messages;
+
+      if (options.streamOff) {
+        options.io.stdout.write(`${turnResult.assistantText}\n`);
+      } else if (wroteTextChunk) {
+        options.io.stdout.write('\n');
+      }
+
+      return turnResult;
+    } catch (error) {
+      if (streamTraceEnabled) {
+        const errorText = error instanceof Error ? error.message : String(error);
+
+        streamTraceEvents.push({
+          type: 'error',
+          text: errorText,
+          createdAt: new Date().toISOString(),
+        });
+
+        await persistStreamTraceEvents({
+          chat,
+          streamTraceEvents,
+        });
+      }
+
+      throw error;
+    }
+  };
+}

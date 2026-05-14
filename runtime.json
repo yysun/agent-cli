@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "provider": "openai",
+  "model": "gpt-5",
+  "reasoningEffort": "medium",
+  "temperature": 0.2,
+  "maxTokens": 4096,
+  "toolPermission": "ask",
+  "webSearch": false,
+  "pastMessages": 20,
+  "stream": true,
+  "streamTrace": false
+}

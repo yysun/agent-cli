@@ -16,7 +16,7 @@
 import 'dotenv/config';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -27,11 +27,9 @@ import {
   writeSkill,
   writeSystemPrompt,
 } from '../helpers/test-root.js';
-import { validateRuntimeEnvironment } from '../../lib/runtime-client.js';
+import { validateRuntimeEnvironment } from '../../core/runtime-client.js';
 
 const RUNTIME_ENVIRONMENT_KEYS = [
-  'LLM_PROVIDER',
-  'LLM_MODEL',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'GOOGLE_API_KEY',
@@ -55,6 +53,7 @@ const FALLBACK_LIVE_MODELS = {
   xai: 'grok-3-mini',
 };
 const LIVE_E2E_TIMEOUT_MS = 30000;
+const originalCwd = process.cwd();
 
 const originalRuntimeEnvironment = captureRuntimeEnvironment();
 const liveRuntimeConfig = resolveRequiredLiveRuntimeConfig(originalRuntimeEnvironment);
@@ -77,60 +76,39 @@ function readEnvironmentValue(environment, key) {
  * @param {string} [model]
  */
 function createRuntimeConfiguration(provider, environment, model = '') {
-  /** @type {Record<string, string | undefined>} */
-  const candidateEnvironment = {
-    ...environment,
-    LLM_PROVIDER: provider,
-  };
-
-  if (String(model).trim()) {
-    candidateEnvironment.LLM_MODEL = String(model).trim();
-  } else {
-    delete candidateEnvironment.LLM_MODEL;
-  }
-
   let runtimeSettings;
 
   try {
-    runtimeSettings = validateRuntimeEnvironment(candidateEnvironment);
+    runtimeSettings = validateRuntimeEnvironment(environment, {
+      provider,
+      ...(String(model).trim() ? { model: String(model).trim() } : {}),
+    });
   } catch {
     return null;
   }
 
   return {
     enabled: true,
-    runtimeEnv: {
-      LLM_PROVIDER: runtimeSettings.provider,
-      LLM_MODEL: runtimeSettings.model,
+    runtimeConfig: {
+      provider: runtimeSettings.provider,
+      model: runtimeSettings.model,
     },
   };
 }
 
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} environment
- * @returns {{ enabled: boolean, runtimeEnv: Record<string, string> }}
+ * @returns {{ enabled: boolean, runtimeConfig: Record<string, string> }}
  */
 function resolveRequiredLiveRuntimeConfig(environment) {
-  const rawConfiguredProvider = readEnvironmentValue(environment, 'LLM_PROVIDER');
-  const configuredProvider = rawConfiguredProvider.toLowerCase();
-  const configuredModel = readEnvironmentValue(environment, 'LLM_MODEL');
-
-  if (configuredProvider) {
-    const explicitConfiguration = createRuntimeConfiguration(configuredProvider, environment, configuredModel);
-
-    if (explicitConfiguration) {
-      return explicitConfiguration;
-    }
-  }
-
   const rawFallbackConfigurations = [
     createRuntimeConfiguration('openai', environment, FALLBACK_LIVE_MODELS.openai),
     createRuntimeConfiguration('google', environment, FALLBACK_LIVE_MODELS.google),
     createRuntimeConfiguration('anthropic', environment, FALLBACK_LIVE_MODELS.anthropic),
     createRuntimeConfiguration('xai', environment, FALLBACK_LIVE_MODELS.xai),
-    createRuntimeConfiguration('azure', environment, configuredModel),
-    createRuntimeConfiguration('openai-compatible', environment, configuredModel),
-    createRuntimeConfiguration('ollama', environment, configuredModel),
+    createRuntimeConfiguration('azure', environment),
+    createRuntimeConfiguration('openai-compatible', environment),
+    createRuntimeConfiguration('ollama', environment),
   ];
 
   for (const fallbackConfiguration of rawFallbackConfigurations) {
@@ -140,7 +118,7 @@ function resolveRequiredLiveRuntimeConfig(environment) {
   }
 
   throw new Error(
-    'test:e2e requires a usable live LLM provider configuration. Set LLM_PROVIDER/LLM_MODEL with matching credentials, or configure any supported provider credentials for fallback selection.',
+    'test:e2e requires a usable live LLM provider configuration. Configure credentials for any supported provider so the test can write a matching runtime.json.',
   );
 }
 
@@ -160,10 +138,20 @@ function restoreRuntimeEnvironment(snapshot) {
 
 function applyLiveRuntimeEnvironment() {
   restoreRuntimeEnvironment(originalRuntimeEnvironment);
+}
 
-  for (const [key, value] of Object.entries(liveRuntimeConfig.runtimeEnv)) {
-    process.env[key] = value;
-  }
+/** @param {string} rootPath */
+async function writeLiveRuntimeConfig(rootPath) {
+  await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    ...liveRuntimeConfig.runtimeConfig,
+  }, null, 2)}\n`, 'utf8');
+}
+
+/** @param {string} filePath */
+async function readJsonl(filePath) {
+  const content = await readFile(filePath, 'utf8');
+  return content.split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
 }
 
 /**
@@ -222,13 +210,13 @@ function extractAssistantTextFromCliStdout(stdout) {
 
 /** @param {string} rootPath */
 async function loadCli(rootPath) {
-  process.env.AGENT_CLI_ROOT = rootPath;
+  process.chdir(rootPath);
   vi.resetModules();
   return await import('../../bin/agent-cli.js');
 }
 
 afterEach(async () => {
-  delete process.env.AGENT_CLI_ROOT;
+  process.chdir(originalCwd);
   restoreRuntimeEnvironment(originalRuntimeEnvironment);
 
   while (rootsToClean.length > 0) {
@@ -253,6 +241,7 @@ describe('agent-cli CLI', () => {
       'You are a terse test assistant. Reply in a single plain sentence without markdown.',
     );
     await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
     const io = createIoCapture();
@@ -264,13 +253,13 @@ describe('agent-cli CLI', () => {
 
     expect(assistantText.length).toBeGreaterThan(0);
 
-    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
-    const chatFilePath = path.join(rootPath, '.chats', current.chatId, 'messages.json');
-    const chat = await readJson(chatFilePath);
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const chatFilePath = path.join(rootPath, '.agent-world', 'chats', world.currentChatId, 'messages.jsonl');
+    const chatMessages = await readJsonl(chatFilePath);
     const rawChatFile = await readFile(chatFilePath, 'utf8');
 
-    expect(chat.messages[0]).toMatchObject({ role: 'user', content: userMessage });
-    expect(chat.messages.at(-1)).toMatchObject({ role: 'assistant', content: assistantText });
+    expect(chatMessages[0]).toMatchObject({ role: 'user', content: userMessage });
+    expect(chatMessages.at(-1)).toMatchObject({ role: 'assistant', content: assistantText });
     expect(rawChatFile).not.toContain('You are a terse test assistant.');
   }, LIVE_E2E_TIMEOUT_MS);
 
@@ -303,6 +292,7 @@ describe('agent-cli CLI', () => {
         'Keep the answer to one short sentence.',
       ].join('\n'),
     });
+    await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
     const io = createIoCapture();
@@ -315,9 +305,9 @@ describe('agent-cli CLI', () => {
     expect(assistantText).toContain(systemProbeToken);
     expect(assistantText).toContain(skillProbeToken);
 
-    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
-    const chat = await readJson(path.join(rootPath, '.chats', current.chatId, 'messages.json'));
-    const loadSkillMessage = chat.messages.find(
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', world.currentChatId, 'messages.jsonl'));
+    const loadSkillMessage = chatMessages.find(
       /** @param {{ role?: string, tool_calls?: Array<{ function?: { name?: string, arguments?: string } }> }} message */
       (message) => message.role === 'assistant'
         && Array.isArray(message.tool_calls)
@@ -338,19 +328,20 @@ describe('agent-cli CLI', () => {
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Keep responses under 20 words.');
     await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
 
     await main(['--new-chat', 'Say hello briefly.'], createIoCapture());
-    const firstCurrent = await readJson(path.join(rootPath, '.chats', 'current.json'));
+    const firstWorld = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
 
     const secondIo = createIoCapture();
     await main(['Now say goodbye briefly.'], secondIo);
 
-    const secondCurrent = await readJson(path.join(rootPath, '.chats', 'current.json'));
-    const chat = await readJson(path.join(rootPath, '.chats', secondCurrent.chatId, 'messages.json'));
+    const secondWorld = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', secondWorld.currentChatId, 'messages.jsonl'));
     const secondAssistantText = extractAssistantTextFromCliStdout(secondIo.getStdout());
-    const userMessages = chat.messages
+    const userMessages = chatMessages
       .filter(
         /** @param {{ role?: string }} message */
         (message) => message.role === 'user',
@@ -360,10 +351,10 @@ describe('agent-cli CLI', () => {
         (message) => message.content,
       );
 
-    expect(secondCurrent.chatId).toBe(firstCurrent.chatId);
+    expect(secondWorld.currentChatId).toBe(firstWorld.currentChatId);
     expect(userMessages).toEqual(['Say hello briefly.', 'Now say goodbye briefly.']);
     expect(secondAssistantText.length).toBeGreaterThan(0);
-    expect(chat.messages.at(-1)?.role).toBe('assistant');
+    expect(chatMessages.at(-1)?.role).toBe('assistant');
   }, LIVE_E2E_TIMEOUT_MS);
 
   it('starts a new chat when the current chat is missing', async () => {
@@ -373,19 +364,20 @@ describe('agent-cli CLI', () => {
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Reply in one short sentence.');
     await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
     const io = createIoCapture();
 
     await main(['follow up'], io);
 
-    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
-    const chat = await readJson(path.join(rootPath, '.chats', current.chatId, 'messages.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', world.currentChatId, 'messages.jsonl'));
     const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);
-    expect(chat.messages[0]).toMatchObject({ role: 'user', content: 'follow up' });
-    expect(chat.messages.at(-1)?.role).toBe('assistant');
+    expect(chatMessages[0]).toMatchObject({ role: 'user', content: 'follow up' });
+    expect(chatMessages.at(-1)?.role).toBe('assistant');
   }, LIVE_E2E_TIMEOUT_MS);
 
 });

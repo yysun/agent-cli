@@ -19,7 +19,7 @@ import {
   buildRemoteArgumentSummary,
   buildRemoteFailureSummary,
   runRemoteControlSession,
-} from '../../lib/remote-control.js';
+} from '../../core/remote-control.js';
 
 function createDeferred() {
   /** @type {(value: unknown) => void} */
@@ -375,6 +375,7 @@ describe('remote-control', () => {
         ],
       }),
       updateRemoteHostLock: vi.fn().mockResolvedValue(true),
+      persistRemoteSessionState: vi.fn().mockResolvedValue('/tmp/state.json'),
     };
 
     const sessionPromise = runRemoteControlSession({
@@ -450,6 +451,9 @@ describe('remote-control', () => {
     await vi.waitFor(() => {
       expect(chatStore.setCurrentChat).toHaveBeenCalledWith('chat-2');
       expect(chatStore.updateRemoteHostLock).toHaveBeenCalledWith({ chatId: 'chat-2' });
+      expect(chatStore.persistRemoteSessionState).toHaveBeenCalledWith({
+        remoteSession: expect.objectContaining({ sessionId: 'relay-session-1' }),
+      });
     });
 
     fifthPoll.resolve({
@@ -540,6 +544,7 @@ describe('remote-control', () => {
         messages: [],
       }),
       updateRemoteHostLock: vi.fn().mockResolvedValue(true),
+      persistRemoteSessionState: vi.fn().mockResolvedValue('/tmp/state.json'),
     };
 
     const sessionPromise = runRemoteControlSession({

@@ -192,7 +192,7 @@ function resolveProviderConfig(provider, environment) {
  * @returns {RuntimeSettings}
  */
 export function validateRuntimeEnvironment(environment = process.env, agentConfig = {}) {
-  const configuredProvider = String(agentConfig.provider ?? environment.LLM_PROVIDER ?? 'openai').trim();
+  const configuredProvider = String(agentConfig.provider ?? 'openai').trim();
   const normalizedProvider = configuredProvider.toLowerCase();
 
   if (!SUPPORTED_PROVIDERS.has(/** @type {LLMProviderName} */(normalizedProvider))) {
@@ -207,13 +207,12 @@ export function validateRuntimeEnvironment(environment = process.env, agentConfi
     : DEFAULT_MODELS[provider];
   const model = String(
     agentConfig.model
-    ?? environment.LLM_MODEL
     ?? providerDefaultModel
     ?? '',
   ).trim();
 
   if (!model) {
-    throw new Error(`Missing LLM model. Set LLM_MODEL for provider ${provider}.`);
+    throw new Error(`Missing LLM model. Set it in runtime.json or pass --model for provider ${provider}.`);
   }
 
   const providers = /** @type {LLMProviderConfigs} */ ({

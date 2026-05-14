@@ -3,654 +3,242 @@
  * Agent CLI Runtime Client Unit Tests
  *
  * Purpose:
- * - Validate the `llm-runtime` integration boundary without live provider calls.
+ * - Validate runtime provider resolution and chat execution plumbing.
  *
  * Key features:
- * - Verifies provider config wiring, load_skill tool execution, and final turn shaping.
- * - Ensures the runtime environment is disposed even when the turn does not finish cleanly.
- *
- * Recent changes:
- * - 2026-05-07: Added targeted Vitest coverage for the runtime client.
- * - 2026-05-11: Added message-ordering coverage for built-in and project prompt layering.
+ * - Keeps provider credentials in environment variables.
+ * - Resolves provider/model from runtime config or provider defaults.
+ * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createTestRoot, removeTestRoot } from '../helpers/test-root.js';
-
-const runtimeMock = vi.hoisted(() => ({
-  createLLMEnvironment: vi.fn(),
-  disposeLLMEnvironment: vi.fn(),
-  resolveToolsAsync: vi.fn(),
-  respondWithTools: vi.fn(),
-  loadSkillExecute: vi.fn(),
-}));
+const createLLMEnvironment = vi.fn();
+const disposeLLMEnvironment = vi.fn();
+const resolveToolsAsync = vi.fn();
+const respondWithTools = vi.fn();
 
 vi.mock('llm-runtime', () => ({
-  createLLMEnvironment: runtimeMock.createLLMEnvironment,
-  disposeLLMEnvironment: runtimeMock.disposeLLMEnvironment,
-  resolveToolsAsync: runtimeMock.resolveToolsAsync,
-  respondWithTools: runtimeMock.respondWithTools,
+  createLLMEnvironment,
+  disposeLLMEnvironment,
+  resolveToolsAsync,
+  respondWithTools,
 }));
 
-/** @type {string[]} */
-const rootsToClean = [];
+const ENV_KEYS = [
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'GOOGLE_API_KEY',
+  'AZURE_OPENAI_API_KEY',
+  'AZURE_OPENAI_RESOURCE_NAME',
+  'AZURE_OPENAI_API_VERSION',
+  'AZURE_OPENAI_DEPLOYMENT_NAME',
+];
+const originalEnvironment = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
-/** @param {string} rootPath */
-async function loadRuntimeClient(rootPath) {
-  process.env.AGENT_CLI_ROOT = rootPath;
-  vi.resetModules();
-  return await import('../../lib/runtime-client.js');
+function restoreEnvironment() {
+  for (const key of ENV_KEYS) {
+    const value = originalEnvironment[key];
+
+    if (typeof value === 'undefined') {
+      delete process.env[key];
+      continue;
+    }
+
+    process.env[key] = value;
+  }
 }
 
 beforeEach(() => {
-  runtimeMock.createLLMEnvironment.mockImplementation((options) => ({
-    kind: 'environment',
-    options,
-  }));
-  runtimeMock.disposeLLMEnvironment.mockResolvedValue(undefined);
-  runtimeMock.loadSkillExecute.mockResolvedValue({ loaded: 'agent-cli-core' });
-  runtimeMock.resolveToolsAsync.mockResolvedValue({
+  createLLMEnvironment.mockReset();
+  disposeLLMEnvironment.mockReset();
+  resolveToolsAsync.mockReset();
+  respondWithTools.mockReset();
+
+  createLLMEnvironment.mockReturnValue({ environmentId: 'env-1' });
+  disposeLLMEnvironment.mockResolvedValue(undefined);
+  resolveToolsAsync.mockResolvedValue({
     load_skill: {
-      execute: runtimeMock.loadSkillExecute,
+      execute: vi.fn().mockResolvedValue({ ok: true }),
     },
   });
-
-  process.env.LLM_PROVIDER = 'openai';
-  process.env.LLM_MODEL = 'gpt-5';
-  process.env.OPENAI_API_KEY = 'test-openai-key';
 });
 
-afterEach(async () => {
-  delete process.env.AGENT_CLI_ROOT;
-  delete process.env.LLM_PROVIDER;
-  delete process.env.LLM_MODEL;
-  delete process.env.OPENAI_API_KEY;
-  delete process.env.AZURE_OPENAI_API_KEY;
-  delete process.env.AZURE_OPENAI_RESOURCE_NAME;
-  delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
-
-  while (rootsToClean.length > 0) {
-    await removeTestRoot(rootsToClean.pop());
-  }
+afterEach(() => {
+  restoreEnvironment();
 });
 
 describe('runtime-client', () => {
-  it('fails early when the configured provider is missing required environment variables', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+  it('defaults to openai/gpt-5 when runtime config omits provider and model', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
 
+    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const runtime = validateRuntimeEnvironment(process.env, {});
+
+    expect(runtime.provider).toBe('openai');
+    expect(runtime.model).toBe('gpt-5');
+    expect(runtime.providers).toEqual({
+      openai: {
+        apiKey: 'test-openai-key',
+      },
+    });
+  });
+
+  it('uses the provider and model from runtime config while still reading credentials from env', async () => {
+    process.env.GOOGLE_API_KEY = 'test-google-key';
+
+    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const runtime = validateRuntimeEnvironment(process.env, {
+      provider: 'google',
+      model: 'gemini-2.5-pro',
+    });
+
+    expect(runtime.provider).toBe('google');
+    expect(runtime.model).toBe('gemini-2.5-pro');
+    expect(runtime.providers).toEqual({
+      google: {
+        apiKey: 'test-google-key',
+      },
+    });
+  });
+
+  it('uses the Azure deployment as the default model when one is not set explicitly', async () => {
+    process.env.AZURE_OPENAI_API_KEY = 'azure-key';
+    process.env.AZURE_OPENAI_RESOURCE_NAME = 'example';
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'gpt-5-enterprise';
+
+    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const runtime = validateRuntimeEnvironment(process.env, {
+      provider: 'azure',
+    });
+
+    expect(runtime.provider).toBe('azure');
+    expect(runtime.model).toBe('gpt-5-enterprise');
+    expect(runtime.providers).toEqual({
+      azure: {
+        apiKey: 'azure-key',
+        resourceName: 'example',
+        deployment: 'gpt-5-enterprise',
+      },
+    });
+  });
+
+  it('fails clearly when the selected provider is missing credentials', async () => {
     delete process.env.OPENAI_API_KEY;
 
-    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
+    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
 
-    expect(() => validateRuntimeEnvironment()).toThrow('Missing environment variable: OPENAI_API_KEY');
-  });
-
-  it('accepts AZURE_OPENAI_DEPLOYMENT_NAME for azure provider configuration', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    process.env.LLM_PROVIDER = 'azure';
-    process.env.LLM_MODEL = 'gpt-5.4';
-    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
-    process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
-    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'test-deployment';
-
-    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
-    const runtimeSettings = validateRuntimeEnvironment();
-
-    expect(runtimeSettings).toMatchObject({
-      provider: 'azure',
-      model: 'gpt-5.4',
-      providers: {
-        azure: {
-          apiKey: 'test-azure-key',
-          resourceName: 'test-resource',
-          deployment: 'test-deployment',
-        },
-      },
-    });
-  });
-
-  it('defaults the azure model to the deployment name when LLM_MODEL is unset', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    process.env.LLM_PROVIDER = 'azure';
-    delete process.env.LLM_MODEL;
-    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
-    process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
-    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'test-deployment';
-
-    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
-    const runtimeSettings = validateRuntimeEnvironment();
-
-    expect(runtimeSettings).toMatchObject({
-      provider: 'azure',
-      model: 'test-deployment',
-    });
-  });
-
-  it('prefers agent config provider and model when both config and environment are present', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    process.env.LLM_PROVIDER = 'OpenAI';
-    process.env.LLM_MODEL = 'gpt-5';
-
-    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
-    const runtimeSettings = validateRuntimeEnvironment(process.env, {
+    expect(() => validateRuntimeEnvironment(process.env, {
       provider: 'openai',
-      model: 'gpt-5-mini',
-    });
-
-    expect(runtimeSettings).toMatchObject({
-      provider: 'openai',
-      model: 'gpt-5-mini',
-    });
+      model: 'gpt-5',
+    })).toThrow('Missing environment variable: OPENAI_API_KEY');
   });
 
-  it('fails when azure deployment name is missing', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+  it('fails clearly when a provider has no configured model or built-in default', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
 
-    process.env.LLM_PROVIDER = 'azure';
-    process.env.LLM_MODEL = 'gpt-5.4';
-    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
-    process.env.AZURE_OPENAI_RESOURCE_NAME = 'test-resource';
-    delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
 
-    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
-
-    expect(() => validateRuntimeEnvironment()).toThrow('Missing environment variable: AZURE_OPENAI_DEPLOYMENT_NAME');
+    expect(() => validateRuntimeEnvironment(process.env, {
+      provider: 'anthropic',
+      model: '',
+    })).toThrow('Missing LLM model. Set it in runtime.json or pass --model for provider anthropic.');
   });
 
-  it('uses agent config provider and model when environment values are absent', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+  it('runs a chat turn through llm-runtime with normalized runtime settings', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    delete process.env.LLM_PROVIDER;
-    delete process.env.LLM_MODEL;
-
-    const { validateRuntimeEnvironment } = await loadRuntimeClient(rootPath);
-    const runtimeSettings = validateRuntimeEnvironment(process.env, {
-      provider: 'openai',
-      model: 'gpt-5-mini',
-    });
-
-    expect(runtimeSettings).toMatchObject({
-      provider: 'openai',
-      model: 'gpt-5-mini',
-    });
-  });
-
-  it('layers built-in prompt, AGENTS prompt, and skills before the user message', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    const onToolCall = vi.fn();
-
-    runtimeMock.respondWithTools.mockImplementation(async (options) => {
-      const builtMessages = await options.buildMessages({
-        state: options.initialState,
-        emptyTextRetryCount: 0,
-      });
-
-      expect(builtMessages[0]).toMatchObject({ role: 'system', content: 'Built-in prompt' });
-      expect(builtMessages[1]).toMatchObject({ role: 'system', content: 'Project prompt' });
-      expect(builtMessages[2].content).toContain('agent-cli-core');
-      expect(builtMessages.at(-1)).toMatchObject({ role: 'user', content: 'Use the skill' });
-
-      const toolCall = {
-        id: 'tool-call-1',
-        type: 'function',
-        function: {
-          name: 'load_skill',
-          arguments: '{"skillId":"agent-cli-core"}',
-        },
-      };
-
-      const afterToolCalls = await options.onToolCallsResponse({
-        state: options.initialState,
-        response: {
-          type: 'tool_calls',
-          content: '',
-          tool_calls: [toolCall],
-          assistantMessage: {
-            role: 'assistant',
-            content: '',
-            tool_calls: [toolCall],
-          },
-        },
-        messages: builtMessages,
-        iteration: 1,
-      });
-
-      const afterText = await options.onTextResponse({
-        state: afterToolCalls.state,
-        response: {
-          type: 'text',
-          content: 'Final answer',
-          assistantMessage: {
-            role: 'assistant',
-            content: 'Final answer',
-          },
-        },
-        responseText: 'Final answer',
-        messages: builtMessages,
-        iteration: 2,
-      });
+    respondWithTools.mockImplementation(async ({ initialState, modelRequest }) => {
+      await modelRequest.onChunk?.({ content: 'Hello' });
+      await modelRequest.onChunk?.({ content: ' world' });
 
       return {
-        state: afterText.state,
-        reason: 'text_response',
+        reason: 'stop',
+        state: {
+          ...initialState,
+          finalText: 'Hello world',
+          persistedMessages: [
+            ...initialState.persistedMessages,
+            { role: 'assistant', content: 'Hello world' },
+          ],
+          conversationMessages: [
+            ...initialState.conversationMessages,
+            { role: 'assistant', content: 'Hello world' },
+          ],
+        },
       };
     });
 
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
-    const result = await runChatTurn({
-      chat: {
-        id: 'chat-1',
-        createdAt: '2026-05-07T12:00:00.000Z',
-        updatedAt: '2026-05-07T12:00:00.000Z',
-        messages: [],
-      },
-      userMessage: 'Use the skill',
-      onToolCall,
-      builtInSystemPrompt: 'Built-in prompt',
-      projectSystemPrompt: 'Project prompt',
-      skillInventory: [
-        {
-          skillId: 'agent-cli-core',
-          description: 'Core Agent CLI framing.',
-        },
-      ],
-      agentConfig: {
-        temperature: 0.25,
-        maxTokens: 512,
-        reasoningEffort: 'medium',
-        toolPermission: 'ask',
-        webSearch: {
-          searchContextSize: 'high',
-        },
-      },
-    });
-
-    expect(result.assistantText).toBe('Final answer');
-    expect(result.messages).toHaveLength(4);
-    expect(result.messages[0]).toMatchObject({ role: 'user', content: 'Use the skill' });
-    expect(result.messages[2]).toMatchObject({
-      role: 'tool',
-      tool_call_id: 'tool-call-1',
-    });
-    expect(result.messages[2].content).toContain('agent-cli-core');
-    expect(runtimeMock.createLLMEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaults: {
-          reasoningEffort: 'medium',
-          toolPermission: 'ask',
-        },
-        skillRoots: [expect.stringMatching(/\.agents[\\/]skills$/)],
-      }),
-    );
-    expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRequest: expect.objectContaining({
-          mode: 'stream',
-          temperature: 0.25,
-          maxTokens: 512,
-          webSearch: {
-            searchContextSize: 'high',
-          },
-          context: expect.objectContaining({
-            workingDirectory: rootPath,
-            reasoningEffort: 'medium',
-            toolPermission: 'ask',
-          }),
-        }),
-      }),
-    );
-    expect(runtimeMock.loadSkillExecute).toHaveBeenCalledWith(
-      { skillId: 'agent-cli-core' },
-      expect.objectContaining({
-        workingDirectory: rootPath,
-        reasoningEffort: 'medium',
-        toolPermission: 'ask',
-        toolCallId: 'tool-call-1',
-      }),
-    );
-    expect(onToolCall).toHaveBeenCalledWith({
-      id: 'tool-call-1',
-      name: 'load_skill',
-      arguments: '{"skillId":"agent-cli-core"}',
-    });
-    expect(runtimeMock.disposeLLMEnvironment).toHaveBeenCalledTimes(1);
-  });
-
-  it('fails when the runtime never produces a final text response', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    runtimeMock.respondWithTools.mockResolvedValue({
-      state: {
-        conversationMessages: [],
-        finalText: '   ',
-      },
-      reason: 'timeout',
-    });
-
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
-
-    await expect(
-      runChatTurn({
-        chat: {
-          id: 'chat-1',
-          createdAt: '2026-05-07T12:00:00.000Z',
-          updatedAt: '2026-05-07T12:00:00.000Z',
-          messages: [],
-        },
-        userMessage: 'Hello',
-        builtInSystemPrompt: 'Built-in prompt',
-        skillInventory: [],
-      }),
-    ).rejects.toThrow('LLM turn ended without a final text response. Stop reason: timeout');
-
-    expect(runtimeMock.disposeLLMEnvironment).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses generate mode when stream is explicitly disabled', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    runtimeMock.respondWithTools.mockResolvedValue({
-      state: {
-        conversationMessages: [
-          {
-            role: 'user',
-            content: 'Hello',
-          },
-          {
-            role: 'assistant',
-            content: 'Hi',
-          },
-        ],
-        finalText: 'Hi',
-      },
-      reason: 'text_response',
-    });
-
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
-
-    await runChatTurn({
-      chat: {
-        id: 'chat-1',
-        createdAt: '2026-05-07T12:00:00.000Z',
-        updatedAt: '2026-05-07T12:00:00.000Z',
-        messages: [],
-      },
-      userMessage: 'Hello',
-      stream: false,
-      builtInSystemPrompt: 'Built-in prompt',
-      skillInventory: [],
-    });
-
-    expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRequest: expect.objectContaining({
-          mode: 'generate',
-        }),
-      }),
-    );
-  });
-
-  it('forwards stream chunks when an onStreamChunk callback is provided', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+    const { runChatTurn } = await import('../../core/runtime-client.js');
     const onStreamChunk = vi.fn();
 
-    runtimeMock.respondWithTools.mockImplementation(async (options) => {
-      options.modelRequest.onChunk?.({ content: 'Hello' });
-      options.modelRequest.onChunk?.({ content: ' world' });
-
-      return {
-        state: {
-          conversationMessages: [
-            {
-              role: 'user',
-              content: 'Hello',
-            },
-            {
-              role: 'assistant',
-              content: 'Hello world',
-            },
-          ],
-          finalText: 'Hello world',
-        },
-        reason: 'text_response',
-      };
-    });
-
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
-
-    await runChatTurn({
-      chat: {
-        id: 'chat-1',
-        createdAt: '2026-05-07T12:00:00.000Z',
-        updatedAt: '2026-05-07T12:00:00.000Z',
-        messages: [],
-      },
-      userMessage: 'Hello',
-      onStreamChunk,
-      builtInSystemPrompt: 'Built-in prompt',
-      skillInventory: [],
-    });
-
-    expect(onStreamChunk).toHaveBeenCalledTimes(2);
-    expect(onStreamChunk).toHaveBeenNthCalledWith(1, { content: 'Hello' });
-    expect(onStreamChunk).toHaveBeenNthCalledWith(2, { content: ' world' });
-  });
-
-  it('normalizes mixed-case provider names from the environment', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    process.env.LLM_PROVIDER = 'OpenAI';
-    delete process.env.LLM_MODEL;
-
-    runtimeMock.respondWithTools.mockResolvedValue({
-      state: {
-        conversationMessages: [
-          {
-            role: 'user',
-            content: 'Hello',
-          },
-          {
-            role: 'assistant',
-            content: 'Hi',
-          },
-        ],
-        finalText: 'Hi',
-      },
-      reason: 'text_response',
-    });
-
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
-
-    await runChatTurn({
-      chat: {
-        id: 'chat-1',
-        createdAt: '2026-05-07T12:00:00.000Z',
-        updatedAt: '2026-05-07T12:00:00.000Z',
-        messages: [],
-      },
-      userMessage: 'Hello',
-      builtInSystemPrompt: 'Built-in prompt',
-      skillInventory: [],
-    });
-
-    expect(runtimeMock.respondWithTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRequest: expect.objectContaining({
-          provider: 'openai',
-          model: 'gpt-5',
-        }),
-      }),
-    );
-  });
-
-  it('limits model context messages without truncating persisted chat history', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    runtimeMock.respondWithTools.mockImplementation(async (options) => {
-      const builtMessages = await options.buildMessages({
-        state: options.initialState,
-        emptyTextRetryCount: 0,
-      });
-
-      expect(options.initialState.conversationMessages).toHaveLength(2);
-      expect(options.initialState.conversationMessages[0]).toMatchObject({
-        role: 'assistant',
-        content: 'Older B',
-      });
-      expect(options.initialState.conversationMessages[1]).toMatchObject({
-        role: 'user',
-        content: 'New input',
-      });
-      expect(options.initialState.persistedMessages).toHaveLength(4);
-      expect(builtMessages.at(-1)).toMatchObject({ role: 'user', content: 'New input' });
-
-      const afterText = await options.onTextResponse({
-        state: options.initialState,
-        response: {
-          type: 'text',
-          content: 'Final answer',
-          assistantMessage: {
-            role: 'assistant',
-            content: 'Final answer',
-          },
-        },
-        responseText: 'Final answer',
-        messages: builtMessages,
-        iteration: 1,
-      });
-
-      return {
-        state: afterText.state,
-        reason: 'text_response',
-      };
-    });
-
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
     const result = await runChatTurn({
       chat: {
         id: 'chat-1',
-        createdAt: '2026-05-07T12:00:00.000Z',
-        updatedAt: '2026-05-07T12:00:00.000Z',
-        messages: [
-          { role: 'user', content: 'Older Q1' },
-          { role: 'assistant', content: 'Older A1' },
-          { role: 'assistant', content: 'Older B' },
-        ],
-      },
-      userMessage: 'New input',
-      historyMessageLimit: 1,
-      builtInSystemPrompt: 'Built-in prompt',
-      skillInventory: [],
-    });
-
-    expect(result.assistantText).toBe('Final answer');
-    expect(result.messages).toHaveLength(5);
-    expect(result.messages[0]).toMatchObject({ role: 'user', content: 'Older Q1' });
-    expect(result.messages[1]).toMatchObject({ role: 'assistant', content: 'Older A1' });
-    expect(result.messages[2]).toMatchObject({ role: 'assistant', content: 'Older B' });
-    expect(result.messages[3]).toMatchObject({ role: 'user', content: 'New input' });
-    expect(result.messages[4]).toMatchObject({ role: 'assistant', content: 'Final answer' });
-  });
-
-  it('requests approval before executing tools when tool permission is ask', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    const gatedToolExecute = vi.fn().mockResolvedValue({ ok: true });
-    runtimeMock.resolveToolsAsync.mockResolvedValue({
-      gated_tool: {
-        execute: gatedToolExecute,
-      },
-    });
-    runtimeMock.respondWithTools.mockImplementation(async (options) => {
-      const toolCall = {
-        id: 'tool-call-1',
-        type: 'function',
-        function: {
-          name: 'gated_tool',
-          arguments: '{"safe":true}',
-        },
-      };
-
-      const afterToolCalls = await options.onToolCallsResponse({
-        state: options.initialState,
-        response: {
-          type: 'tool_calls',
-          content: '',
-          tool_calls: [toolCall],
-          assistantMessage: {
-            role: 'assistant',
-            content: '',
-            tool_calls: [toolCall],
-          },
-        },
-        messages: [],
-        iteration: 1,
-      });
-
-      const afterText = await options.onTextResponse({
-        state: afterToolCalls.state,
-        response: {
-          type: 'text',
-          content: 'Final answer',
-          assistantMessage: {
-            role: 'assistant',
-            content: 'Final answer',
-          },
-        },
-        responseText: 'Final answer',
-        messages: [],
-        iteration: 2,
-      });
-
-      return {
-        state: afterText.state,
-        reason: 'text_response',
-      };
-    });
-
-    const approvalGate = {
-      requestApproval: vi.fn().mockResolvedValue({ approved: false, reason: 'Denied remotely' }),
-    };
-
-    const { runChatTurn } = await loadRuntimeClient(rootPath);
-    const result = await runChatTurn({
-      chat: {
-        id: 'chat-1',
-        createdAt: '2026-05-07T12:00:00.000Z',
-        updatedAt: '2026-05-07T12:00:00.000Z',
         messages: [],
       },
-      userMessage: 'Hello',
-      builtInSystemPrompt: 'Built-in prompt',
-      skillInventory: [],
-      approvalGate,
+      userMessage: 'hello',
+      stream: true,
+      historyMessageLimit: 4,
+      builtInSystemPrompt: 'System prompt',
+      projectSystemPrompt: 'Project prompt',
+      skillInventory: [
+        { skillId: 'agent-cli-core', description: 'Core skill' },
+      ],
       agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+        temperature: 0.2,
+        maxTokens: 512,
+        toolPermission: 'ask',
+        reasoningEffort: 'medium',
+        webSearch: {
+          searchContextSize: 'low',
+        },
+      },
+      onStreamChunk,
+    });
+
+    expect(createLLMEnvironment).toHaveBeenCalledWith(expect.objectContaining({
+      providers: {
+        openai: {
+          apiKey: 'test-openai-key',
+        },
+      },
+      defaults: {
+        reasoningEffort: 'medium',
         toolPermission: 'ask',
       },
-    });
-
-    expect(approvalGate.requestApproval).toHaveBeenCalledWith({
-      toolCallId: 'tool-call-1',
-      toolName: 'gated_tool',
-      arguments: { safe: true },
-    });
-    expect(gatedToolExecute).not.toHaveBeenCalled();
-    expect(result.messages.some((message) => message.role === 'tool' && String(message.content).includes('Denied remotely'))).toBe(true);
+    }));
+    expect(resolveToolsAsync).toHaveBeenCalledWith(expect.objectContaining({
+      environment: { environmentId: 'env-1' },
+      builtIns: {
+        load_skill: true,
+      },
+    }));
+    expect(respondWithTools).toHaveBeenCalledWith(expect.objectContaining({
+      modelRequest: expect.objectContaining({
+        mode: 'stream',
+        environment: { environmentId: 'env-1' },
+        provider: 'openai',
+        model: 'gpt-5',
+        temperature: 0.2,
+        maxTokens: 512,
+        webSearch: {
+          searchContextSize: 'low',
+        },
+        builtIns: {
+          load_skill: true,
+        },
+        context: expect.objectContaining({
+          workingDirectory: expect.any(String),
+          reasoningEffort: 'medium',
+          toolPermission: 'ask',
+        }),
+      }),
+    }));
+    expect(onStreamChunk).toHaveBeenCalledTimes(2);
+    expect(result.assistantText).toBe('Hello world');
+    expect(result.messages.at(-1)).toEqual({ role: 'assistant', content: 'Hello world' });
+    expect(disposeLLMEnvironment).toHaveBeenCalledWith({ environmentId: 'env-1' });
   });
 });

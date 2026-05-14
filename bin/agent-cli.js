@@ -1,387 +1,1981 @@
 #!/usr/bin/env node
-// @ts-check
-/**
- * Agent CLI Entrypoint
- *
- * Purpose:
- * - Parse CLI flags and route a single user message through the persisted Agent CLI chat.
- *
- * Key features:
- * - Supports current-chat reuse and `--new-chat` creation.
- * - Layers the built-in prompt with optional `./AGENTS.md` content and discovered skills.
- * - Persists completed turns under `./.chats`.
- *
- * Recent changes:
- * - 2026-05-07: Added the initial `llm-runtime`-backed CLI implementation.
- * - 2026-05-07: Exported the CLI entry functions so Vitest can exercise them directly.
- * - 2026-05-07: Moved startup diagnostics behind `--verbose` so stdout stays machine-friendly.
- * - 2026-05-11: Always include the built-in prompt and layer AGENTS.md after it when present.
- * - 2026-05-11: Added `--remote` host mode backed by `AGENT_CLI_RELAY_SERVER_URL`.
- */
-import 'dotenv/config';
+var __defProp = Object.defineProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 
-import { realpathSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+// cli/src/cli-shell.ts
+import { realpathSync } from "node:fs";
+import path4 from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { config as loadDotEnvConfig } from "dotenv";
 
-import { normalizeAgentConfig } from '../lib/agent-config.js';
-import { getBuiltInSystemPrompt, loadProjectSystemPrompt, loadSkillInventory } from '../lib/agent-files.js';
-import {
-  acquireRemoteHostLock,
-  assertNoActiveRemoteHost,
-  createPersistedChat,
-  loadChatById,
-  loadRequestedChat,
-  listPersistedChats,
-  persistCompletedChat,
-  persistRemoteSessionState,
-  releaseRemoteHostLock,
-  setCurrentChat,
-  persistStreamTraceEvents,
-  updateRemoteHostLock,
-} from '../lib/session-store.js';
-import * as relayClient from '../lib/relay-client.js';
-import { runRemoteControlSession } from '../lib/remote-control.js';
-import { runChatTurn, validateRuntimeEnvironment } from '../lib/runtime-client.js';
+// core/agent-config.js
+import { promises as fs } from "node:fs";
 
-export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
-
-export function usageText() {
-  return [
-    'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
-    '       agent-cli --remote [--new-chat] [initial message]',
-    '',
-    'Runtime options override environment defaults when provided:',
-    '  --provider <name>                 --model <name>',
-    '  --temperature <number>            --max-tokens <number>',
-    '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
-    '  --past-messages <count>           --stream-trace <true|false>',
-    '  --web-search <true|false|low|medium|high>',
-    '  --remote',
-    '',
-    `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in .env or the environment.`,
-    '',
-    'Examples:',
-    '  agent-cli --new-chat "Map my next financial move"',
-    '  agent-cli "What should I do first?"',
-    '  agent-cli --verbose "What should I do first?"',
-    '  agent-cli --stream-off "What should I do first?"',
-    '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
-    '  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote',
-  ].join('\n');
+// core/paths.js
+import path from "node:path";
+var REPO_ROOT = process.cwd();
+var SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, "AGENTS.md");
+var ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, "runtime.json");
+var SKILLS_ROOT = path.join(REPO_ROOT, ".agents", "skills");
+var AGENT_WORLD_ROOT = path.join(REPO_ROOT, ".agent-world");
+var WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
+var AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
+var AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
+var REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+function buildWorldChatDirectoryPath(chatId) {
+  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
+}
+function buildWorldChatMetadataPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "chat.json");
+}
+function buildWorldChatMessagesPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
+}
+function buildWorldChatSummaryPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "summary.md");
+}
+function buildAgentDirectoryPath(agentId) {
+  return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
+}
+function buildAgentMetadataPath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "agent.json");
+}
+function buildAgentInboxPath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "inbox.jsonl");
+}
+function buildAgentStatePath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "state.json");
+}
+function buildAgentEventsPath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "events.jsonl");
+}
+function buildAgentMemoryPath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "memory.md");
+}
+function buildAgentRuntimeConfigPath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
 }
 
-export function startupText(cwd = process.cwd()) {
-  return `Agent CLI starting in ${cwd}`;
+// core/agent-config.js
+var REASONING_EFFORTS = /* @__PURE__ */ new Set(["default", "none", "low", "medium", "high"]);
+var TOOL_PERMISSIONS = /* @__PURE__ */ new Set(["auto", "ask", "read"]);
+var WEB_SEARCH_CONTEXT_SIZES = /* @__PURE__ */ new Set(["low", "medium", "high"]);
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-
-/**
- * @param {{ write(chunk: string): void }} stdout
- * @param {string | null} previousType
- * @param {string} nextType
- */
-function writeTypeTransitionSeparator(stdout, previousType, nextType) {
-  if (previousType && previousType !== nextType) {
-    stdout.write('\n');
+function readAliasedValue(source, keys) {
+  for (const key of keys) {
+    if (Object.hasOwn(source, key)) {
+      return source[key];
+    }
   }
+  return void 0;
 }
-
-/**
- * @param {{ write(chunk: string): void }} stderr
- * @param {string} kind
- * @param {string} text
- */
-function writeDiagnostic(stderr, kind, text) {
-  stderr.write(`${kind}: ${text}\n`);
-}
-
-/**
- * @param {{ provider: string, model: string }} runtimeSettings
- */
-export function runtimeSelectionText(runtimeSettings) {
-  return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
-}
-
-/** @param {NodeJS.ProcessEnv | Record<string, unknown>} [environment] */
-export function readRemoteRelayServerUrl(environment = process.env) {
-  const relayServer = String(environment[REMOTE_RELAY_SERVER_ENV_KEY] ?? '').trim();
-
-  if (!relayServer) {
-    throw new Error(`Missing environment variable: ${REMOTE_RELAY_SERVER_ENV_KEY}`);
+function normalizeString(value, label) {
+  if (value === void 0 || value === null) {
+    return void 0;
   }
-
-  return relayClient.normalizeRelayServerUrl(relayServer);
+  const normalized = String(value).trim();
+  if (!normalized) {
+    throw new Error(`Invalid agent config value for ${label}: expected a non-empty string.`);
+  }
+  return normalized;
 }
-
-/**
- * @param {string | undefined} argvPath
- * @param {string} moduleUrl
- */
-export function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url) {
-  if (!argvPath) {
+function normalizeNumber(value, label) {
+  if (value === void 0 || value === null || value === "") {
+    return void 0;
+  }
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    throw new Error(`Invalid agent config value for ${label}: expected a number.`);
+  }
+  return normalized;
+}
+function normalizePositiveInteger(value, label) {
+  if (value === void 0 || value === null || value === "") {
+    return void 0;
+  }
+  const normalized = Number(value);
+  if (!Number.isInteger(normalized) || normalized < 1) {
+    throw new Error(`Invalid agent config value for ${label}: expected a positive integer.`);
+  }
+  return normalized;
+}
+function normalizeNonNegativeInteger(value, label) {
+  if (value === void 0 || value === null || value === "") {
+    return void 0;
+  }
+  const normalized = Number(value);
+  if (!Number.isInteger(normalized) || normalized < 0) {
+    throw new Error(`Invalid agent config value for ${label}: expected a non-negative integer.`);
+  }
+  return normalized;
+}
+function normalizeBoolean(value, label) {
+  if (value === void 0 || value === null || value === "") {
+    return void 0;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  throw new Error(`Invalid agent config value for ${label}: expected true or false.`);
+}
+function normalizeEnum(value, label, allowedValues) {
+  if (value === void 0 || value === null || value === "") {
+    return void 0;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!allowedValues.has(normalized)) {
+    throw new Error(`Invalid agent config value for ${label}: expected one of ${[...allowedValues].join(", ")}.`);
+  }
+  return normalized;
+}
+function normalizeReasoningEffort(value) {
+  if (isPlainObject(value)) {
+    return normalizeReasoningEffort(readAliasedValue(value, ["effort", "reasoningEffort"]));
+  }
+  return normalizeEnum(value, "reasoning", REASONING_EFFORTS);
+}
+function normalizeToolPermission(value) {
+  if (isPlainObject(value)) {
+    return normalizeToolPermission(readAliasedValue(value, ["default", "toolPermission", "permission"]));
+  }
+  return normalizeEnum(value, "permissions", TOOL_PERMISSIONS);
+}
+function normalizeWebSearch(value) {
+  if (value === void 0 || value === null || value === "") {
+    return void 0;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+    const searchContextSize2 = normalizeEnum(normalized, "webSearch.searchContextSize", WEB_SEARCH_CONTEXT_SIZES);
+    return searchContextSize2 ? { searchContextSize: searchContextSize2 } : void 0;
+  }
+  if (!isPlainObject(value)) {
+    throw new Error("Invalid agent config value for webSearch: expected a boolean, string, or object.");
+  }
+  const enabled = readAliasedValue(value, ["enabled"]);
+  if (enabled === false) {
     return false;
   }
-
+  const searchContextSize = normalizeEnum(readAliasedValue(value, ["searchContextSize", "contextSize", "size"]), "webSearch.searchContextSize", WEB_SEARCH_CONTEXT_SIZES);
+  if (searchContextSize) {
+    return { searchContextSize };
+  }
+  return true;
+}
+var AGENT_CONFIG_ALIASES = {
+  provider: ["provider"],
+  model: ["model", "modal"],
+  temperature: ["temperature"],
+  maxTokens: ["maxTokens", "maxOutputTokens", "tokens", "max-tokens", "max-output-tokens"],
+  toolPermission: ["toolPermission", "permission", "permissions", "tool-permission"],
+  reasoningEffort: ["reasoningEffort", "reasoning", "reasoning-effort"],
+  pastMessages: ["pastMessages", "historyMessages", "past_messages", "past-messages", "history-messages"],
+  stream: ["stream"],
+  streamTrace: ["streamTrace", "stream_trace", "stream-trace"],
+  webSearch: ["webSearch", "web_search", "web-search"]
+};
+function normalizeAgentConfig(source) {
+  const configSource = isPlainObject(source.runtime) ? {
+    ...source,
+    ...source.runtime
+  } : source;
+  const normalizedConfig = {
+    provider: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.provider), "provider"),
+    model: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.model), "model"),
+    temperature: normalizeNumber(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.temperature), "temperature"),
+    maxTokens: normalizePositiveInteger(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens), "maxTokens"),
+    toolPermission: normalizeToolPermission(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission)),
+    reasoningEffort: normalizeReasoningEffort(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.reasoningEffort)),
+    pastMessages: normalizeNonNegativeInteger(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.pastMessages), "pastMessages"),
+    stream: normalizeBoolean(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.stream), "stream"),
+    streamTrace: normalizeBoolean(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.streamTrace), "streamTrace")
+  };
+  const webSearch = normalizeWebSearch(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.webSearch));
+  if (webSearch !== void 0) {
+    normalizedConfig.webSearch = webSearch;
+  }
+  return Object.fromEntries(Object.entries(normalizedConfig).filter(([, value]) => value !== void 0));
+}
+async function readJsonFileIfPresent(filePath, label) {
+  let content;
   try {
-    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
   } catch {
-    return pathToFileURL(path.resolve(argvPath)).href === moduleUrl;
+    throw new Error(`Invalid ${label}: ${filePath}`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error(`Invalid ${label}: ${filePath}`);
+  }
+  return parsed;
+}
+function validateRuntimeSchemaVersion(schemaVersion, filePath) {
+  if (schemaVersion === void 0 || schemaVersion === null || schemaVersion === "") {
+    return;
+  }
+  const normalizedSchemaVersion = Number(schemaVersion);
+  if (normalizedSchemaVersion !== 1) {
+    throw new Error(`Unsupported runtime config schemaVersion in ${filePath}: expected 1.`);
   }
 }
-
-/**
- * @param {string[]} argv
- */
-export function parseArguments(argv) {
-  let newChat = false;
-  let streamOff = false;
-  let help = false;
-  let remoteControl = false;
-  let verbose = false;
-  const messageParts = [];
-  /** @type {Record<string, unknown>} */
-  const runtimeOverrides = {};
-
-  /** @param {string} rawValue */
-  const normalizeFlagName = (rawValue) => rawValue.trim().toLowerCase();
-
-  /**
-   * @param {string[]} values
-   * @param {number} index
-   * @param {string | undefined} inlineValue
-   * @param {string} flagName
-   * @param {{ allowBareTrue?: boolean }} [options]
-   */
-  const readFlagValue = (values, index, inlineValue, flagName, options = {}) => {
-    if (inlineValue !== undefined) {
-      return {
-        nextIndex: index,
-        value: inlineValue,
-      };
-    }
-
-    const nextValue = values[index + 1];
-
-    if (typeof nextValue === 'string' && !nextValue.startsWith('--')) {
-      return {
-        nextIndex: index + 1,
-        value: nextValue,
-      };
-    }
-
-    if (options.allowBareTrue) {
-      return {
-        nextIndex: index,
-        value: true,
-      };
-    }
-
-    throw new Error(`Missing value for flag: --${flagName}`);
+function normalizeRuntimeConfigFile(source, filePath) {
+  validateRuntimeSchemaVersion(source.schemaVersion, filePath);
+  return normalizeAgentConfig(source);
+}
+async function loadRuntimeConfigFile(filePath) {
+  const config = await readJsonFileIfPresent(filePath, "runtime config");
+  if (!config) {
+    return {};
+  }
+  return normalizeRuntimeConfigFile(config, filePath);
+}
+function normalizeAgentId(agentId) {
+  if (agentId === void 0 || agentId === null) {
+    return "";
+  }
+  const normalizedAgentId = String(agentId).trim();
+  return normalizedAgentId;
+}
+async function loadDefaultAgentIdFromWorld() {
+  const world = await readJsonFileIfPresent(WORLD_STATE_PATH, "world metadata");
+  if (!world) {
+    return "";
+  }
+  return normalizeAgentId(world.defaultAgentId);
+}
+async function loadPersistedRuntimeConfig(options = {}) {
+  const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
+  const configuredAgentId = normalizeAgentId(options.agentId);
+  const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
+  if (!defaultAgentId) {
+    return rootRuntimeConfig;
+  }
+  const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
+  return {
+    ...rootRuntimeConfig,
+    ...agentRuntimeConfig
   };
+}
 
-  /**
-   * @param {string[]} values
-   * @param {number} index
-   * @param {string | undefined} inlineValue
-   * @param {string[]} explicitValues
-   */
-  const readOptionalFlagValue = (values, index, inlineValue, explicitValues) => {
-    if (inlineValue !== undefined) {
-      return {
-        nextIndex: index,
-        value: inlineValue,
-      };
+// core/agent-files.js
+import { promises as fs2 } from "node:fs";
+import path2 from "node:path";
+var DEFAULT_SYSTEM_PROMPT = [
+  "You are Agent CLI.",
+  "Be concise, factual, and action-oriented.",
+  "Use available skills when they are relevant."
+].join(" ");
+function getBuiltInSystemPrompt() {
+  return DEFAULT_SYSTEM_PROMPT;
+}
+async function assertReadableFile(filePath, label) {
+  let stats;
+  try {
+    stats = await fs2.stat(filePath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
+      throw error;
     }
-
-    const nextValue = values[index + 1];
-    const normalizedNextValue = typeof nextValue === 'string'
-      ? nextValue.trim().toLowerCase()
-      : '';
-
-    if (explicitValues.includes(normalizedNextValue)) {
-      return {
-        nextIndex: index + 1,
-        value: nextValue,
-      };
+    throw new Error(`Missing ${label}: ${filePath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Expected ${label} to be a file: ${filePath}`);
+  }
+}
+async function assertReadableDirectory(directoryPath, label) {
+  let stats;
+  try {
+    stats = await fs2.stat(directoryPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
+      throw error;
     }
+    throw new Error(`Missing ${label}: ${directoryPath}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Expected ${label} to be a directory: ${directoryPath}`);
+  }
+}
+function parseSkillFrontMatter(content) {
+  const normalized = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const frontMatterMatch = normalized.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
+  if (!frontMatterMatch || !frontMatterMatch[1]) {
+    return { skillId: "", description: "" };
+  }
+  let skillId = "";
+  let description = "";
+  for (const line of frontMatterMatch[1].split("\n")) {
+    const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const key = String(match[1] ?? "").trim();
+    const value = String(match[2] ?? "").trim().replace(/^['"]|['"]$/g, "");
+    if (key === "name") {
+      skillId = value;
+    }
+    if (key === "description") {
+      description = value;
+    }
+  }
+  return { skillId, description };
+}
+async function collectSkillFilePaths(rootPath) {
+  const discoveredPaths = [];
+  const queue = [rootPath];
+  while (queue.length > 0) {
+    const currentPath = queue.shift();
+    if (!currentPath) {
+      continue;
+    }
+    const entries = await fs2.readdir(currentPath, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const entryPath = path2.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name === "SKILL.md") {
+        discoveredPaths.push(entryPath);
+      }
+    }
+  }
+  return discoveredPaths.sort((left, right) => left.localeCompare(right));
+}
+async function loadProjectSystemPrompt() {
+  try {
+    await assertReadableFile(SYSTEM_PROMPT_PATH, "system prompt");
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Missing system prompt:")) {
+      return "";
+    }
+    throw error;
+  }
+  const content = (await fs2.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+  return content;
+}
+async function loadSkillInventory() {
+  try {
+    await assertReadableDirectory(SKILLS_ROOT, "skills root");
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Missing skills root:")) {
+      return [];
+    }
+    throw error;
+  }
+  const skillFilePaths = await collectSkillFilePaths(SKILLS_ROOT);
+  const skills = [];
+  for (const skillFilePath of skillFilePaths) {
+    const content = await fs2.readFile(skillFilePath, "utf8");
+    const metadata = parseSkillFrontMatter(content);
+    if (!metadata.skillId) {
+      continue;
+    }
+    skills.push({
+      skillId: metadata.skillId,
+      description: metadata.description,
+      sourcePath: skillFilePath
+    });
+  }
+  return skills;
+}
+function buildSkillInventoryMessage(skills) {
+  if (skills.length === 0) {
+    return "";
+  }
+  const lines = skills.map((skill) => {
+    const description = skill.description || "No description provided.";
+    return `- ${skill.skillId}: ${description}`;
+  });
+  return [
+    "Available skills can be loaded through the `load_skill` tool.",
+    "When a skill is relevant, call `load_skill` with the exact `skillId` before answering.",
+    "",
+    ...lines
+  ].join("\n");
+}
 
-    return {
-      nextIndex: index,
-      value: true,
+// core/session-store.js
+import { randomUUID } from "node:crypto";
+import { promises as fs3 } from "node:fs";
+import path3 from "node:path";
+var DEFAULT_AGENT_ID = "default";
+var DEFAULT_WORLD_NAME = path3.basename(REPO_ROOT) || "agent-world";
+function createChatId(now = /* @__PURE__ */ new Date()) {
+  const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  return `${timestamp}-${randomUUID().slice(0, 8)}`;
+}
+function createWorldId() {
+  return randomUUID();
+}
+function normalizeTimestamp(value, fallbackTimestamp) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return fallbackTimestamp;
+}
+function pickLatestTimestamp(values) {
+  let latestTimestamp = "";
+  let latestValue = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    const normalizedValue = typeof value === "string" ? value.trim() : value instanceof Date ? value.toISOString() : "";
+    if (!normalizedValue) {
+      continue;
+    }
+    const parsedValue = Date.parse(normalizedValue);
+    if (!Number.isFinite(parsedValue)) {
+      continue;
+    }
+    if (!latestTimestamp || parsedValue > latestValue) {
+      latestTimestamp = normalizedValue;
+      latestValue = parsedValue;
+    }
+  }
+  return latestTimestamp;
+}
+function normalizeToolCalls(value) {
+  return Array.isArray(value) ? value : void 0;
+}
+function normalizePersistedMessage(message, fallbackTimestamp) {
+  if (!message || typeof message !== "object") {
+    throw new Error("Encountered an invalid chat message while persisting the session.");
+  }
+  const role = String(message.role ?? "").trim();
+  const content = String(message.content ?? "");
+  if (!role) {
+    throw new Error("Encountered a chat message without a role while persisting the session.");
+  }
+  const toolCalls = normalizeToolCalls(message.tool_calls);
+  return {
+    role,
+    content,
+    createdAt: normalizeTimestamp(message.createdAt, fallbackTimestamp),
+    ...typeof message.tool_call_id === "string" ? { tool_call_id: message.tool_call_id } : {},
+    ...toolCalls ? { tool_calls: toolCalls } : {}
+  };
+}
+async function writeJsonAtomic(filePath, value) {
+  const directoryPath = path3.dirname(filePath);
+  const fileName = path3.basename(filePath);
+  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.tmp`);
+  await fs3.mkdir(directoryPath, { recursive: true });
+  await fs3.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+`, "utf8");
+  await fs3.rename(temporaryPath, filePath);
+}
+async function writeTextAtomic(filePath, text) {
+  const directoryPath = path3.dirname(filePath);
+  const fileName = path3.basename(filePath);
+  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.tmp`);
+  await fs3.mkdir(directoryPath, { recursive: true });
+  await fs3.writeFile(temporaryPath, text, "utf8");
+  await fs3.rename(temporaryPath, filePath);
+}
+async function writeJsonlAtomic(filePath, values) {
+  const serialized = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}
+` : "";
+  await writeTextAtomic(filePath, serialized);
+}
+async function appendJsonl(filePath, values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return;
+  }
+  await fs3.mkdir(path3.dirname(filePath), { recursive: true });
+  const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
+`;
+  await fs3.appendFile(filePath, serialized, "utf8");
+}
+async function readJson(filePath, missingMessage, invalidMessage) {
+  let rawContent;
+  try {
+    rawContent = await fs3.readFile(filePath, "utf8");
+  } catch {
+    throw new Error(missingMessage);
+  }
+  try {
+    return JSON.parse(rawContent);
+  } catch {
+    throw new Error(invalidMessage);
+  }
+}
+async function readJsonIfPresent(filePath) {
+  try {
+    return JSON.parse(await fs3.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+async function pathExists(filePath) {
+  try {
+    await fs3.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function ensureTextFile(filePath, defaultText = "") {
+  if (await pathExists(filePath)) {
+    return;
+  }
+  await writeTextAtomic(filePath, defaultText);
+}
+async function readJsonl(filePath) {
+  let rawContent;
+  try {
+    rawContent = await fs3.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      throw new Error(`Missing chat session file: ${filePath}`);
+    }
+    throw error;
+  }
+  const lines = rawContent.split(/\r?\n/u).filter(Boolean);
+  try {
+    return lines.map((line) => JSON.parse(line));
+  } catch {
+    throw new Error(`Invalid chat session file: ${filePath}`);
+  }
+}
+async function ensureRemoteHostLockDirectory() {
+  await fs3.mkdir(path3.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
+}
+async function ensureAgentWorldDirectories() {
+  await Promise.all([
+    fs3.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs3.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs3.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true })
+  ]);
+}
+function isProcessRunning(pid) {
+  if (!Number.isInteger(pid) || pid < 1) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === "object" && "code" in error && error.code === "EPERM");
+  }
+}
+function isActiveRemoteHostLock(remoteLock) {
+  if (!remoteLock || typeof remoteLock !== "object") {
+    return false;
+  }
+  return isProcessRunning(Number(remoteLock.pid));
+}
+function buildRemoteHostConflictError(remoteLock) {
+  const chatId = String(remoteLock && typeof remoteLock === "object" && "chatId" in remoteLock ? remoteLock.chatId ?? "" : "").trim();
+  const pid = Number(remoteLock && typeof remoteLock === "object" && "pid" in remoteLock ? remoteLock.pid : NaN);
+  const details = [
+    chatId ? `chat ${chatId}` : null,
+    Number.isInteger(pid) && pid > 0 ? `pid ${pid}` : null
+  ].filter(Boolean).join(", ");
+  return new Error(details ? `Remote mode already active for this project root (${details}).` : "Remote mode already active for this project root.");
+}
+async function readRemoteHostLock() {
+  try {
+    return JSON.parse(await fs3.readFile(REMOTE_HOST_LOCK_PATH, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    return null;
+  }
+}
+function createEmptyChat() {
+  const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    id: createChatId(),
+    createdAt,
+    updatedAt: createdAt,
+    messages: []
+  };
+}
+async function inferDefaultAgentRuntime(agentId) {
+  const runtimeConfig = await loadPersistedRuntimeConfig({ agentId });
+  const provider = String(runtimeConfig.provider ?? "openai").trim() || "openai";
+  const model = String(runtimeConfig.model ?? (provider === "openai" ? "gpt-5" : "")).trim();
+  return {
+    provider,
+    model
+  };
+}
+async function ensureDefaultAgentFiles(agentId) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(agentId));
+  const inferredRuntime = await inferDefaultAgentRuntime(agentId);
+  await writeJsonAtomic(buildAgentMetadataPath(agentId), {
+    id: agentId,
+    name: String(existingAgentMetadata?.name ?? `${DEFAULT_WORLD_NAME} agent`).trim() || `${DEFAULT_WORLD_NAME} agent`,
+    provider: String(existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider,
+    model: String(existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model,
+    createdAt: String(existingAgentMetadata?.createdAt ?? now),
+    updatedAt: now
+  });
+  if (!await pathExists(buildAgentStatePath(agentId))) {
+    await writeJsonAtomic(buildAgentStatePath(agentId), {
+      id: agentId,
+      updatedAt: now
+    });
+  }
+  await ensureTextFile(buildAgentEventsPath(agentId));
+  await ensureTextFile(buildAgentInboxPath(agentId));
+  await ensureTextFile(buildAgentMemoryPath(agentId));
+}
+async function readWorldState() {
+  const world = await readJsonIfPresent(WORLD_STATE_PATH);
+  if (!world || typeof world !== "object") {
+    return null;
+  }
+  return world;
+}
+async function writeWorldState({ world, updates }) {
+  const nextWorld = {
+    ...world,
+    ...updates,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await writeJsonAtomic(WORLD_STATE_PATH, nextWorld);
+  return nextWorld;
+}
+async function persistWorldChat(chat, agentId) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const messages = chat.messages.map((message) => normalizePersistedMessage(message, now));
+  const createdAt = normalizeTimestamp(chat.createdAt, now);
+  const updatedAt = pickLatestTimestamp([
+    chat.updatedAt,
+    messages.at(-1)?.createdAt,
+    createdAt
+  ]) || now;
+  const metadata = {
+    id: chat.id,
+    agentId,
+    createdAt,
+    updatedAt,
+    messageCount: messages.length
+  };
+  await writeJsonAtomic(buildWorldChatMetadataPath(chat.id), metadata);
+  await writeJsonlAtomic(buildWorldChatMessagesPath(chat.id), messages);
+  await ensureTextFile(buildWorldChatSummaryPath(chat.id));
+  return {
+    ...metadata,
+    messages
+  };
+}
+async function ensureWorldBootstrap() {
+  await ensureAgentWorldDirectories();
+  let world = await readWorldState();
+  let changed = false;
+  if (!world) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    world = {
+      id: createWorldId(),
+      name: DEFAULT_WORLD_NAME,
+      defaultAgentId: DEFAULT_AGENT_ID,
+      currentChatId: "",
+      createdAt: now,
+      updatedAt: now
     };
+    changed = true;
+  }
+  if (!String(world.defaultAgentId ?? "").trim()) {
+    world.defaultAgentId = DEFAULT_AGENT_ID;
+    changed = true;
+  }
+  await ensureDefaultAgentFiles(String(world.defaultAgentId));
+  if (changed) {
+    world = await writeWorldState({ world, updates: {} });
+  }
+  return (
+    /** @type {{ id: string, name: string, defaultAgentId: string, currentChatId: string, createdAt?: string, updatedAt?: string }} */
+    world
+  );
+}
+async function loadWorldChatById(chatId) {
+  const normalizedChatId = String(chatId ?? "").trim();
+  if (!normalizedChatId) {
+    throw new Error("Missing chat ID.");
+  }
+  const metadata = await readJson(buildWorldChatMetadataPath(normalizedChatId), `Missing chat session file: ${buildWorldChatMessagesPath(normalizedChatId)}`, `Invalid chat session file: ${buildWorldChatMetadataPath(normalizedChatId)}`);
+  const messages = (await readJsonl(buildWorldChatMessagesPath(normalizedChatId))).map((message) => normalizePersistedMessage(message, (/* @__PURE__ */ new Date()).toISOString()));
+  return {
+    id: String(metadata.id ?? normalizedChatId),
+    createdAt: String(metadata.createdAt ?? ""),
+    updatedAt: String(metadata.updatedAt ?? ""),
+    messages
   };
+}
+async function assertNoActiveRemoteHost() {
+  const remoteLock = await readRemoteHostLock();
+  if (!remoteLock) {
+    return null;
+  }
+  if (isActiveRemoteHostLock(remoteLock)) {
+    throw buildRemoteHostConflictError(remoteLock);
+  }
+  await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+  return null;
+}
+async function acquireRemoteHostLock({ chat }) {
+  await ensureRemoteHostLockDirectory();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const remoteLock = {
+    chatId: chat.id,
+    pid: process.pid,
+    startedAt: now,
+    updatedAt: now
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await fs3.writeFile(REMOTE_HOST_LOCK_PATH, `${JSON.stringify(remoteLock, null, 2)}
+`, { encoding: "utf8", flag: "wx" });
+      return remoteLock;
+    } catch (error) {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") {
+        throw error;
+      }
+      const existingRemoteLock = await readRemoteHostLock();
+      if (isActiveRemoteHostLock(existingRemoteLock)) {
+        throw buildRemoteHostConflictError(existingRemoteLock);
+      }
+      await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+    }
+  }
+  throw new Error("Failed to acquire the remote host lock for this project root.");
+}
+async function releaseRemoteHostLock() {
+  const remoteLock = await readRemoteHostLock();
+  if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
+    return false;
+  }
+  await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+  return true;
+}
+async function updateRemoteHostLock({ chatId }) {
+  const remoteLock = await readRemoteHostLock();
+  if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
+    return false;
+  }
+  await writeJsonAtomic(REMOTE_HOST_LOCK_PATH, {
+    ...remoteLock,
+    chatId,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  return true;
+}
+async function loadChatById(chatId) {
+  await ensureWorldBootstrap();
+  const normalizedChatId = String(chatId ?? "").trim();
+  if (!normalizedChatId) {
+    throw new Error("Missing chat ID.");
+  }
+  return await loadWorldChatById(normalizedChatId);
+}
+async function listPersistedChats() {
+  const world = await ensureWorldBootstrap();
+  const currentChatId = String(world.currentChatId ?? "").trim();
+  const entries = await fs3.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
+  const chats = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const chatId = String(entry.name ?? "").trim();
+    if (!chatId) {
+      continue;
+    }
+    const metadata = await readJsonIfPresent(buildWorldChatMetadataPath(chatId));
+    if (!metadata || typeof metadata !== "object") {
+      continue;
+    }
+    chats.push({
+      id: String(metadata.id ?? chatId),
+      createdAt: String(metadata.createdAt ?? ""),
+      updatedAt: String(metadata.updatedAt ?? ""),
+      messageCount: Number(metadata.messageCount ?? 0),
+      isCurrent: String(metadata.id ?? chatId) === currentChatId
+    });
+  }
+  return chats.sort((left, right) => {
+    const leftTimestamp = Date.parse(left.updatedAt || left.createdAt || "0");
+    const rightTimestamp = Date.parse(right.updatedAt || right.createdAt || "0");
+    if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) && leftTimestamp !== rightTimestamp) {
+      return rightTimestamp - leftTimestamp;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+async function createPersistedChat(options = {}) {
+  const chat = createEmptyChat();
+  await persistCompletedChat({
+    chat,
+    messages: chat.messages,
+    setCurrent: options.setCurrent !== false
+  });
+  return chat;
+}
+async function setCurrentChat(chatId) {
+  const world = await ensureWorldBootstrap();
+  const chat = await loadChatById(chatId);
+  await writeWorldState({
+    world,
+    updates: {
+      currentChatId: chat.id
+    }
+  });
+  return chat;
+}
+async function loadRequestedChat({ newChat }) {
+  if (newChat) {
+    return createEmptyChat();
+  }
+  const world = await ensureWorldBootstrap();
+  const chatId = String(world.currentChatId ?? "").trim();
+  if (!chatId) {
+    return createEmptyChat();
+  }
+  try {
+    return await loadChatById(chatId);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Missing chat session file: ")) {
+      return createEmptyChat();
+    }
+    throw error;
+  }
+}
+async function persistCompletedChat({ chat, messages, setCurrent = true }) {
+  const world = await ensureWorldBootstrap();
+  const persistedChat = await persistWorldChat({
+    id: chat.id,
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt,
+    messages
+  }, String(world.defaultAgentId));
+  if (setCurrent) {
+    await writeWorldState({
+      world,
+      updates: {
+        currentChatId: chat.id
+      }
+    });
+  }
+  return persistedChat;
+}
+async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
+  if (!Array.isArray(streamTraceEvents) || streamTraceEvents.length === 0) {
+    return null;
+  }
+  const world = await ensureWorldBootstrap();
+  const eventsPath = buildAgentEventsPath(String(world.defaultAgentId));
+  await appendJsonl(eventsPath, streamTraceEvents.map((event) => ({
+    kind: "stream_trace",
+    chatId: chat.id,
+    type: String(event.type ?? ""),
+    text: String(event.text ?? ""),
+    createdAt: normalizeTimestamp(event.createdAt, (/* @__PURE__ */ new Date()).toISOString())
+  })));
+  return eventsPath;
+}
+async function persistRemoteSessionState({ chatId, remoteSession }) {
+  const world = await ensureWorldBootstrap();
+  const statePath = buildAgentStatePath(String(world.defaultAgentId));
+  const existingState = await readJsonIfPresent(statePath);
+  const currentChatId = String(chatId ?? world.currentChatId ?? "").trim();
+  await writeJsonAtomic(statePath, {
+    ...existingState && typeof existingState === "object" ? existingState : {},
+    id: String(world.defaultAgentId),
+    currentChatId,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    remoteSession
+  });
+  return statePath;
+}
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+// core/relay-client.js
+var relay_client_exports = {};
+__export(relay_client_exports, {
+  RelayClientError: () => RelayClientError,
+  createRelayIdempotencyKey: () => createRelayIdempotencyKey,
+  createRelayPairingInvite: () => createRelayPairingInvite,
+  createRelaySession: () => createRelaySession,
+  normalizeRelayServerUrl: () => normalizeRelayServerUrl,
+  pairRelaySession: () => pairRelaySession,
+  pollRelayCommands: () => pollRelayCommands,
+  postRelayEvent: () => postRelayEvent,
+  readRelayEvents: () => readRelayEvents,
+  readRelayNotifications: () => readRelayNotifications,
+  revokeRelaySession: () => revokeRelaySession,
+  sendRelayCommand: () => sendRelayCommand
+});
+import { randomUUID as randomUUID2 } from "node:crypto";
+function normalizeRelayServerUrl(rawUrl) {
+  const normalized = String(rawUrl ?? "").trim();
+  if (!normalized) {
+    throw new Error("Missing relay server URL.");
+  }
+  const url = new URL(normalized);
+  if (!/^https?:$/.test(url.protocol)) {
+    throw new Error(`Unsupported relay server protocol: ${url.protocol}`);
+  }
+  return url.toString().replace(/\/$/, "");
+}
+var RelayClientError = class extends Error {
+  /**
+   * @param {number} statusCode
+   * @param {string} message
+   */
+  constructor(statusCode, message) {
+    super(message);
+    this.name = "RelayClientError";
+    this.statusCode = statusCode;
+  }
+};
+function createRelayIdempotencyKey(prefix) {
+  return `${prefix}-${randomUUID2()}`;
+}
+function buildUrl(relayServer, pathname, query = {}) {
+  const url = new URL(pathname, `${normalizeRelayServerUrl(relayServer)}/`);
+  for (const [key, value] of Object.entries(query)) {
+    if (value === void 0 || value === "") {
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+async function readJsonResponse(response) {
+  const rawText = await response.text();
+  const trimmedText = rawText.trim();
+  const parsed = trimmedText ? JSON.parse(trimmedText) : {};
+  if (!response.ok) {
+    throw new RelayClientError(response.status, String(parsed.error ?? response.statusText));
+  }
+  return parsed;
+}
+async function postJson(relayServer, pathname, body) {
+  const response = await fetch(buildUrl(relayServer, pathname), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  return await readJsonResponse(response);
+}
+async function getJson(relayServer, pathname, query) {
+  const response = await fetch(buildUrl(relayServer, pathname, query));
+  return await readJsonResponse(response);
+}
+async function createRelaySession(input) {
+  return await postJson(input.relayServer, "/v1/sessions", {
+    localSessionId: input.localSessionId,
+    chatId: input.chatId,
+    ttlMs: input.ttlMs,
+    pairingTtlMs: input.pairingTtlMs,
+    metadata: input.metadata ?? {}
+  });
+}
+async function pairRelaySession(input) {
+  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/pair`, {
+    pairingToken: input.pairingToken,
+    idempotencyKey: input.idempotencyKey,
+    mobileName: input.mobileName
+  });
+}
+async function createRelayPairingInvite(input) {
+  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/pairing-invites`, {
+    token: input.token,
+    idempotencyKey: input.idempotencyKey
+  });
+}
+async function postRelayEvent(input) {
+  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/events`, {
+    desktopToken: input.desktopToken,
+    type: input.type,
+    payload: input.payload ?? {},
+    idempotencyKey: input.idempotencyKey,
+    targetClientId: input.targetClientId
+  });
+}
+async function pollRelayCommands(input) {
+  return await getJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/commands/poll`, {
+    desktopToken: input.desktopToken,
+    after: input.after,
+    timeoutMs: input.timeoutMs
+  });
+}
+async function readRelayEvents(input) {
+  return await getJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/events`, {
+    mobileToken: input.mobileToken,
+    after: input.after
+  });
+}
+async function sendRelayCommand(input) {
+  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/commands`, {
+    mobileToken: input.mobileToken,
+    type: input.type,
+    payload: input.payload ?? {},
+    idempotencyKey: input.idempotencyKey
+  });
+}
+async function revokeRelaySession(input) {
+  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/revoke`, {
+    token: input.token,
+    reason: input.reason
+  });
+}
+async function readRelayNotifications(input) {
+  return await getJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/notifications`, {
+    mobileToken: input.mobileToken,
+    after: input.after
+  });
+}
 
-    if (arg === '--') {
-      messageParts.push(...argv.slice(index + 1));
+// core/remote-control.js
+import QRCode from "qrcode";
+var SENSITIVE_KEY_PATTERN = /(path|file|content|token|secret|key|env|authorization|password|prompt|workspace|memory)/i;
+function isInteractiveTerminal(stdout) {
+  return Boolean(stdout && stdout.isTTY);
+}
+async function renderConnectionQrCode(connectionUrl) {
+  return await QRCode.toString(connectionUrl, {
+    type: "terminal",
+    small: true,
+    margin: 1,
+    errorCorrectionLevel: "M"
+  });
+}
+async function buildRemoteSessionReadyText(relaySession, stdout, stderr) {
+  const clientConnectionUrl = String(relaySession.clientConnectionUrl ?? "");
+  const expiresAt = typeof relaySession.expiresAt === "string" && relaySession.expiresAt.trim() ? relaySession.expiresAt : "No timeout";
+  const lines = [
+    "Remote relay session ready.",
+    `Session ID: ${String(relaySession.sessionId ?? "")}`,
+    `Client connection URL: ${clientConnectionUrl}`,
+    `Pairing token: ${String(relaySession.pairingToken ?? "")}`,
+    `Expires at: ${expiresAt}`
+  ];
+  if (clientConnectionUrl && isInteractiveTerminal(stdout)) {
+    try {
+      lines.push("Scan this QR code from the client to connect:");
+      lines.push((await renderConnectionQrCode(clientConnectionUrl)).trimEnd());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr?.write(`Warning: failed to render remote connection QR code: ${message}
+`);
+    }
+  }
+  lines.push("Remote host is running and will keep responding until the client disconnects or you press Ctrl+C.");
+  lines.push("");
+  return lines.join("\n");
+}
+function isPlainObject2(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function summarizeArgumentEntry(key, value) {
+  if (SENSITIVE_KEY_PATTERN.test(key)) {
+    return {
+      key,
+      type: Array.isArray(value) ? "array" : typeof value,
+      summary: "[redacted]"
+    };
+  }
+  if (typeof value === "string") {
+    return {
+      key,
+      type: "string",
+      summary: value.length > 80 ? `${value.slice(0, 77)}...` : value
+    };
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return {
+      key,
+      type: value === null ? "null" : typeof value,
+      summary: value
+    };
+  }
+  if (Array.isArray(value)) {
+    return {
+      key,
+      type: "array",
+      summary: `[array:${value.length}]`
+    };
+  }
+  if (isPlainObject2(value)) {
+    return {
+      key,
+      type: "object",
+      summary: `[object:${Object.keys(value).length}]`
+    };
+  }
+  return {
+    key,
+    type: typeof value,
+    summary: `[${typeof value}]`
+  };
+}
+function buildRemoteArgumentSummary(rawArguments) {
+  const argumentEntries = Object.entries(isPlainObject2(rawArguments) ? rawArguments : {});
+  return {
+    argumentCount: argumentEntries.length,
+    entries: argumentEntries.map(([key, value]) => summarizeArgumentEntry(key, value))
+  };
+}
+function buildRemoteFailureSummary(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const loweredMessage = message.toLowerCase();
+  if (loweredMessage.includes("cancel")) {
+    return {
+      category: "cancelled",
+      message: "Run cancelled on the local host."
+    };
+  }
+  if (loweredMessage.includes("reject")) {
+    return {
+      category: "rejected",
+      message: "A local action was rejected."
+    };
+  }
+  return {
+    category: "failed",
+    message: "Run failed on the local host."
+  };
+}
+function buildRemoteChatSummary(chat) {
+  return {
+    id: String(chat.id ?? ""),
+    createdAt: String(chat.createdAt ?? ""),
+    updatedAt: String(chat.updatedAt ?? ""),
+    messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0
+  };
+}
+function buildRemoteChatMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).map((message) => ({
+    role: String(message?.role ?? ""),
+    content: String(message?.content ?? ""),
+    createdAt: typeof message?.createdAt === "string" ? message.createdAt : void 0,
+    ...typeof message?.tool_call_id === "string" ? { toolCallId: message.tool_call_id } : {}
+  }));
+}
+function buildRemoteSlashHelpText() {
+  return [
+    "Available remote slash commands:",
+    "/help - show this help",
+    "/chats - list persisted chats",
+    "/messages <chatId> - load persisted messages for a chat",
+    "/new - create and select a new chat",
+    "/use <chatId> - switch the active chat"
+  ].join("\n");
+}
+function parseRemoteSlashCommand(text) {
+  const normalizedText = String(text ?? "").trim();
+  if (!normalizedText.startsWith("/")) {
+    return null;
+  }
+  const [rawName = "", ...rawArguments] = normalizedText.slice(1).trim().split(/\s+/u);
+  return {
+    commandName: rawName.toLowerCase(),
+    argumentText: rawArguments.join(" ").trim(),
+    rawText: normalizedText
+  };
+}
+function createRemoteApprovalGate({ postEvent, signal }) {
+  const pendingApprovals = /* @__PURE__ */ new Map();
+  signal.addEventListener("abort", () => {
+    for (const pending of pendingApprovals.values()) {
+      pending.reject(new Error("Approval wait cancelled."));
+    }
+    pendingApprovals.clear();
+  }, { once: true });
+  return {
+    async requestApproval(request) {
+      if (signal.aborted) {
+        throw new Error("Approval wait cancelled.");
+      }
+      const approvalId = String(request.toolCallId ?? createRelayIdempotencyKey("approval"));
+      await postEvent("tool_approval_request", {
+        approvalId,
+        toolCallId: request.toolCallId,
+        toolName: request.toolName,
+        argumentSummary: buildRemoteArgumentSummary(isPlainObject2(request.arguments) ? request.arguments : {})
+      });
+      return await new Promise((resolve, reject) => {
+        pendingApprovals.set(approvalId, { resolve, reject });
+      });
+    },
+    resolveDecision(approvalId, decision) {
+      const pending = pendingApprovals.get(approvalId);
+      if (!pending) {
+        return false;
+      }
+      pendingApprovals.delete(approvalId);
+      pending.resolve(decision);
+      return true;
+    }
+  };
+}
+async function runRemoteControlSession(params) {
+  let activeChat = params.chat;
+  const relaySession = await params.relayClient.createRelaySession({
+    relayServer: params.relayServer,
+    localSessionId: activeChat.id,
+    chatId: activeChat.id,
+    ttlMs: params.ttlMs ?? 0,
+    pairingTtlMs: params.pairingTtlMs ?? 0,
+    metadata: {
+      mode: "remote-control"
+    }
+  });
+  await params.onSessionReady?.(relaySession);
+  params.io.stdout.write(await buildRemoteSessionReadyText(relaySession, params.io.stdout, params.io.stderr));
+  let active = true;
+  let waitingForInput = false;
+  let commandCursor = 0;
+  let relaySessionClosed = false;
+  let finalRevokeReason = "session_closed";
+  const queuedMessages = [];
+  let nextMessageResolver = null;
+  let activeRunController = null;
+  const remoteControlAbort = new AbortController();
+  const approvalGate = createRemoteApprovalGate({
+    postEvent: async (type, payload = {}) => {
+      await params.relayClient.postRelayEvent({
+        relayServer: params.relayServer,
+        sessionId: relaySession.sessionId,
+        desktopToken: relaySession.desktopToken,
+        type,
+        payload,
+        idempotencyKey: createRelayIdempotencyKey(`event-${type}`)
+      });
+    },
+    signal: remoteControlAbort.signal
+  });
+  const postEvent = async (type, payload = {}, options = {}) => {
+    await params.relayClient.postRelayEvent({
+      relayServer: params.relayServer,
+      sessionId: relaySession.sessionId,
+      desktopToken: relaySession.desktopToken,
+      type,
+      payload,
+      idempotencyKey: createRelayIdempotencyKey(`event-${type}`),
+      targetClientId: options.targetClientId
+    });
+  };
+  const publishSessionSnapshot = async () => {
+    await postEvent("session_snapshot", {
+      activeChatId: activeChat.id,
+      chat: buildRemoteChatSummary(activeChat),
+      waitingForInput
+    });
+  };
+  const syncActiveChatState = async () => {
+    await params.chatStore?.updateRemoteHostLock?.({ chatId: activeChat.id });
+    await params.chatStore?.persistRemoteSessionState?.({ remoteSession: relaySession });
+  };
+  const postCommandError = async (clientId, requestId, code, message) => {
+    await postEvent("command_error", {
+      requestId,
+      code,
+      message,
+      activeChatId: activeChat.id
+    }, {
+      targetClientId: clientId
+    });
+  };
+  const postCommandResult = async (clientId, payload) => {
+    await postEvent("command_result", {
+      activeChatId: activeChat.id,
+      ...payload
+    }, {
+      targetClientId: clientId
+    });
+  };
+  const executeSlashCommand = async ({ clientId, requestId, text }) => {
+    const parsedCommand = parseRemoteSlashCommand(text);
+    if (!parsedCommand || !parsedCommand.commandName) {
+      throw new Error("Missing slash command. Try /help.");
+    }
+    if (parsedCommand.commandName === "help") {
+      await postCommandResult(clientId, {
+        requestId,
+        kind: "text",
+        commandText: parsedCommand.rawText,
+        title: "Remote commands",
+        text: buildRemoteSlashHelpText()
+      });
+      return;
+    }
+    if (parsedCommand.commandName === "chats") {
+      if (!params.chatStore?.listChats) {
+        throw new Error("Remote chat listing is unavailable.");
+      }
+      const chats = await params.chatStore.listChats();
+      await postCommandResult(clientId, {
+        requestId,
+        kind: "chat_list",
+        commandText: parsedCommand.rawText,
+        text: `Loaded ${chats.length} chats.`,
+        chats
+      });
+      return;
+    }
+    if (parsedCommand.commandName === "messages") {
+      if (!params.chatStore?.loadChatById) {
+        throw new Error("Remote chat history is unavailable.");
+      }
+      const chatId = parsedCommand.argumentText || activeChat.id;
+      const chat = await params.chatStore.loadChatById(chatId);
+      await postCommandResult(clientId, {
+        requestId,
+        kind: "chat_messages",
+        commandText: parsedCommand.rawText,
+        text: `Loaded ${Array.isArray(chat.messages) ? chat.messages.length : 0} messages from ${chat.id}.`,
+        chatId: chat.id,
+        chat: buildRemoteChatSummary(chat),
+        messages: buildRemoteChatMessages(chat.messages)
+      });
+      return;
+    }
+    if (parsedCommand.commandName === "new") {
+      if (!params.chatStore?.createChat) {
+        throw new Error("Remote chat creation is unavailable.");
+      }
+      if (activeRunController) {
+        throw new Error("Cannot switch chats while a run is still active.");
+      }
+      activeChat = await params.chatStore.createChat({ setCurrent: true });
+      await syncActiveChatState();
+      await postCommandResult(clientId, {
+        requestId,
+        kind: "chat_selected",
+        commandText: parsedCommand.rawText,
+        text: `Created and selected ${activeChat.id}.`,
+        chatId: activeChat.id,
+        chat: buildRemoteChatSummary(activeChat)
+      });
+      await publishSessionSnapshot();
+      return;
+    }
+    if (parsedCommand.commandName === "use" || parsedCommand.commandName === "select") {
+      if (!params.chatStore?.setCurrentChat) {
+        throw new Error("Remote chat selection is unavailable.");
+      }
+      if (activeRunController) {
+        throw new Error("Cannot switch chats while a run is still active.");
+      }
+      const chatId = parsedCommand.argumentText;
+      if (!chatId) {
+        throw new Error("Usage: /use <chatId>");
+      }
+      activeChat = await params.chatStore.setCurrentChat(chatId);
+      await syncActiveChatState();
+      await postCommandResult(clientId, {
+        requestId,
+        kind: "chat_selected",
+        commandText: parsedCommand.rawText,
+        text: `Selected ${activeChat.id}.`,
+        chatId: activeChat.id,
+        chat: buildRemoteChatSummary(activeChat)
+      });
+      await publishSessionSnapshot();
+      return;
+    }
+    throw new Error(`Unknown slash command: /${parsedCommand.commandName}. Try /help.`);
+  };
+  const enqueueMessage = (entry) => {
+    queuedMessages.push(entry);
+    if (nextMessageResolver) {
+      const resolve = nextMessageResolver;
+      nextMessageResolver = null;
+      resolve(queuedMessages.shift() ?? null);
+    }
+  };
+  const commandPump = (async () => {
+    while (active) {
+      const commandResponse = await params.relayClient.pollRelayCommands({
+        relayServer: params.relayServer,
+        sessionId: relaySession.sessionId,
+        desktopToken: relaySession.desktopToken,
+        after: commandCursor,
+        timeoutMs: 25e3
+      });
+      if (commandResponse.revoked) {
+        active = false;
+        relaySessionClosed = true;
+        remoteControlAbort.abort();
+        if (nextMessageResolver) {
+          const resolve = nextMessageResolver;
+          nextMessageResolver = null;
+          resolve(null);
+        }
+        break;
+      }
+      for (const command of commandResponse.commands ?? []) {
+        commandCursor = Math.max(commandCursor, Number(command.sequence) || commandCursor);
+        const clientId = typeof command.clientId === "string" ? command.clientId : "";
+        const requestId = String(command.payload?.requestId ?? "");
+        if (command.type === "input") {
+          const text = String(command.payload?.text ?? "").trim();
+          if (!text) {
+            await postCommandError(clientId, requestId, "invalid_input", "Remote input text is required.");
+            continue;
+          }
+          if (text.startsWith("/")) {
+            try {
+              await executeSlashCommand({ clientId, requestId, text });
+            } catch (error) {
+              await postCommandError(clientId, requestId, "command_failed", error instanceof Error ? error.message : String(error));
+            }
+            continue;
+          }
+          enqueueMessage({
+            kind: "message",
+            text,
+            source: "remote",
+            commandId: String(command.sequence)
+          });
+          continue;
+        }
+        if (command.type === "approval_decision") {
+          approvalGate.resolveDecision(String(command.payload?.approvalId ?? ""), {
+            approved: Boolean(command.payload?.approved),
+            reason: String(command.payload?.reason ?? ""),
+            source: "remote",
+            decidedAt: command.createdAt
+          });
+          continue;
+        }
+        if (command.type === "cancel") {
+          activeRunController?.abort();
+          await postEvent("run_status", {
+            status: "cancel_requested",
+            source: "remote"
+          });
+          continue;
+        }
+        if (command.type === "resume") {
+          if (waitingForInput) {
+            waitingForInput = false;
+            enqueueMessage({ kind: "resume" });
+          }
+          continue;
+        }
+        if (command.type === "disconnect") {
+          active = false;
+          finalRevokeReason = "remote_disconnect";
+          activeRunController?.abort();
+          remoteControlAbort.abort();
+          if (nextMessageResolver) {
+            const resolve = nextMessageResolver;
+            nextMessageResolver = null;
+            resolve(null);
+          }
+          break;
+        }
+        if (clientId) {
+          await postCommandError(clientId, requestId, "unsupported_command", `Unsupported remote command type: ${command.type}`);
+        }
+      }
+    }
+  })();
+  await postEvent("run_status", {
+    status: "remote_session_started",
+    sessionId: relaySession.sessionId,
+    activeChatId: activeChat.id
+  });
+  await publishSessionSnapshot();
+  if (params.initialMessage) {
+    enqueueMessage({
+      kind: "message",
+      text: params.initialMessage,
+      source: "local"
+    });
+  }
+  while (active) {
+    if (queuedMessages.length === 0) {
+      waitingForInput = true;
+      await postEvent("run_status", {
+        status: "waiting_for_input"
+      });
+    }
+    const nextMessage = queuedMessages.length > 0 ? queuedMessages.shift() ?? null : await new Promise((resolve) => {
+      nextMessageResolver = resolve;
+    });
+    waitingForInput = false;
+    if (!nextMessage || !active) {
       break;
     }
-
-    if (arg === '--new-chat') {
-      newChat = true;
+    if (nextMessage.kind === "resume") {
       continue;
     }
-
-    if (arg === '--help' || arg === '-h') {
-      help = true;
-      continue;
+    activeRunController = new AbortController();
+    try {
+      await postEvent("run_status", {
+        status: "started",
+        source: nextMessage.source,
+        commandId: nextMessage.commandId
+      });
+      const result = await params.executeTurn({
+        chat: activeChat,
+        message: nextMessage.text,
+        approvalGate,
+        abortSignal: activeRunController.signal,
+        commandSource: nextMessage.source,
+        onAssistantChunk: async (chunkText) => {
+          await postEvent("assistant_output", {
+            text: chunkText,
+            source: nextMessage.source
+          });
+        }
+      });
+      activeChat.messages = result.messages;
+      await postEvent("completion", {
+        text: result.assistantText,
+        source: nextMessage.source
+      });
+      await postEvent("run_status", {
+        status: "completed",
+        source: nextMessage.source
+      });
+    } catch (error) {
+      const wasCancelled = activeRunController.signal.aborted;
+      if (!wasCancelled) {
+        await postEvent("failure", {
+          ...buildRemoteFailureSummary(error),
+          source: nextMessage.source
+        });
+      }
+      await postEvent("run_status", {
+        status: wasCancelled ? "cancelled" : "failed",
+        source: nextMessage.source
+      });
+      if (wasCancelled) {
+        continue;
+      }
+    } finally {
+      activeRunController = null;
     }
-
-    if (arg === '--verbose' || arg === '-v') {
-      verbose = true;
-      continue;
-    }
-
-    if (arg === '--stream-off') {
-      streamOff = true;
-      continue;
-    }
-
-    if (arg === '--remote') {
-      remoteControl = true;
-      continue;
-    }
-
-    if (arg.startsWith('--')) {
-      const flagBody = arg.slice(2);
-      const equalsIndex = flagBody.indexOf('=');
-      const rawFlagName = equalsIndex >= 0 ? flagBody.slice(0, equalsIndex) : flagBody;
-      const inlineValue = equalsIndex >= 0 ? flagBody.slice(equalsIndex + 1) : undefined;
-      const flagName = normalizeFlagName(rawFlagName);
-
-      if (flagName === 'provider') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides.provider = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'model') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides.model = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'temperature') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides.temperature = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'max-tokens' || flagName === 'max-output-tokens') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides['max-tokens'] = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'tool-permission' || flagName === 'permission' || flagName === 'permissions') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides['tool-permission'] = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'reasoning-effort' || flagName === 'reasoning') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides['reasoning-effort'] = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'past-messages' || flagName === 'history-messages') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        runtimeOverrides['past-messages'] = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'stream-trace') {
-        const result = readOptionalFlagValue(argv, index, inlineValue, ['true', 'false']);
-        runtimeOverrides['stream-trace'] = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'no-stream-trace') {
-        runtimeOverrides['stream-trace'] = false;
-        continue;
-      }
-
-      if (flagName === 'web-search') {
-        const result = readOptionalFlagValue(argv, index, inlineValue, ['true', 'false', 'low', 'medium', 'high']);
-        runtimeOverrides['web-search'] = result.value;
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'no-web-search') {
-        runtimeOverrides['web-search'] = false;
-        continue;
-      }
-
-      throw new Error(`Unknown flag: ${arg}`);
-    }
-
-    messageParts.push(arg);
   }
-
-  return {
-    help,
-    newChat,
-    remoteControl,
-    runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
-    streamOff,
-    verbose,
-    message: messageParts.join(' ').trim(),
-  };
+  active = false;
+  remoteControlAbort.abort();
+  await commandPump;
+  if (!relaySessionClosed) {
+    try {
+      await params.relayClient.revokeRelaySession({
+        relayServer: params.relayServer,
+        sessionId: relaySession.sessionId,
+        token: relaySession.desktopToken,
+        reason: finalRevokeReason
+      });
+    } catch (error) {
+      const statusCode = Number(error && typeof error === "object" && "statusCode" in error ? error.statusCode : 0);
+      if (statusCode !== 404 && statusCode !== 410) {
+        throw error;
+      }
+    }
+  }
+  return relaySession;
 }
 
-/**
- * @param {{
- *   io: { stdout: { write(chunk: string): void }, stderr?: { write(chunk: string): void } },
- *   verbose: boolean,
- *   streamOff: boolean,
- *   agentConfig: Record<string, unknown>,
- *   projectSystemPrompt: string | undefined,
- *   skillInventory: Array<{ skillId: string, description?: string }>,
- * }} options
- */
+// core/runtime-client.js
+import { createLLMEnvironment, disposeLLMEnvironment, resolveToolsAsync, respondWithTools } from "llm-runtime";
+var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
+  "openai",
+  "anthropic",
+  "google",
+  "azure",
+  "xai",
+  "openai-compatible",
+  "ollama"
+]);
+var DEFAULT_MODELS = {
+  openai: "gpt-5"
+};
+function buildEnvironmentDefaults(agentConfig = {}) {
+  const defaults = {};
+  if (agentConfig.reasoningEffort) {
+    defaults.reasoningEffort = agentConfig.reasoningEffort;
+  }
+  if (agentConfig.toolPermission) {
+    defaults.toolPermission = agentConfig.toolPermission;
+  }
+  return defaults;
+}
+function buildExecutionContext(agentConfig = {}) {
+  const context = {
+    workingDirectory: REPO_ROOT
+  };
+  if (agentConfig.reasoningEffort) {
+    context.reasoningEffort = agentConfig.reasoningEffort;
+  }
+  if (agentConfig.toolPermission) {
+    context.toolPermission = agentConfig.toolPermission;
+  }
+  if (agentConfig.abortSignal) {
+    context.abortSignal = agentConfig.abortSignal;
+  }
+  return context;
+}
+function requireEnvironmentVariable(environment, variableName) {
+  const value = String(environment[variableName] ?? "").trim();
+  if (!value) {
+    throw new Error(`Missing environment variable: ${variableName}`);
+  }
+  return value;
+}
+function resolveProviderConfig(provider, environment) {
+  switch (provider) {
+    case "openai":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "OPENAI_API_KEY")
+      };
+    case "anthropic":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "ANTHROPIC_API_KEY")
+      };
+    case "google":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "GOOGLE_API_KEY")
+      };
+    case "xai":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "XAI_API_KEY")
+      };
+    case "openai-compatible":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "OPENAI_COMPATIBLE_API_KEY"),
+        baseUrl: requireEnvironmentVariable(environment, "OPENAI_COMPATIBLE_BASE_URL")
+      };
+    case "ollama":
+      return {
+        baseUrl: requireEnvironmentVariable(environment, "OLLAMA_BASE_URL")
+      };
+    case "azure":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "AZURE_OPENAI_API_KEY"),
+        resourceName: requireEnvironmentVariable(environment, "AZURE_OPENAI_RESOURCE_NAME"),
+        deployment: requireEnvironmentVariable(environment, "AZURE_OPENAI_DEPLOYMENT_NAME"),
+        ...String(environment.AZURE_OPENAI_API_VERSION ?? "").trim() ? { apiVersion: String(environment.AZURE_OPENAI_API_VERSION).trim() } : {}
+      };
+    default:
+      throw new Error(`Unsupported LLM provider: ${provider}`);
+  }
+}
+function validateRuntimeEnvironment(environment = process.env, agentConfig = {}) {
+  const configuredProvider = String(agentConfig.provider ?? "openai").trim();
+  const normalizedProvider = configuredProvider.toLowerCase();
+  if (!SUPPORTED_PROVIDERS.has(
+    /** @type {LLMProviderName} */
+    normalizedProvider
+  )) {
+    throw new Error(`Unsupported LLM provider: ${configuredProvider}`);
+  }
+  const provider = (
+    /** @type {LLMProviderName} */
+    normalizedProvider
+  );
+  const providerConfig = resolveProviderConfig(provider, environment);
+  const providerDefaultModel = provider === "azure" && "deployment" in providerConfig ? providerConfig.deployment : DEFAULT_MODELS[provider];
+  const model = String(agentConfig.model ?? providerDefaultModel ?? "").trim();
+  if (!model) {
+    throw new Error(`Missing LLM model. Set it in runtime.json or pass --model for provider ${provider}.`);
+  }
+  const providers = (
+    /** @type {LLMProviderConfigs} */
+    {
+      [provider]: providerConfig
+    }
+  );
+  return {
+    provider,
+    model,
+    providers
+  };
+}
+function buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory) {
+  const messages = [
+    {
+      role: "system",
+      content: builtInSystemPrompt
+    }
+  ];
+  if (String(projectSystemPrompt ?? "").trim()) {
+    messages.push({
+      role: "system",
+      content: String(projectSystemPrompt).trim()
+    });
+  }
+  const skillInventoryMessage = buildSkillInventoryMessage(skillInventory);
+  if (skillInventoryMessage) {
+    messages.push({
+      role: "system",
+      content: skillInventoryMessage
+    });
+  }
+  return messages;
+}
+function parseToolArguments(argumentsText) {
+  if (!argumentsText || !String(argumentsText).trim()) {
+    return {};
+  }
+  try {
+    return JSON.parse(argumentsText);
+  } catch {
+    return {
+      __raw: argumentsText
+    };
+  }
+}
+async function executeToolCall(toolCall, tools, executionContext, approvalGate) {
+  const toolName = toolCall.function?.name;
+  const tool = toolName ? tools[toolName] : void 0;
+  if (!toolName || !tool || typeof tool.execute !== "function") {
+    return {
+      ok: false,
+      status: "error",
+      errorType: "unknown_tool",
+      message: `Tool is not executable: ${toolName}`
+    };
+  }
+  const parsedArguments = parseToolArguments(toolCall.function?.arguments ?? "{}");
+  if (executionContext.toolPermission === "ask" && approvalGate?.requestApproval) {
+    const approvalDecision = await approvalGate.requestApproval({
+      toolCallId: toolCall.id,
+      toolName,
+      arguments: parsedArguments
+    });
+    if (!approvalDecision?.approved) {
+      return {
+        ok: false,
+        status: "rejected",
+        errorType: "tool_execution_rejected",
+        message: approvalDecision?.reason || `Tool execution rejected: ${toolName}`
+      };
+    }
+  }
+  try {
+    return await tool.execute(parsedArguments, {
+      ...executionContext,
+      toolCallId: toolCall.id
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: "error",
+      errorType: "tool_execution_failed",
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+function serializeToolResult(result) {
+  if (typeof result === "string") {
+    return result;
+  }
+  return JSON.stringify(result ?? null, null, 2);
+}
+function selectContextMessages(messages, historyMessageLimit) {
+  if (typeof historyMessageLimit !== "number" || !Number.isInteger(historyMessageLimit) || historyMessageLimit < 0) {
+    return messages;
+  }
+  if (historyMessageLimit === 0) {
+    return [];
+  }
+  return messages.slice(-historyMessageLimit);
+}
+async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, historyMessageLimit, builtInSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
+  const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
+  const environmentDefaults = buildEnvironmentDefaults(agentConfig);
+  const executionContext = buildExecutionContext({
+    ...agentConfig,
+    abortSignal
+  });
+  const environment = createLLMEnvironment({
+    providers: runtimeSettings.providers,
+    skillRoots: [SKILLS_ROOT],
+    ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
+  });
+  const tools = await resolveToolsAsync({
+    environment,
+    builtIns: {
+      load_skill: true
+    }
+  });
+  const pendingUserMessage = {
+    role: "user",
+    content: userMessage,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const contextMessages = selectContextMessages(chat.messages, historyMessageLimit);
+  try {
+    const result = await respondWithTools({
+      initialState: {
+        conversationMessages: [...contextMessages, pendingUserMessage],
+        persistedMessages: [...chat.messages, pendingUserMessage],
+        finalText: ""
+      },
+      emptyTextRetryLimit: 0,
+      rejectedTextRetryLimit: 0,
+      modelRequest: {
+        mode: stream ? "stream" : "generate",
+        environment,
+        provider: runtimeSettings.provider,
+        model: runtimeSettings.model,
+        ...stream && typeof onStreamChunk === "function" ? { onChunk: onStreamChunk } : {},
+        ...typeof agentConfig.temperature === "number" ? { temperature: agentConfig.temperature } : {},
+        ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
+        ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
+        builtIns: {
+          load_skill: true
+        },
+        context: executionContext
+      },
+      ...abortSignal ? { abortSignal } : {},
+      buildMessages: async ({ state, transientInstruction }) => {
+        const baseMessages = [
+          ...buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory),
+          ...state.conversationMessages
+        ];
+        if (!transientInstruction) {
+          return baseMessages;
+        }
+        return [
+          ...baseMessages,
+          {
+            role: "system",
+            content: transientInstruction
+          }
+        ];
+      },
+      onToolCallsResponse: async ({ state, response }) => {
+        const nextConversationMessages = [...state.conversationMessages, response.assistantMessage];
+        const nextPersistedMessages = [...state.persistedMessages, response.assistantMessage];
+        for (const toolCall of response.tool_calls ?? []) {
+          if (typeof onToolCall === "function") {
+            onToolCall({
+              id: toolCall.id,
+              name: toolCall.function?.name ?? "unknown_tool",
+              arguments: toolCall.function?.arguments
+            });
+          }
+          const toolResult = await executeToolCall(toolCall, tools, executionContext, approvalGate);
+          const toolMessage = {
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: serializeToolResult(toolResult),
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          nextConversationMessages.push(toolMessage);
+          nextPersistedMessages.push(toolMessage);
+        }
+        return {
+          state: {
+            ...state,
+            conversationMessages: nextConversationMessages,
+            persistedMessages: nextPersistedMessages
+          },
+          next: {
+            control: "continue"
+          }
+        };
+      },
+      onTextResponse: async ({ state, response, responseText }) => ({
+        state: {
+          ...state,
+          conversationMessages: [...state.conversationMessages, response.assistantMessage],
+          persistedMessages: [...state.persistedMessages, response.assistantMessage],
+          finalText: responseText
+        }
+      })
+    });
+    if (!result.state.finalText.trim()) {
+      throw new Error(`LLM turn ended without a final text response. Stop reason: ${result.reason}`);
+    }
+    return {
+      assistantText: result.state.finalText.trim(),
+      messages: result.state.persistedMessages ?? result.state.conversationMessages
+    };
+  } finally {
+    await disposeLLMEnvironment(environment);
+  }
+}
+
+// cli/src/agent-runtime.ts
+function writeTypeTransitionSeparator(stdout, previousType, nextType) {
+  if (previousType && previousType !== nextType) {
+    stdout.write("\n");
+  }
+}
+function writeDiagnostic(stderr, kind, text) {
+  stderr.write(`${kind}: ${text}
+`);
+}
+async function resolveEffectiveAgentConfig(options = {}) {
+  const persistedAgentConfig = await loadPersistedRuntimeConfig({
+    agentId: options.agentId
+  });
+  const baseAgentConfig = {
+    ...persistedAgentConfig,
+    ...options.optionAgentConfig ?? {}
+  };
+  return {
+    ...baseAgentConfig,
+    ...options.runtimeOverrides ?? {}
+  };
+}
 function createTurnExecutor(options) {
   const builtInSystemPrompt = getBuiltInSystemPrompt();
   const stderr = options.io.stderr ?? process.stderr;
-
-  /**
-   * @param {{
-   *   chat: { id: string, messages: any[], createdAt?: string, updatedAt?: string },
-   *   message: string,
-   *   approvalGate?: { requestApproval?: (request: Record<string, unknown>) => Promise<{ approved?: boolean, reason?: string }> },
-   *   abortSignal?: AbortSignal,
-   *   onAssistantChunk?: (chunkText: string) => Promise<void> | void,
-   * }} params
-   */
   return async function executeTurn({
     chat,
     message,
     approvalGate,
     abortSignal,
-    onAssistantChunk,
+    onAssistantChunk
   }) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
-    /** @type {Array<{ type: string, text: string, createdAt: string }>} */
     const streamTraceEvents = [];
-    /** @type {string | null} */
     let lastStreamType = null;
     let wroteTextChunk = false;
     const pastMessages = Number(options.agentConfig.pastMessages);
-    const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
-      ? pastMessages
-      : 0;
-
+    const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0 ? pastMessages : 0;
     try {
       const turnResult = await runChatTurn({
         chat,
@@ -389,176 +1983,370 @@ function createTurnExecutor(options) {
         stream: !options.streamOff,
         approvalGate,
         abortSignal,
-        onStreamChunk: options.streamOff
-          ? undefined
-          : async (chunk) => {
-            const reasoningText = [
-              chunk.reasoningContent,
-              chunk.reasoning,
-              chunk.reasoningText,
-              chunk.thinking,
-            ].find((value) => typeof value === 'string' && value.length > 0);
-            const streamErrors = [
-              ...(Array.isArray(chunk.errors) ? chunk.errors : []),
-              ...(chunk.error ? [chunk.error] : []),
-            ];
-
-            for (const warning of chunk.warnings ?? []) {
-              const warningText = String(
-                warning && typeof warning === 'object' && 'message' in warning
-                  ? warning.message
-                  : JSON.stringify(warning ?? null),
-              );
-
-              if (options.verbose) {
-                writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
-                writeDiagnostic(stderr, 'warning', warningText);
-              }
-
-              if (streamTraceEnabled) {
-                streamTraceEvents.push({
-                  type: 'warning',
-                  text: warningText,
-                  createdAt: new Date().toISOString(),
-                });
-              }
-
-              lastStreamType = 'warning';
-            }
-
-            for (const streamError of streamErrors) {
-              const errorText = String(
-                streamError && typeof streamError === 'object' && 'message' in streamError
-                  ? streamError.message
-                  : JSON.stringify(streamError ?? null),
-              );
-
-              if (options.verbose) {
-                writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
-                writeDiagnostic(stderr, 'error', errorText);
-              }
-
-              if (streamTraceEnabled) {
-                streamTraceEvents.push({
-                  type: 'error',
-                  text: errorText,
-                  createdAt: new Date().toISOString(),
-                });
-              }
-
-              lastStreamType = 'error';
-            }
-
-            if (reasoningText) {
-              if (options.verbose) {
-                writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
-                writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
-              }
-
-              if (streamTraceEnabled) {
-                streamTraceEvents.push({
-                  type: 'reasoning',
-                  text: reasoningText,
-                  createdAt: new Date().toISOString(),
-                });
-              }
-
-              lastStreamType = 'reasoningContent';
-            }
-
-            if (chunk.content) {
-              options.io.stdout.write(chunk.content);
-              wroteTextChunk = true;
-              await onAssistantChunk?.(chunk.content);
-
-              if (streamTraceEnabled) {
-                streamTraceEvents.push({
-                  type: 'text',
-                  text: chunk.content,
-                  createdAt: new Date().toISOString(),
-                });
-              }
-
-              lastStreamType = 'text';
-            }
-          },
-        onToolCall: options.streamOff
-          ? undefined
-          : (toolCall) => {
+        onStreamChunk: options.streamOff ? void 0 : async (chunk) => {
+          const reasoningText = [
+            chunk.reasoningContent,
+            chunk.reasoning,
+            chunk.reasoningText,
+            chunk.thinking
+          ].find((value) => typeof value === "string" && value.length > 0);
+          const streamErrors = [
+            ...Array.isArray(chunk.errors) ? chunk.errors : [],
+            ...chunk.error ? [chunk.error] : []
+          ];
+          for (const warning of chunk.warnings ?? []) {
+            const warningText = String(
+              warning && typeof warning === "object" && "message" in warning ? warning.message : JSON.stringify(warning ?? null)
+            );
             if (options.verbose) {
-              writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
-              writeDiagnostic(stderr, 'tool', toolCall.name);
+              writeTypeTransitionSeparator(stderr, lastStreamType, "warning");
+              writeDiagnostic(stderr, "warning", warningText);
             }
-
             if (streamTraceEnabled) {
               streamTraceEvents.push({
-                type: 'tool',
-                text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
-                createdAt: new Date().toISOString(),
+                type: "warning",
+                text: warningText,
+                createdAt: (/* @__PURE__ */ new Date()).toISOString()
               });
             }
-
-            lastStreamType = 'tool';
-          },
+            lastStreamType = "warning";
+          }
+          for (const streamError of streamErrors) {
+            const errorText = String(
+              streamError && typeof streamError === "object" && "message" in streamError ? streamError.message : JSON.stringify(streamError ?? null)
+            );
+            if (options.verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, "error");
+              writeDiagnostic(stderr, "error", errorText);
+            }
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: "error",
+                text: errorText,
+                createdAt: (/* @__PURE__ */ new Date()).toISOString()
+              });
+            }
+            lastStreamType = "error";
+          }
+          if (reasoningText) {
+            if (options.verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, "reasoning");
+              writeDiagnostic(stderr, "reasoning", JSON.stringify(reasoningText));
+            }
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: "reasoning",
+                text: reasoningText,
+                createdAt: (/* @__PURE__ */ new Date()).toISOString()
+              });
+            }
+            lastStreamType = "reasoningContent";
+          }
+          if (chunk.content) {
+            options.io.stdout.write(chunk.content);
+            wroteTextChunk = true;
+            await onAssistantChunk?.(chunk.content);
+            if (streamTraceEnabled) {
+              streamTraceEvents.push({
+                type: "text",
+                text: chunk.content,
+                createdAt: (/* @__PURE__ */ new Date()).toISOString()
+              });
+            }
+            lastStreamType = "text";
+          }
+        },
+        onToolCall: options.streamOff ? void 0 : (toolCall) => {
+          if (options.verbose) {
+            writeTypeTransitionSeparator(stderr, lastStreamType, "tool");
+            writeDiagnostic(stderr, "tool", toolCall.name);
+          }
+          if (streamTraceEnabled) {
+            streamTraceEvents.push({
+              type: "tool",
+              text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
+              createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          }
+          lastStreamType = "tool";
+        },
         historyMessageLimit,
         builtInSystemPrompt,
         projectSystemPrompt: options.projectSystemPrompt,
         skillInventory: options.skillInventory,
-        agentConfig: options.agentConfig,
+        agentConfig: options.agentConfig
       });
-
       await persistCompletedChat({
         chat,
-        messages: turnResult.messages,
+        messages: turnResult.messages
       });
-
       if (streamTraceEnabled) {
         await persistStreamTraceEvents({
           chat,
-          streamTraceEvents,
+          streamTraceEvents
         });
       }
-
       chat.messages = turnResult.messages;
-
       if (options.streamOff) {
-        options.io.stdout.write(`${turnResult.assistantText}\n`);
+        options.io.stdout.write(`${turnResult.assistantText}
+`);
       } else if (wroteTextChunk) {
-        options.io.stdout.write('\n');
+        options.io.stdout.write("\n");
       }
-
       return turnResult;
     } catch (error) {
       if (streamTraceEnabled) {
         const errorText = error instanceof Error ? error.message : String(error);
-
         streamTraceEvents.push({
-          type: 'error',
+          type: "error",
           text: errorText,
-          createdAt: new Date().toISOString(),
+          createdAt: (/* @__PURE__ */ new Date()).toISOString()
         });
-
         await persistStreamTraceEvents({
           chat,
-          streamTraceEvents,
+          streamTraceEvents
         });
       }
-
       throw error;
     }
   };
 }
 
-/**
- * @param {string[]} [argv]
- * @param {{ stdout: { write(chunk: string): void }, stderr?: { write(chunk: string): void } }} [io]
- * @param {{ agentConfig?: Record<string, unknown> }} [options]
- */
-export async function main(
-  argv = process.argv.slice(2),
-  io = { stdout: process.stdout, stderr: process.stderr },
-  options = {},
-) {
+// cli/src/cli-shell.ts
+var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
+var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_API_KEY",
+  "XAI_API_KEY",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "OLLAMA_BASE_URL",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_RESOURCE_NAME",
+  "AZURE_OPENAI_DEPLOYMENT_NAME",
+  "AZURE_OPENAI_API_VERSION"
+]);
+function loadAllowedDotEnvEnvironment() {
+  const parsed = loadDotEnvConfig({ processEnv: {} }).parsed ?? {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
+      continue;
+    }
+    if (typeof process.env[key] === "string" && process.env[key].trim()) {
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+loadAllowedDotEnvEnvironment();
+function usageText() {
+  return [
+    "Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
+    "       agent-cli --remote [--new-chat] [initial message]",
+    "",
+    "Runtime options override runtime.json defaults when provided:",
+    "  --provider <name>                 --model <name>",
+    "  --temperature <number>            --max-tokens <number>",
+    "  --tool-permission <auto|ask|read> --reasoning-effort <level>",
+    "  --past-messages <count>           --stream-trace <true|false>",
+    "  --web-search <true|false|low|medium|high>",
+    "  --remote",
+    "",
+    `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
+    "",
+    "Examples:",
+    '  agent-cli --new-chat "Map my next financial move"',
+    '  agent-cli "What should I do first?"',
+    '  agent-cli --verbose "What should I do first?"',
+    '  agent-cli --stream-off "What should I do first?"',
+    '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
+    "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
+  ].join("\n");
+}
+function startupText(cwd = process.cwd()) {
+  return `Agent CLI starting in ${cwd}`;
+}
+function runtimeSelectionText(runtimeSettings) {
+  return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
+}
+function readRemoteRelayServerUrl(environment = process.env) {
+  const relayServer = String(environment[REMOTE_RELAY_SERVER_ENV_KEY] ?? "").trim();
+  if (!relayServer) {
+    throw new Error(`Missing environment variable: ${REMOTE_RELAY_SERVER_ENV_KEY}`);
+  }
+  return normalizeRelayServerUrl(relayServer);
+}
+function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argvPath) {
+    return false;
+  }
+  try {
+    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return pathToFileURL(path4.resolve(argvPath)).href === moduleUrl;
+  }
+}
+function parseArguments(argv) {
+  let newChat = false;
+  let streamOff = false;
+  let help = false;
+  let remoteControl = false;
+  let verbose = false;
+  const messageParts = [];
+  const runtimeOverrides = {};
+  const normalizeFlagName = (rawValue) => rawValue.trim().toLowerCase();
+  const readFlagValue = (values, index, inlineValue, flagName, options = {}) => {
+    if (inlineValue !== void 0) {
+      return {
+        nextIndex: index,
+        value: inlineValue
+      };
+    }
+    const nextValue = values[index + 1];
+    if (typeof nextValue === "string" && !nextValue.startsWith("--")) {
+      return {
+        nextIndex: index + 1,
+        value: nextValue
+      };
+    }
+    if (options.allowBareTrue) {
+      return {
+        nextIndex: index,
+        value: true
+      };
+    }
+    throw new Error(`Missing value for flag: --${flagName}`);
+  };
+  const readOptionalFlagValue = (values, index, inlineValue, explicitValues) => {
+    if (inlineValue !== void 0) {
+      return {
+        nextIndex: index,
+        value: inlineValue
+      };
+    }
+    const nextValue = values[index + 1];
+    const normalizedNextValue = typeof nextValue === "string" ? nextValue.trim().toLowerCase() : "";
+    if (explicitValues.includes(normalizedNextValue)) {
+      return {
+        nextIndex: index + 1,
+        value: nextValue
+      };
+    }
+    return {
+      nextIndex: index,
+      value: true
+    };
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      messageParts.push(...argv.slice(index + 1));
+      break;
+    }
+    if (arg === "--new-chat") {
+      newChat = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+      continue;
+    }
+    if (arg === "--verbose" || arg === "-v") {
+      verbose = true;
+      continue;
+    }
+    if (arg === "--stream-off") {
+      streamOff = true;
+      continue;
+    }
+    if (arg === "--remote") {
+      remoteControl = true;
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      const flagBody = arg.slice(2);
+      const equalsIndex = flagBody.indexOf("=");
+      const rawFlagName = equalsIndex >= 0 ? flagBody.slice(0, equalsIndex) : flagBody;
+      const inlineValue = equalsIndex >= 0 ? flagBody.slice(equalsIndex + 1) : void 0;
+      const flagName = normalizeFlagName(rawFlagName);
+      if (flagName === "provider") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides.provider = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "model") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides.model = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "temperature") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides.temperature = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "max-tokens" || flagName === "max-output-tokens") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides["max-tokens"] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "tool-permission" || flagName === "permission" || flagName === "permissions") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides["tool-permission"] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "reasoning-effort" || flagName === "reasoning") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides["reasoning-effort"] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "past-messages" || flagName === "history-messages") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        runtimeOverrides["past-messages"] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "stream-trace") {
+        const result = readOptionalFlagValue(argv, index, inlineValue, ["true", "false"]);
+        runtimeOverrides["stream-trace"] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "no-stream-trace") {
+        runtimeOverrides["stream-trace"] = false;
+        continue;
+      }
+      if (flagName === "web-search") {
+        const result = readOptionalFlagValue(argv, index, inlineValue, ["true", "false", "low", "medium", "high"]);
+        runtimeOverrides["web-search"] = result.value;
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "no-web-search") {
+        runtimeOverrides["web-search"] = false;
+        continue;
+      }
+      throw new Error(`Unknown flag: ${arg}`);
+    }
+    messageParts.push(arg);
+  }
+  return {
+    help,
+    newChat,
+    remoteControl,
+    runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
+    streamOff,
+    verbose,
+    message: messageParts.join(" ").trim()
+  };
+}
+async function main(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }, options = {}) {
   const {
     help,
     newChat,
@@ -566,56 +2354,48 @@ export async function main(
     runtimeOverrides,
     streamOff,
     verbose,
-    message,
+    message
   } = parseArguments(argv);
-
   if (help) {
-    io.stdout.write(`${usageText()}\n`);
+    io.stdout.write(`${usageText()}
+`);
     return null;
   }
-
   if (!message && !remoteControl) {
-    throw new Error(`Missing user message.\n\n${usageText()}`);
+    throw new Error(`Missing user message.
+
+${usageText()}`);
   }
-
-  const environmentAgentConfig = normalizeAgentConfig(process.env);
-  const baseAgentConfig = {
-    ...environmentAgentConfig,
-    ...(options.agentConfig ?? {}),
-  };
-  const agentConfig = {
-    ...baseAgentConfig,
-    ...runtimeOverrides,
-  };
-
+  const agentConfig = await resolveEffectiveAgentConfig({
+    optionAgentConfig: options.agentConfig,
+    runtimeOverrides,
+    agentId: options.agentId
+  });
+  const effectiveStreamOff = streamOff || agentConfig.stream === false;
   if (!remoteControl) {
     await assertNoActiveRemoteHost();
   }
-
   const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
     loadProjectSystemPrompt(),
     loadSkillInventory(),
-    loadRequestedChat({ newChat }),
+    loadRequestedChat({ newChat })
   ]);
   const executeTurn = createTurnExecutor({
     io,
     verbose,
-    streamOff,
+    streamOff: effectiveStreamOff,
     agentConfig,
     projectSystemPrompt,
-    skillInventory,
+    skillInventory
   });
-
   if (remoteControl) {
     await acquireRemoteHostLock({ chat });
     const relayServer = readRemoteRelayServerUrl(process.env);
-
     try {
       await persistCompletedChat({
         chat,
-        messages: chat.messages,
+        messages: chat.messages
       });
-
       const relaySession = await runRemoteControlSession({
         relayServer,
         chat,
@@ -624,62 +2404,67 @@ export async function main(
           loadChatById,
           createChat: createPersistedChat,
           setCurrentChat,
-          updateRemoteHostLock,
+          persistRemoteSessionState,
+          updateRemoteHostLock
         },
         io,
-        initialMessage: message || undefined,
+        initialMessage: message || void 0,
         onSessionReady: async (startedRelaySession) => {
           await persistRemoteSessionState({
-            chat,
-            remoteSession: startedRelaySession,
+            remoteSession: startedRelaySession
           });
         },
         executeTurn,
-        relayClient,
+        relayClient: relay_client_exports
       });
-
       await persistRemoteSessionState({
-        chat,
-        remoteSession: relaySession,
+        remoteSession: relaySession
       });
-
       return relaySession;
     } finally {
       await releaseRemoteHostLock();
     }
   }
-
   return await executeTurn({
     chat,
-    message,
+    message
   });
 }
-
-/**
- * @param {string[]} [argv]
- * @param {{ stdout: { write(chunk: string): void }, stderr: { write(chunk: string): void } }} [io]
- */
-export async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
+async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
     const parsed = parseArguments(argv);
-    const agentConfig = parsed.runtimeOverrides;
-
     if (parsed.verbose && !parsed.help) {
-      io.stderr.write(`${startupText()}\n`);
-
+      io.stderr.write(`${startupText()}
+`);
       if (parsed.message) {
-        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}\n`);
+        const agentConfig = await resolveEffectiveAgentConfig({
+          runtimeOverrides: parsed.runtimeOverrides
+        });
+        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}
+`);
       }
     }
-
-    await main(argv, io, { agentConfig });
+    await main(argv, io);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    io.stderr.write(`${message.trim()}\n`);
+    io.stderr.write(`${message.trim()}
+`);
     process.exitCode = 1;
   }
 }
 
+// cli/src/index.ts
 if (isCliEntrypoint()) {
   await runCli();
 }
+export {
+  REMOTE_RELAY_SERVER_ENV_KEY,
+  isCliEntrypoint,
+  main,
+  parseArguments,
+  readRemoteRelayServerUrl,
+  runCli,
+  runtimeSelectionText,
+  startupText,
+  usageText
+};

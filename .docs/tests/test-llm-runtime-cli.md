@@ -18,7 +18,7 @@ Validate that the Agent CLI follows the `llm-runtime` convention for prompt and 
 2. `./agent/system.md` exists.
 3. `./agent/skills/` exists.
 4. At least one skill is represented as `./agent/skills/<skill-folder>/SKILL.md` with `name` and `description` front matter.
-5. Provider configuration is available through environment variables such as `LLM_PROVIDER`, `LLM_MODEL`, and the matching provider API key variables; the e2e suite is live-only and should fail fast if no usable provider is configured.
+5. Provider credentials are available through environment variables, and the runtime selection is written through `runtime.json`; the e2e suite is live-only and should fail fast if no usable provider credentials are configured.
 
 ## Scenarios
 

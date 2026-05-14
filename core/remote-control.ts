@@ -283,6 +283,7 @@ function createRemoteApprovalGate({ postEvent, signal }) {
  *     createChat?: (options?: { setCurrent?: boolean }) => Promise<{ id: string, messages: any[], createdAt?: string, updatedAt?: string }>,
  *     setCurrentChat?: (chatId: string) => Promise<{ id: string, messages: any[], createdAt?: string, updatedAt?: string }>,
  *     updateRemoteHostLock?: (params: { chatId: string }) => Promise<boolean>,
+ *     persistRemoteSessionState?: (params: { remoteSession: Record<string, unknown> }) => Promise<unknown>,
  *   },
  *   onSessionReady?: (relaySession: Record<string, unknown>) => Promise<void> | void,
  *   ttlMs?: number,
@@ -362,6 +363,11 @@ export async function runRemoteControlSession(params) {
       chat: buildRemoteChatSummary(activeChat),
       waitingForInput,
     });
+  };
+
+  const syncActiveChatState = async () => {
+    await params.chatStore?.updateRemoteHostLock?.({ chatId: activeChat.id });
+    await params.chatStore?.persistRemoteSessionState?.({ remoteSession: relaySession });
   };
 
   /**
@@ -457,7 +463,7 @@ export async function runRemoteControlSession(params) {
       }
 
       activeChat = await params.chatStore.createChat({ setCurrent: true });
-      await params.chatStore.updateRemoteHostLock?.({ chatId: activeChat.id });
+      await syncActiveChatState();
       await postCommandResult(clientId, {
         requestId,
         kind: 'chat_selected',
@@ -486,7 +492,7 @@ export async function runRemoteControlSession(params) {
       }
 
       activeChat = await params.chatStore.setCurrentChat(chatId);
-      await params.chatStore.updateRemoteHostLock?.({ chatId: activeChat.id });
+      await syncActiveChatState();
       await postCommandResult(clientId, {
         requestId,
         kind: 'chat_selected',

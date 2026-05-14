@@ -30,10 +30,10 @@ import {
   readRelayNotifications,
   revokeRelaySession,
   sendRelayCommand,
-} from '../../lib/relay-client.js';
+} from '../../core/relay-client.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const relayServerBin = path.join(repoRoot, 'server/bin/relay-server.js');
+const relayServerBin = path.join(repoRoot, 'bin', 'server.js');
 const START_TIMEOUT_MS = 5000;
 
 /** @type {import('node:child_process').ChildProcess[]} */

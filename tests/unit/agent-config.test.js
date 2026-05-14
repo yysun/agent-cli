@@ -3,15 +3,39 @@
  * Agent CLI Agent Config Unit Tests
  *
  * Purpose:
- * - Validate runtime override normalization used by CLI flags.
+ * - Validate runtime override normalization used by CLI flags and runtime files.
  *
  * Key features:
  * - Covers common field aliases such as `modal`, `tokens`, and `permissions`.
+ * - Verifies runtime.json defaults and default-agent runtime overrides merge predictably.
  * - Verifies invalid override values fail early with clear messages.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
-import { normalizeAgentConfig } from '../../lib/agent-config.js';
+import { createTestRoot, removeTestRoot } from '../helpers/test-root.js';
+
+import { normalizeAgentConfig } from '../../core/agent-config.js';
+
+/** @type {string[]} */
+const rootsToClean = [];
+const originalCwd = process.cwd();
+
+/** @param {string} rootPath */
+async function loadAgentConfigModule(rootPath) {
+  process.chdir(rootPath);
+  vi.resetModules();
+  return await import('../../core/agent-config.js');
+}
+
+afterEach(async () => {
+  process.chdir(originalCwd);
+
+  while (rootsToClean.length > 0) {
+    await removeTestRoot(rootsToClean.pop());
+  }
+});
 
 describe('agent-config', () => {
   it('normalizes CLI-style runtime override keys', () => {
@@ -71,29 +95,11 @@ describe('agent-config', () => {
     });
   });
 
-  it('normalizes environment-style runtime settings', () => {
+  it('normalizes explicit stream values', () => {
     expect(normalizeAgentConfig({
-      LLM_PROVIDER: 'google',
-      LLM_MODEL: 'gemini-2.5-pro',
-      LLM_TEMPERATURE: '0.2',
-      LLM_MAX_TOKENS: '3072',
-      LLM_TOOL_PERMISSION: 'read',
-      LLM_REASONING_EFFORT: 'low',
-      LLM_PAST_MESSAGES: '9',
-      LLM_STREAM_TRACE: 'true',
-      LLM_WEB_SEARCH: 'medium',
+      stream: 'false',
     })).toEqual({
-      provider: 'google',
-      model: 'gemini-2.5-pro',
-      temperature: 0.2,
-      maxTokens: 3072,
-      toolPermission: 'read',
-      reasoningEffort: 'low',
-      pastMessages: 9,
-      streamTrace: true,
-      webSearch: {
-        searchContextSize: 'medium',
-      },
+      stream: false,
     });
   });
 
@@ -109,9 +115,96 @@ describe('agent-config', () => {
     })).toThrow('Invalid agent config value for streamTrace: expected true or false.');
   });
 
-  it('fails clearly for invalid environment-style numeric values', () => {
+  it('fails clearly for invalid numeric values', () => {
     expect(() => normalizeAgentConfig({
-      LLM_MAX_TOKENS: 'many',
+      maxTokens: 'many',
     })).toThrow('Invalid agent config value for maxTokens: expected a positive integer.');
+  });
+
+  it('loads runtime.json from the repo root', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      provider: 'openai',
+      model: 'gpt-5',
+      reasoningEffort: 'medium',
+      temperature: 0.2,
+      maxTokens: 4096,
+      toolPermission: 'ask',
+      webSearch: false,
+      pastMessages: 20,
+      stream: true,
+      streamTrace: false,
+    }, null, 2)}\n`, 'utf8');
+
+    const { loadPersistedRuntimeConfig } = await loadAgentConfigModule(rootPath);
+
+    await expect(loadPersistedRuntimeConfig()).resolves.toEqual({
+      provider: 'openai',
+      model: 'gpt-5',
+      reasoningEffort: 'medium',
+      temperature: 0.2,
+      maxTokens: 4096,
+      toolPermission: 'ask',
+      webSearch: false,
+      pastMessages: 20,
+      stream: true,
+      streamTrace: false,
+    });
+  });
+
+  it('lets the default-agent runtime.json override repo-root runtime.json', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      provider: 'openai',
+      model: 'gpt-5',
+      toolPermission: 'ask',
+      pastMessages: 20,
+      stream: true,
+    }, null, 2)}\n`, 'utf8');
+    await mkdir(path.join(rootPath, '.agent-world', 'agents', 'agent-2'), { recursive: true });
+    await writeFile(path.join(rootPath, '.agent-world', 'world.json'), `${JSON.stringify({
+      id: 'world-1',
+      name: 'Test World',
+      defaultAgentId: 'agent-2',
+      currentChatId: 'chat-1',
+    }, null, 2)}\n`, 'utf8');
+    await writeFile(path.join(rootPath, '.agent-world', 'agents', 'agent-2', 'runtime.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      model: 'gpt-5-mini',
+      toolPermission: 'read',
+      stream: false,
+    }, null, 2)}\n`, 'utf8');
+
+    const { loadPersistedRuntimeConfig } = await loadAgentConfigModule(rootPath);
+
+    await expect(loadPersistedRuntimeConfig()).resolves.toEqual({
+      provider: 'openai',
+      model: 'gpt-5-mini',
+      toolPermission: 'read',
+      pastMessages: 20,
+      stream: false,
+    });
+  });
+
+  it('fails clearly for unsupported runtime config schema versions', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
+      schemaVersion: 2,
+      provider: 'openai',
+    }, null, 2)}\n`, 'utf8');
+
+    const { loadPersistedRuntimeConfig } = await loadAgentConfigModule(rootPath);
+
+    await expect(loadPersistedRuntimeConfig()).rejects.toThrow(
+      /Unsupported runtime config schemaVersion in .*runtime\.json: expected 1\./,
+    );
   });
 });

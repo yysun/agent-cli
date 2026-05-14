@@ -23,7 +23,7 @@ import {
   pairRelaySession,
   readRelayEvents,
   sendRelayCommand,
-} from '../../lib/relay-client.js';
+} from '../../core/relay-client.js';
 import {
   createTestRoot,
   ensureSkillsRoot,
@@ -32,7 +32,7 @@ import {
 } from '../helpers/test-root.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const relayServerBin = path.join(repoRoot, 'server/bin/relay-server.js');
+const relayServerBin = path.join(repoRoot, 'bin', 'server.js');
 const agentCliBin = path.join(repoRoot, 'bin/agent-cli.js');
 const START_TIMEOUT_MS = 5000;
 
@@ -177,7 +177,6 @@ async function startRemoteCli(input) {
     cwd: input.rootPath,
     env: {
       ...process.env,
-      AGENT_CLI_ROOT: input.rootPath,
       AGENT_CLI_RELAY_SERVER_URL: input.relayServer,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -264,7 +263,35 @@ async function writeJson(filePath, value) {
  * @param {{ id: string, createdAt: string, updatedAt: string, messages: Array<Record<string, unknown>> }} chat
  */
 async function seedPersistedChat(rootPath, chat) {
-  await writeJson(path.join(rootPath, '.chats', chat.id, 'messages.json'), chat);
+  const chatDirectory = path.join(rootPath, '.agent-world', 'chats', chat.id);
+
+  await writeJson(path.join(chatDirectory, 'chat.json'), {
+    id: chat.id,
+    agentId: 'default',
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt,
+    messageCount: chat.messages.length,
+  });
+  await mkdir(chatDirectory, { recursive: true });
+  await writeFile(
+    path.join(chatDirectory, 'messages.jsonl'),
+    `${chat.messages.map((message) => JSON.stringify(message)).join('\n')}\n`,
+    'utf8',
+  );
+  await writeFile(path.join(chatDirectory, 'summary.md'), '', 'utf8');
+}
+
+/**
+ * @param {string} rootPath
+ * @param {string} currentChatId
+ */
+async function seedWorld(rootPath, currentChatId) {
+  await writeJson(path.join(rootPath, '.agent-world', 'world.json'), {
+    id: 'world-e2e-1',
+    name: 'agent-cli-remote-e2e',
+    defaultAgentId: 'default',
+    currentChatId,
+  });
 }
 
 /**
@@ -334,7 +361,7 @@ describe('agent-cli --remote host', () => {
         { role: 'assistant', content: 'archived answer', createdAt: '2026-05-13T09:00:04.000Z' },
       ],
     });
-    await writeJson(path.join(rootPath, '.chats', 'current.json'), { chatId: currentChatId });
+    await seedWorld(rootPath, currentChatId);
 
     const { cliProcess, clientConnectionUrl } = await startRemoteCli({ rootPath, relayServer });
     const clientConnection = new URL(clientConnectionUrl);
@@ -433,9 +460,13 @@ describe('agent-cli --remote host', () => {
       chat: expect.objectContaining({ id: archivedChatId, messageCount: 2 }),
     });
 
-    const currentChatPointer = JSON.parse(await readFile(path.join(rootPath, '.chats', 'current.json'), 'utf8'));
+    const worldState = JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'world.json'), 'utf8'));
 
-    expect(currentChatPointer).toEqual({ chatId: archivedChatId });
+    expect(worldState).toMatchObject({ currentChatId: archivedChatId });
+
+    const agentState = JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'agents', 'default', 'state.json'), 'utf8'));
+
+    expect(agentState).toMatchObject({ currentChatId: archivedChatId });
 
     const readMessagesRequestId = 'e2e-read-chat';
 

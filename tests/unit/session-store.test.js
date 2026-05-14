@@ -3,15 +3,14 @@
  * Agent CLI Session Store Unit Tests
  *
  * Purpose:
- * - Validate persisted chat and current-pointer behavior without touching the real repo state.
+ * - Validate world-backed chat persistence without touching the real repo state.
  *
  * Key features:
- * - Covers new chat creation, persistence, reload, and error cases.
- * - Verifies tool metadata survives serialization.
+ * - Covers world bootstrap, current-chat selection, and agent-scoped trace/state files.
+ * - Verifies tool metadata survives JSONL serialization.
  *
  * Recent changes:
- * - 2026-05-07: Added targeted Vitest coverage for session persistence.
- * - 2026-05-13: Added chat list and explicit selection coverage for remote multi-client flows.
+ * - 2026-05-14: Reworked coverage for `.agent-world` storage.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -21,16 +20,23 @@ import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.j
 
 /** @type {string[]} */
 const rootsToClean = [];
+const originalCwd = process.cwd();
 
 /** @param {string} rootPath */
 async function loadSessionStore(rootPath) {
-  process.env.AGENT_CLI_ROOT = rootPath;
+  process.chdir(rootPath);
   vi.resetModules();
-  return await import('../../lib/session-store.js');
+  return await import('../../core/session-store.js');
+}
+
+/** @param {string} filePath */
+async function readJsonl(filePath) {
+  const content = await readFile(filePath, 'utf8');
+  return content.split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
 }
 
 afterEach(async () => {
-  delete process.env.AGENT_CLI_ROOT;
+  process.chdir(originalCwd);
 
   while (rootsToClean.length > 0) {
     await removeTestRoot(rootsToClean.pop());
@@ -50,7 +56,7 @@ describe('session-store', () => {
     expect(chat.createdAt).toBe(chat.updatedAt);
   });
 
-  it('persists completed chats and reloads the current chat', async () => {
+  it('bootstraps .agent-world and persists completed chats under chats/{chatId}', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -82,21 +88,52 @@ describe('session-store', () => {
       ],
     });
 
-    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
-    expect(current).toEqual({ chatId: chat.id });
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    expect(world.defaultAgentId).toBe('default');
+    expect(world.currentChatId).toBe(chat.id);
 
-    const storedChat = await readJson(
-      path.join(rootPath, '.chats', chat.id, 'messages.json'),
-    );
-    expect(storedChat.id).toBe(chat.id);
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'default', 'agent.json'));
+    expect(agent).toMatchObject({
+      id: 'default',
+      provider: 'openai',
+      model: 'gpt-5',
+    });
+
+    const storedChat = await readJson(path.join(rootPath, '.agent-world', 'chats', chat.id, 'chat.json'));
+    expect(storedChat).toMatchObject({
+      id: chat.id,
+      agentId: 'default',
+      messageCount: 2,
+    });
+
+    const storedMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', chat.id, 'messages.jsonl'));
+    expect(storedMessages).toHaveLength(2);
+    expect(storedMessages[0]).toMatchObject({ role: 'user', content: 'Hello' });
+    expect(storedMessages[1]).toMatchObject({ role: 'assistant', content: 'Hi' });
+    expect(storedMessages[1].tool_calls).toHaveLength(1);
+
+    await expect(readFile(path.join(rootPath, '.agent-world', 'chats', chat.id, 'summary.md'), 'utf8')).resolves.toBe('');
+  });
+
+  it('reloads the current chat from world.json.currentChatId', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { loadRequestedChat, persistCompletedChat } = await loadSessionStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: true });
+
+    await persistCompletedChat({
+      chat,
+      messages: [
+        { role: 'user', content: 'Hello' },
+      ],
+    });
 
     const reloaded = await loadRequestedChat({ newChat: false });
     expect(reloaded.id).toBe(chat.id);
     expect(reloaded.messages).toEqual([
       expect.objectContaining({ role: 'user', content: 'Hello' }),
-      expect.objectContaining({ role: 'assistant', content: 'Hi' }),
     ]);
-    expect(reloaded.messages[1].tool_calls).toHaveLength(1);
   });
 
   it('creates a new in-memory chat shell when there is no current chat', async () => {
@@ -111,33 +148,30 @@ describe('session-store', () => {
     expect(chat.createdAt).toBe(chat.updatedAt);
   });
 
-  it('creates a new in-memory chat shell when the current chat file is missing', async () => {
+  it('creates a new in-memory chat shell when the selected chat is missing', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat } = await loadSessionStore(rootPath);
-    const chat = await loadRequestedChat({ newChat: true });
+    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.agent-world', 'world.json'),
+      `${JSON.stringify({
+        id: 'world-1',
+        name: 'Test World',
+        defaultAgentId: 'default',
+        currentChatId: 'missing-chat',
+      }, null, 2)}\n`,
+      'utf8',
+    );
 
-    await persistCompletedChat({
-      chat,
-      messages: [
-        {
-          role: 'user',
-          content: 'Hello',
-        },
-      ],
-    });
-
-    const current = await readJson(path.join(rootPath, '.chats', 'current.json'));
-    await removeTestRoot(path.join(rootPath, '.chats', current.chatId));
-
+    const { loadRequestedChat } = await loadSessionStore(rootPath);
     const recoveredChat = await loadRequestedChat({ newChat: false });
 
-    expect(recoveredChat.id).not.toBe(chat.id);
+    expect(recoveredChat.id).toMatch(/Z-/);
     expect(recoveredChat.messages).toEqual([]);
   });
 
-  it('persists stream trace events json when requested', async () => {
+  it('persists stream trace events to the default agent events jsonl', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -147,72 +181,66 @@ describe('session-store', () => {
     await persistCompletedChat({
       chat,
       messages: [
-        {
-          role: 'user',
-          content: 'Hello',
-        },
-        {
-          role: 'assistant',
-          content: 'Hi',
-        },
+        { role: 'user', content: 'Hello' },
+        { role: 'assistant', content: 'Hi' },
       ],
     });
 
     await persistStreamTraceEvents({
       chat,
       streamTraceEvents: [
-        {
-          type: 'warning',
-          text: 'webSearch ignored',
-          createdAt: '2026-05-07T12:00:00.000Z',
-        },
-        {
-          type: 'text',
-          text: 'Hi',
-          createdAt: '2026-05-07T12:00:01.000Z',
-        },
+        { type: 'warning', text: 'webSearch ignored', createdAt: '2026-05-07T12:00:00.000Z' },
+        { type: 'text', text: 'Hi', createdAt: '2026-05-07T12:00:01.000Z' },
       ],
     });
 
-    const eventsPath = path.join(rootPath, '.chats', chat.id, 'events.json');
-    const eventsData = JSON.parse(await readFile(eventsPath, 'utf8'));
-
-    expect(eventsData.chatId).toBe(chat.id);
-    expect(Array.isArray(eventsData.events)).toBe(true);
-    expect(eventsData.events).toHaveLength(2);
-    expect(eventsData.events[0]).toMatchObject({ type: 'warning', text: 'webSearch ignored' });
-    expect(eventsData.events[1]).toMatchObject({ type: 'text', text: 'Hi' });
+    const events = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'default', 'events.jsonl'));
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ kind: 'stream_trace', chatId: chat.id, type: 'warning' });
+    expect(events[1]).toMatchObject({ kind: 'stream_trace', chatId: chat.id, type: 'text', text: 'Hi' });
   });
 
-  it('persists remote session metadata for the active chat', async () => {
+  it('persists remote session metadata to the current world chat', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat, persistRemoteSessionState } = await loadSessionStore(rootPath);
-    const chat = await loadRequestedChat({ newChat: true });
+    const {
+      createPersistedChat,
+      loadRequestedChat,
+      persistCompletedChat,
+      persistRemoteSessionState,
+      setCurrentChat,
+    } = await loadSessionStore(rootPath);
+    const firstChat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
-      chat,
+      chat: firstChat,
       messages: [
-        {
-          role: 'user',
-          content: 'Hello',
-        },
+        { role: 'user', content: 'Hello' },
       ],
     });
 
+    const secondChat = await createPersistedChat({ setCurrent: false });
+    await persistCompletedChat({
+      chat: secondChat,
+      messages: [
+        { role: 'assistant', content: 'Second chat' },
+      ],
+      setCurrent: false,
+    });
+
+    await setCurrentChat(secondChat.id);
+
     await persistRemoteSessionState({
-      chat,
       remoteSession: {
         sessionId: 'relay-session-1',
         clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
       },
     });
 
-    const remoteData = JSON.parse(await readFile(path.join(rootPath, '.chats', chat.id, 'remote.json'), 'utf8'));
-
-    expect(remoteData.chatId).toBe(chat.id);
-    expect(remoteData.remoteSession).toMatchObject({
+    const state = await readJson(path.join(rootPath, '.agent-world', 'agents', 'default', 'state.json'));
+    expect(state.currentChatId).toBe(secondChat.id);
+    expect(state.remoteSession).toMatchObject({
       sessionId: 'relay-session-1',
       clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
     });
@@ -298,11 +326,39 @@ describe('session-store', () => {
 
     await setCurrentChat(secondChat.id);
 
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    expect(world.currentChatId).toBe(secondChat.id);
+
     const current = await loadRequestedChat({ newChat: false });
     expect(current.id).toBe(secondChat.id);
-    expect(current.messages).toEqual([
-      expect.objectContaining({ role: 'assistant', content: 'Second chat' }),
-    ]);
+  });
+
+  it('starts fresh when only legacy .chats data exists', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await mkdir(path.join(rootPath, '.chats', 'legacy-chat-1'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.chats', 'legacy-chat-1', 'messages.json'),
+      `${JSON.stringify({
+        id: 'legacy-chat-1',
+        createdAt: '2026-05-13T10:00:00.000Z',
+        updatedAt: '2026-05-13T10:05:00.000Z',
+        messages: [
+          { role: 'user', content: 'legacy question', createdAt: '2026-05-13T10:00:00.000Z' },
+        ],
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    await writeFile(path.join(rootPath, '.chats', 'current.json'), `${JSON.stringify({ chatId: 'legacy-chat-1' }, null, 2)}\n`, 'utf8');
+
+    const { listPersistedChats, loadRequestedChat } = await loadSessionStore(rootPath);
+    const current = await loadRequestedChat({ newChat: false });
+    expect(current.id).not.toBe('legacy-chat-1');
+    expect(current.messages).toEqual([]);
+
+    const chats = await listPersistedChats();
+    expect(chats).toEqual([]);
   });
 
   it('acquires and releases the remote host lock for the current root', async () => {
@@ -318,14 +374,14 @@ describe('session-store', () => {
 
     await acquireRemoteHostLock({ chat });
 
-    const remoteLock = await readJson(path.join(rootPath, '.chats', 'remote-host.lock.json'));
+    const remoteLock = await readJson(path.join(rootPath, '.agent-world', 'remote-host.lock.json'));
     expect(remoteLock).toMatchObject({
       chatId: chat.id,
       pid: process.pid,
     });
 
     await expect(releaseRemoteHostLock()).resolves.toBe(true);
-    await expect(readFile(path.join(rootPath, '.chats', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+    await expect(readFile(path.join(rootPath, '.agent-world', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
   });
 
   it('updates the remote host lock when the active chat changes', async () => {
@@ -343,7 +399,7 @@ describe('session-store', () => {
     await acquireRemoteHostLock({ chat });
     await expect(updateRemoteHostLock({ chatId: 'chat-switched-1' })).resolves.toBe(true);
 
-    const remoteLock = await readJson(path.join(rootPath, '.chats', 'remote-host.lock.json'));
+    const remoteLock = await readJson(path.join(rootPath, '.agent-world', 'remote-host.lock.json'));
     expect(remoteLock).toMatchObject({
       chatId: 'chat-switched-1',
       pid: process.pid,
@@ -357,9 +413,9 @@ describe('session-store', () => {
     rootsToClean.push(rootPath);
 
     const { assertNoActiveRemoteHost } = await loadSessionStore(rootPath);
-    await mkdir(path.join(rootPath, '.chats'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
     await writeFile(
-      path.join(rootPath, '.chats', 'remote-host.lock.json'),
+      path.join(rootPath, '.agent-world', 'remote-host.lock.json'),
       JSON.stringify({ chatId: 'chat-remote-1', pid: process.pid }, null, 2),
       'utf8',
     );
@@ -374,7 +430,7 @@ describe('session-store', () => {
     rootsToClean.push(rootPath);
 
     const { assertNoActiveRemoteHost } = await loadSessionStore(rootPath);
-    await mkdir(path.join(rootPath, '.chats'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
     const processKillSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const error = new Error('ESRCH');
       // @ts-expect-error test-only process error shape
@@ -383,13 +439,13 @@ describe('session-store', () => {
     });
 
     await writeFile(
-      path.join(rootPath, '.chats', 'remote-host.lock.json'),
+      path.join(rootPath, '.agent-world', 'remote-host.lock.json'),
       JSON.stringify({ chatId: 'chat-stale-1', pid: 999999 }, null, 2),
       'utf8',
     );
 
     await expect(assertNoActiveRemoteHost()).resolves.toBeNull();
-    await expect(readFile(path.join(rootPath, '.chats', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+    await expect(readFile(path.join(rootPath, '.agent-world', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
 
     processKillSpy.mockRestore();
   });

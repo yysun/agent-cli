@@ -19,7 +19,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { createRelayHttpServer, listRelayListenUrls, RelayService } from '../../server/lib/relay-server.js';
+import { createRelayHttpServer, listRelayListenUrls, RelayService } from '../../server/src/relay-server.js';
 
 /** @typedef {{ close: () => void }} Closeable */
 

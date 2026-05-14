@@ -11,6 +11,11 @@ Core objects:
 
 ## CLI
 
+CLI source now lives under `./cli/src` in TypeScript.
+`./cli/src/cli-shell.ts` owns argument parsing, entrypoint flow, and shell I/O.
+`./cli/src/agent-runtime.ts` owns runtime resolution, turn execution, and stream-trace persistence.
+`./bin/agent-cli.js` is the bundled executable built from the TypeScript CLI entry.
+
 Run the chat CLI with:
 
 ```bash
@@ -37,7 +42,7 @@ Paired browsers observe the same shared remote session over SSE. Shared assistan
 
 Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
 
-Runtime settings can be supplied on the command line or through environment defaults. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
+Runtime settings can be supplied through `runtime.json` and overridden on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
 
 Remote hosting uses:
 
@@ -67,7 +72,7 @@ npm run relay-server:prod
 
 On startup, the relay prints every reachable listen URL for the current bind. When you use `HOST=0.0.0.0`, it lists each local interface address instead of only the wildcard host.
 
-Use `npm run relay-server:lan` when `./web/dist` is already built and you want LAN exposure without rebuilding.
+Use `npm run relay-server:lan` when `./bin/public` is already built and you want LAN exposure without rebuilding.
 
 For live frontend iteration, you can still run the Vite dev server separately:
 
@@ -103,13 +108,18 @@ The deterministic relay and remote-host e2e coverage confirms that a real `agent
 ### Agent Files
 
 - System prompt: `./AGENTS.md`
+- Repo runtime defaults: `./runtime.json`
 - Skills root: `./.agents/skills/`
-- Sessions: `./.chats/`
+- Durable world root: `./.agent-world/`
 
-Session chats are stored under `./.chats/{chatId}/` with:
-- `messages.json`: persisted chat messages
-- `events.json`: optional stream trace when enabled
-- `remote.json`: optional remote-session metadata when `--remote` is used
+Durable local state lives under `./.agent-world/`:
+- `world.json` stores world identity plus `defaultAgentId` and `currentChatId`
+- `chats/{chatId}/chat.json`, `messages.jsonl`, and `summary.md` store chat metadata, ordered message history, and summary text
+- `agents/{agentId}/agent.json`, `inbox.jsonl`, `state.json`, `events.jsonl`, and `memory.md` store agent-scoped metadata, inbox, mutable state, event traces, and memory
+
+Optional default-agent runtime overrides can also live at `./.agent-world/agents/{agentId}/runtime.json`. When `./.agent-world/world.json` defines `defaultAgentId`, that agent runtime file overrides matching keys from the repo-root `./runtime.json`.
+
+Remote host coordination also lives under `./.agent-world/remote-host.lock.json` while a `--remote` host session is active. Agent CLI now treats `./.agent-world/` as the only supported local storage contract for world, chat, agent, and remote-host state.
 
 While a CLI process is running in `--remote` mode for a project root, other CLI invocations from that same root are rejected until the remote host exits. A stale lock from a dead process is cleared automatically on the next start.
 
@@ -118,35 +128,52 @@ If `./AGENTS.md` is present and non-empty, its content is added after the built-
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
 
-The CLI treats the current working directory as the project root by default. Run it from the folder that contains `./AGENTS.md`, or set `AGENT_CLI_ROOT` to point at a different project root.
+The CLI treats the current working directory as the project root. Run it from the folder that contains `./AGENTS.md` when you want prompts, skills, runtime files, and `.agent-world/` storage to stay together.
 
 Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agents/skills/`.
 
 ### Runtime Configuration
 
+Runtime defaults can come from two file layers:
+- `./runtime.json`
+- `./.agent-world/agents/{defaultAgentId}/runtime.json` when `./.agent-world/world.json` declares `defaultAgentId`
+
+Precedence is: CLI flags, then agent-level `runtime.json`, then repo-root `runtime.json`.
+
+The runtime file schema currently supports:
+
+```json
+{
+	"schemaVersion": 1,
+	"provider": "openai",
+	"model": "gpt-5",
+	"reasoningEffort": "medium",
+	"temperature": 0.2,
+	"maxTokens": 4096,
+	"toolPermission": "ask",
+	"webSearch": false,
+	"pastMessages": 20,
+	"stream": true,
+	"streamTrace": false
+}
+```
+
 `pastMessages` controls how many previous persisted chat messages are loaded into each LLM request. If it is not defined, the CLI loads `0` past messages by default.
-`streamTrace` accepts `true` or `false`. When set to `true`, the CLI writes per-turn streaming events (`warning`, `error`, `reasoning`, `tool`, and `text`) to `events.json` under the active chat directory.
+`stream` controls whether response text streams by default. Use `--stream-off` to force non-stream mode even when the runtime file enables streaming.
+`streamTrace` accepts `true` or `false`. When set to `true`, the CLI writes per-turn streaming events (`warning`, `error`, `reasoning`, `tool`, and `text`) to `events.jsonl` under the active agent directory.
 
 The CLI parser accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
-Provider credentials still come from environment variables.
-Precedence is: command-line flags, then `LLM_*` environment defaults.
+Provider credentials still come from environment variables. When a local `.env` file is present, Agent CLI only loads provider credential keys and relay configuration from it.
 
-Set runtime environment variables before running the CLI:
+Non-credential runtime defaults such as provider selection, model, temperature, tool mode, search mode, history depth, streaming, and stream tracing should be set in `runtime.json` or on the command line rather than in `.env`.
 
-Use `./.env.example` as a template for local setup.
+Set credential environment variables before running the CLI:
 
-- `LLM_PROVIDER` defaults to `openai`
-- `LLM_MODEL` defaults to `gpt-5` for `openai` and is required for other providers unless provider-specific defaults apply
-- `LLM_TEMPERATURE` sets the request temperature
-- `LLM_MAX_TOKENS` sets the max output tokens per turn
-- `LLM_TOOL_PERMISSION` sets the default tool mode: `auto`, `ask`, or `read`
-- `LLM_REASONING_EFFORT` sets the reasoning level: `default`, `none`, `low`, `medium`, or `high`
-- `LLM_PAST_MESSAGES` sets how many persisted messages are loaded as history
-- `LLM_STREAM_TRACE` controls whether stream trace events are persisted: `true` or `false`
-- `LLM_WEB_SEARCH` enables or configures web search: `true`, `false`, `low`, `medium`, or `high`
-- `AGENT_CLI_RELAY_SERVER_URL` points `--remote` at the relay server
-- Provider credentials depend on `LLM_PROVIDER`
+Use `./.env.example` as a template for local credential setup.
+
+- Export `AGENT_CLI_RELAY_SERVER_URL` in your shell when using `--remote`
+- Provider credentials depend on the `provider` selected in `runtime.json` or via CLI flags
 
 Supported provider env vars:
 
@@ -174,7 +201,7 @@ Supported provider env vars:
 
 ### Production Static Hosting
 
-Yes. The relay can serve the compiled React app as static files from `./web/dist`.
+Yes. The relay can serve the compiled React app as static files from `./bin/public`.
 
 Build the web app first:
 
@@ -194,7 +221,7 @@ Or use the helper script:
 npm run relay-server:prod
 ```
 
-This serves the fixed `./web/dist` bundle from the same process while keeping relay APIs available. You can also pass custom values with `--host` and `PORT`.
+This serves the fixed `./bin/public` bundle from the same process while keeping relay APIs available. You can also pass custom values with `--host` and `PORT`.
 
 Examples:
 
@@ -208,6 +235,12 @@ npm run relay-server:prod -- --host 0.0.0.0 --port 8080
 `--remote` does not move agent execution, tools, workspace files, `.env` contents, provider API keys, or long-term memory off the local machine. The relay only receives short-lived normalized coordination data for the active local host session, including status changes, assistant output, approval requests, remote commands, and per-client chat-management responses.
 
 The repo now uses package-level ESM via `"type": "module"`, so local modules use `.js` files instead of `.mjs`.
+
+CLI source lives under `./cli/src/` as TypeScript and bundles to `./bin/agent-cli.js`. Shared runtime source lives under `./core/*.ts` and compiles back into `./core/*.js`, and the web app bundles to `./bin/public`, so the shipped runtime artifacts live under `./bin/` instead of split output trees.
+
+```bash
+npm run build:ts
+```
 
 `npm test` includes the deterministic relay and remote-host e2e suite, so the default path now exercises the real relay binary and `agent-cli --remote` long-running host loop without requiring external model credentials.
 
