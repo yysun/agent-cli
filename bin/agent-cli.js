@@ -1621,7 +1621,7 @@ async function runRemoteControlSession(params) {
 }
 
 // core/runtime-client.js
-import { createLLMEnvironment, disposeLLMEnvironment, resolveToolsAsync, respondWithTools } from "llm-runtime";
+import { createRuntime, executeToolCall as executeRuntimeToolCall, executeToolCalls as executeRuntimeToolCalls, runCompletionLoop } from "llm-runtime";
 var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
   "openai",
   "anthropic",
@@ -1736,26 +1736,18 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
   };
 }
 function buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory) {
-  const messages = [
-    {
-      role: "system",
-      content: builtInSystemPrompt
-    }
-  ];
+  const layers = [builtInSystemPrompt.trim()];
   if (String(projectSystemPrompt ?? "").trim()) {
-    messages.push({
-      role: "system",
-      content: String(projectSystemPrompt).trim()
-    });
+    layers.push(String(projectSystemPrompt).trim());
   }
   const skillInventoryMessage = buildSkillInventoryMessage(skillInventory);
   if (skillInventoryMessage) {
-    messages.push({
-      role: "system",
-      content: skillInventoryMessage
-    });
+    layers.push(skillInventoryMessage);
   }
-  return messages;
+  return [{
+    role: "system",
+    content: layers.join("\n\n")
+  }];
 }
 function parseToolArguments(argumentsText) {
   if (!argumentsText || !String(argumentsText).trim()) {
@@ -1769,46 +1761,37 @@ function parseToolArguments(argumentsText) {
     };
   }
 }
-async function executeToolCall(toolCall, tools, executionContext, approvalGate) {
-  const toolName = toolCall.function?.name;
-  const tool = toolName ? tools[toolName] : void 0;
-  if (!toolName || !tool || typeof tool.execute !== "function") {
-    return {
-      ok: false,
-      status: "error",
-      errorType: "unknown_tool",
-      message: `Tool is not executable: ${toolName}`
-    };
-  }
-  const parsedArguments = parseToolArguments(toolCall.function?.arguments ?? "{}");
-  if (executionContext.toolPermission === "ask" && approvalGate?.requestApproval) {
-    const approvalDecision = await approvalGate.requestApproval({
-      toolCallId: toolCall.id,
-      toolName,
-      arguments: parsedArguments
-    });
-    if (!approvalDecision?.approved) {
-      return {
-        ok: false,
-        status: "rejected",
-        errorType: "tool_execution_rejected",
-        message: approvalDecision?.reason || `Tool execution rejected: ${toolName}`
-      };
-    }
-  }
-  try {
-    return await tool.execute(parsedArguments, {
-      ...executionContext,
-      toolCallId: toolCall.id
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      status: "error",
-      errorType: "tool_execution_failed",
-      message: error instanceof Error ? error.message : String(error)
-    };
-  }
+function createToolExecutor(runtime) {
+  return {
+    executeToolCall: async (toolCall, context, options = {}) => executeRuntimeToolCall({
+      toolCall,
+      environment: runtime,
+      builtIns: {
+        load_skill: true
+      },
+      ...context ? { context } : {},
+      ...options.errorMode ? { errorMode: options.errorMode } : {}
+    }),
+    executeToolCalls: async (toolCalls, context, options = {}) => executeRuntimeToolCalls({
+      toolCalls,
+      environment: runtime,
+      builtIns: {
+        load_skill: true
+      },
+      ...context ? { context } : {},
+      ...options.errorMode ? { errorMode: options.errorMode } : {}
+    })
+  };
+}
+function createRejectedToolResult(toolCallId, toolName, message) {
+  return {
+    ok: false,
+    status: "rejected",
+    errorType: "tool_execution_rejected",
+    toolCallId,
+    toolName,
+    message
+  };
 }
 function serializeToolResult(result) {
   if (typeof result === "string") {
@@ -1832,16 +1815,10 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
     ...agentConfig,
     abortSignal
   });
-  const environment = createLLMEnvironment({
+  const runtime = createRuntime({
     providers: runtimeSettings.providers,
     skillRoots: [SKILLS_ROOT],
     ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
-  });
-  const tools = await resolveToolsAsync({
-    environment,
-    builtIns: {
-      load_skill: true
-    }
   });
   const pendingUserMessage = {
     role: "user",
@@ -1849,8 +1826,9 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
     createdAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   const contextMessages = selectContextMessages(chat.messages, historyMessageLimit);
+  const toolExecutor = createToolExecutor(runtime);
   try {
-    const result = await respondWithTools({
+    const result = await runCompletionLoop({
       initialState: {
         conversationMessages: [...contextMessages, pendingUserMessage],
         persistedMessages: [...chat.messages, pendingUserMessage],
@@ -1860,7 +1838,7 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
       rejectedTextRetryLimit: 0,
       modelRequest: {
         mode: stream ? "stream" : "generate",
-        environment,
+        environment: runtime,
         provider: runtimeSettings.provider,
         model: runtimeSettings.model,
         ...stream && typeof onStreamChunk === "function" ? { onChunk: onStreamChunk } : {},
@@ -1889,9 +1867,10 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
           }
         ];
       },
-      onToolCallsResponse: async ({ state, response }) => {
+      onToolCallsResponse: async ({ state, response, toolExecutor: providedToolExecutor }) => {
         const nextConversationMessages = [...state.conversationMessages, response.assistantMessage];
         const nextPersistedMessages = [...state.persistedMessages, response.assistantMessage];
+        const activeToolExecutor = providedToolExecutor ?? toolExecutor;
         for (const toolCall of response.tool_calls ?? []) {
           const toolName = toolCall.function?.name ?? "unknown_tool";
           if (typeof onToolCall === "function") {
@@ -1901,7 +1880,25 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
               arguments: toolCall.function?.arguments
             });
           }
-          const toolResult = await executeToolCall(toolCall, tools, executionContext, approvalGate);
+          let toolResult;
+          if (executionContext.toolPermission === "ask" && approvalGate?.requestApproval) {
+            const approvalDecision = await approvalGate.requestApproval({
+              toolCallId: toolCall.id,
+              toolName,
+              arguments: parseToolArguments(toolCall.function?.arguments ?? "{}")
+            });
+            if (!approvalDecision?.approved) {
+              toolResult = createRejectedToolResult(toolCall.id, toolName, approvalDecision?.reason || `Tool execution rejected: ${toolName}`);
+            }
+          }
+          if (typeof toolResult === "undefined") {
+            toolResult = await activeToolExecutor.executeToolCall(toolCall, {
+              ...executionContext,
+              toolCallId: toolCall.id
+            }, {
+              errorMode: "return-artifact"
+            });
+          }
           if (typeof onToolResult === "function") {
             onToolResult({
               id: toolCall.id,
@@ -1946,7 +1943,7 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
       messages: result.state.persistedMessages ?? result.state.conversationMessages
     };
   } finally {
-    await disposeLLMEnvironment(environment);
+    await runtime.dispose();
   }
 }
 
