@@ -13,6 +13,7 @@
  * Recent changes:
  * - 2026-05-07: Added `llm-runtime` orchestration for the CLI.
  * - 2026-05-11: Layered built-in prompt, AGENTS.md, and skill inventory in explicit order.
+ * - 2026-05-16: Added tool-result callbacks so CLI renderers can summarize executed tools.
  */
 import {
   createLLMEnvironment,
@@ -372,6 +373,7 @@ function selectContextMessages(messages, historyMessageLimit) {
  *     warnings?: unknown[],
  *   }) => void,
  *   onToolCall?: (toolCall: { id: string, name: string, arguments?: string }) => void,
+ *   onToolResult?: (toolResult: { id: string, name: string, result: unknown }) => void,
  *   historyMessageLimit?: number,
  *   builtInSystemPrompt: string,
  *   projectSystemPrompt?: string,
@@ -387,6 +389,7 @@ export async function runChatTurn({
   stream = true,
   onStreamChunk,
   onToolCall,
+  onToolResult,
   historyMessageLimit,
   builtInSystemPrompt,
   projectSystemPrompt,
@@ -469,15 +472,26 @@ export async function runChatTurn({
         const nextPersistedMessages = [...state.persistedMessages, response.assistantMessage];
 
         for (const toolCall of response.tool_calls ?? []) {
+          const toolName = toolCall.function?.name ?? 'unknown_tool';
+
           if (typeof onToolCall === 'function') {
             onToolCall({
               id: toolCall.id,
-              name: toolCall.function?.name ?? 'unknown_tool',
+              name: toolName,
               arguments: toolCall.function?.arguments,
             });
           }
 
           const toolResult = await executeToolCall(toolCall, tools, executionContext, approvalGate);
+
+          if (typeof onToolResult === 'function') {
+            onToolResult({
+              id: toolCall.id,
+              name: toolName,
+              result: toolResult,
+            });
+          }
+
           const toolMessage = {
             role: 'tool',
             tool_call_id: toolCall.id,

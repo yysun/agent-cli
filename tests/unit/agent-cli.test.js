@@ -9,6 +9,9 @@
  * - Verifies symlinked binaries still execute the CLI module.
  * - Confirms runtime.json plus agent runtime overrides are honored.
  * - Confirms env remains limited to provider credentials and relay configuration.
+ *
+ * Recent changes:
+ * - 2026-05-16: Added coverage for structured verbose tool-call and tool-result rendering.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -601,7 +604,7 @@ describe('agent-cli entrypoint', () => {
 
     const { main } = await loadCliModule(rootPath, {
       runtimeClient: {
-        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall, onToolResult }) => {
           onStreamChunk?.({
             warnings: [
               {
@@ -612,6 +615,7 @@ describe('agent-cli entrypoint', () => {
           });
           onStreamChunk?.({ reasoningContent: 'thinking...' });
           onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+          onToolResult?.({ id: 'tool-1', name: 'load_skill', result: { ok: true, status: 'loaded' } });
           onStreamChunk?.({ content: 'Hello' });
           onStreamChunk?.({ content: ' world' });
 
@@ -638,6 +642,8 @@ describe('agent-cli entrypoint', () => {
     expect(stdout).not.toContain('reasoning:');
     expect(stdout).not.toContain('warning:');
     expect(stdout).not.toContain('tool:');
+    expect(stdout).not.toContain('tool.call:');
+    expect(stdout).not.toContain('tool.result:');
   });
 
   it('prints streaming diagnostics to stderr in verbose mode', async () => {
@@ -650,10 +656,13 @@ describe('agent-cli entrypoint', () => {
 
     const { main } = await loadCliModule(rootPath, {
       runtimeClient: {
-        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall }) => {
+        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall, onToolResult }) => {
           onStreamChunk?.({ warnings: [{ message: 'web search is disabled' }] });
           onStreamChunk?.({ reasoningContent: 'thinking...' });
           onToolCall?.({ id: 'tool-1', name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' });
+          onToolResult?.({ id: 'tool-1', name: 'load_skill', result: { ok: true, status: 'loaded' } });
+          onToolCall?.({ id: 'tool-2', name: 'read_file', arguments: '{"filePath":"/tmp/demo.md"}' });
+          onToolResult?.({ id: 'tool-2', name: 'read_file', result: 'alpha\nbeta\n' });
           onStreamChunk?.({ content: 'Hello' });
 
           return {
@@ -672,7 +681,12 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStderr()).toContain('warning: web search is disabled\n');
     expect(io.getStderr()).toContain('reasoning: "thinking..."\n');
-    expect(io.getStderr()).toContain('tool: load_skill\n');
+    expect(io.getStderr()).toContain('tool.call: load_skill agent-cli-core\n');
+    expect(io.getStderr()).toContain('tool.result: load_skill ok loaded\n');
+    expect(io.getStderr()).toContain('tool.call: read_file /tmp/demo.md\n');
+    expect(io.getStderr()).toContain('tool.result: read_file ok 2 lines\n');
+    expect(io.getStderr()).toContain('  alpha\n');
+    expect(io.getStderr()).toContain('  beta\n');
     expect(io.getStdout()).toContain('Hello\n');
   });
 

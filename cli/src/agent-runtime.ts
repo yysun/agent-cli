@@ -1,3 +1,17 @@
+/**
+ * Agent CLI Turn Runtime
+ *
+ * Purpose:
+ * - Connect CLI I/O to streamed runtime events and persisted chat updates.
+ *
+ * Key features:
+ * - Streams assistant text to stdout while keeping diagnostics on stderr.
+ * - Persists completed chats and optional stream-trace events.
+ * - Formats verbose tool activity through a dedicated trace renderer.
+ *
+ * Recent changes:
+ * - 2026-05-16: Added structured verbose tool-call and tool-result rendering.
+ */
 import { loadPersistedRuntimeConfig } from '../../core/agent-config.js';
 import { getBuiltInSystemPrompt } from '../../core/agent-files.js';
 import {
@@ -5,6 +19,10 @@ import {
   persistStreamTraceEvents,
 } from '../../core/session-store.js';
 import { runChatTurn } from '../../core/runtime-client.js';
+import {
+  formatToolCallDiagnostic,
+  formatToolResultDiagnostic,
+} from './tool-trace-renderer.js';
 
 export interface WritableSink {
   write(chunk: string): void;
@@ -200,7 +218,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
                 });
               }
 
-              lastStreamType = 'reasoningContent';
+              lastStreamType = 'reasoning';
             }
 
             if (chunk.content) {
@@ -224,7 +242,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           : (toolCall) => {
             if (options.verbose) {
               writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
-              writeDiagnostic(stderr, 'tool', toolCall.name);
+              stderr.write(formatToolCallDiagnostic(toolCall));
             }
 
             if (streamTraceEnabled) {
@@ -233,6 +251,16 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
                 text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
                 createdAt: new Date().toISOString(),
               });
+            }
+
+            lastStreamType = 'tool';
+          },
+        onToolResult: options.streamOff
+          ? undefined
+          : (toolResult) => {
+            if (options.verbose) {
+              writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
+              stderr.write(formatToolResultDiagnostic(toolResult));
             }
 
             lastStreamType = 'tool';

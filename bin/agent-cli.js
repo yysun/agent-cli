@@ -1821,7 +1821,7 @@ function selectContextMessages(messages, historyMessageLimit) {
   }
   return messages.slice(-historyMessageLimit);
 }
-async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, historyMessageLimit, builtInSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
+async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, historyMessageLimit, builtInSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
   const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
   const environmentDefaults = buildEnvironmentDefaults(agentConfig);
   const executionContext = buildExecutionContext({
@@ -1889,14 +1889,22 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
         const nextConversationMessages = [...state.conversationMessages, response.assistantMessage];
         const nextPersistedMessages = [...state.persistedMessages, response.assistantMessage];
         for (const toolCall of response.tool_calls ?? []) {
+          const toolName = toolCall.function?.name ?? "unknown_tool";
           if (typeof onToolCall === "function") {
             onToolCall({
               id: toolCall.id,
-              name: toolCall.function?.name ?? "unknown_tool",
+              name: toolName,
               arguments: toolCall.function?.arguments
             });
           }
           const toolResult = await executeToolCall(toolCall, tools, executionContext, approvalGate);
+          if (typeof onToolResult === "function") {
+            onToolResult({
+              id: toolCall.id,
+              name: toolName,
+              result: toolResult
+            });
+          }
           const toolMessage = {
             role: "tool",
             tool_call_id: toolCall.id,
@@ -1936,6 +1944,373 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
   } finally {
     await disposeLLMEnvironment(environment);
   }
+}
+
+// cli/src/tool-trace-renderer.ts
+var MAX_COMMAND_WIDTH = 100;
+var MAX_PREVIEW_LINES = 3;
+var MAX_PREVIEW_LINE_WIDTH = 120;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stringifyCompact(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+function parseJsonRecord(value) {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function truncateOneLine(value, maxWidth) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxWidth) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxWidth - 3)).trimEnd()}...`;
+}
+function countLines(value) {
+  if (!value) {
+    return 0;
+  }
+  const normalized = value.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines.length;
+}
+function previewLines(value, maxLines = MAX_PREVIEW_LINES, maxWidth = MAX_PREVIEW_LINE_WIDTH) {
+  const normalized = value.replace(/\r\n/g, "\n");
+  return normalized.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim().length > 0).slice(0, maxLines).map((line) => truncateOneLine(line, maxWidth));
+}
+function readFirstString(record, ...keys) {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+}
+function readFirstNumber(record, ...keys) {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+function readFirstBoolean(record, ...keys) {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return null;
+}
+function formatToken(token) {
+  return /^[A-Za-z0-9_./:=@%-]+$/.test(token) ? token : JSON.stringify(token);
+}
+function compactJsonPreview(value, maxWidth = MAX_COMMAND_WIDTH) {
+  const serialized = stringifyCompact(value);
+  return truncateOneLine(serialized ?? String(value), maxWidth);
+}
+function formatLineCount(lineCount) {
+  return `${lineCount} line${lineCount === 1 ? "" : "s"}`;
+}
+function formatFileSize(bytes) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(bytes >= 10 * 1024 ? 0 : 1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function extractMeaningfulLine(value) {
+  if (typeof value !== "string") {
+    if (isRecord(value)) {
+      return extractMeaningfulLine(
+        readFirstString(value, "message", "error", "stderr", "stdout", "detail", "reason")
+      );
+    }
+    return null;
+  }
+  const line = value.replace(/\r\n/g, "\n").split("\n").map((candidate) => candidate.trim()).find((candidate) => candidate.length > 0);
+  return line ? truncateOneLine(line, MAX_PREVIEW_LINE_WIDTH) : null;
+}
+function summarizeShellInvocation(command, parameters) {
+  if (/python(?:\d+(?:\.\d+)*)?$/.test(command) && parameters[0] === "-c") {
+    const remainder = parameters.slice(2).map(formatToken);
+    return truncateOneLine([command, "-c", JSON.stringify("..."), ...remainder].join(" "), MAX_COMMAND_WIDTH);
+  }
+  if (/node$/.test(command) && parameters[0] === "-e") {
+    const remainder = parameters.slice(2).map(formatToken);
+    return truncateOneLine([command, "-e", JSON.stringify("..."), ...remainder].join(" "), MAX_COMMAND_WIDTH);
+  }
+  return truncateOneLine([command, ...parameters.map(formatToken)].join(" "), MAX_COMMAND_WIDTH);
+}
+function summarizeShellToolCall(args) {
+  const command = typeof args.command === "string" ? args.command : "shell";
+  const parameters = Array.isArray(args.parameters) ? args.parameters.filter((value) => typeof value === "string") : [];
+  return summarizeShellInvocation(command, parameters);
+}
+function summarizePathLikeCall(args, ...keys) {
+  const value = readFirstString(args, ...keys);
+  return value ? truncateOneLine(value, MAX_COMMAND_WIDTH) : compactJsonPreview(args);
+}
+function summarizeLoadSkillCall(args) {
+  const skillId = readFirstString(args, "skillId", "id", "name");
+  return skillId ? truncateOneLine(skillId, MAX_COMMAND_WIDTH) : compactJsonPreview(args);
+}
+function summarizeGenericCall(args) {
+  const record = parseJsonRecord(args);
+  if (!record) {
+    return typeof args === "undefined" ? "" : compactJsonPreview(args);
+  }
+  const value = readFirstString(record, "url", "path", "filePath", "query", "pattern", "glob");
+  return value ? truncateOneLine(value, MAX_COMMAND_WIDTH) : compactJsonPreview(record);
+}
+function inferOk(record, fallback = true) {
+  if (!record) {
+    return fallback;
+  }
+  const ok = readFirstBoolean(record, "ok", "success");
+  if (ok !== null) {
+    return ok;
+  }
+  const exitCode = readFirstNumber(record, "exit_code", "exitCode", "code");
+  if (exitCode !== null) {
+    return exitCode === 0;
+  }
+  if (record.error !== void 0) {
+    return false;
+  }
+  return fallback;
+}
+function countMatches(result) {
+  if (Array.isArray(result)) {
+    return result.length;
+  }
+  const record = parseJsonRecord(result);
+  if (!record) {
+    return null;
+  }
+  for (const key of ["matches", "results", "files", "items"]) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+  }
+  return readFirstNumber(record, "count", "matchCount", "total");
+}
+function summarizeShellToolResult(result) {
+  const record = parseJsonRecord(result);
+  const exitCode = readFirstNumber(record, "exit_code", "exitCode");
+  const aborted = readFirstBoolean(record, "aborted") === true;
+  const timedOut = readFirstBoolean(record, "timed_out", "timedOut") === true;
+  const stdout = readFirstString(record, "stdout");
+  const stderr = readFirstString(record, "stderr");
+  const ok = !aborted && !timedOut && (exitCode === null ? inferOk(record, true) : exitCode === 0);
+  if (timedOut) {
+    return {
+      name: "shell_cmd",
+      ok: false,
+      summary: "timed out",
+      preview: stderr ? previewLines(stderr) : void 0
+    };
+  }
+  if (aborted) {
+    return {
+      name: "shell_cmd",
+      ok: false,
+      summary: "aborted",
+      preview: stderr ? previewLines(stderr) : void 0
+    };
+  }
+  if (!ok) {
+    return {
+      name: "shell_cmd",
+      ok: false,
+      summary: extractMeaningfulLine(stderr) ?? extractMeaningfulLine(record?.error) ?? extractMeaningfulLine(stdout) ?? (exitCode === null ? "command failed" : `exit ${exitCode}`),
+      preview: stderr ? previewLines(stderr) : void 0
+    };
+  }
+  if (stdout) {
+    const lineCount = countLines(stdout);
+    return {
+      name: "shell_cmd",
+      ok: true,
+      summary: `stdout ${formatLineCount(lineCount)}`,
+      preview: previewLines(stdout, Math.min(MAX_PREVIEW_LINES, lineCount || 1))
+    };
+  }
+  return {
+    name: "shell_cmd",
+    ok: true,
+    summary: exitCode === null ? "completed" : `exit ${exitCode}`
+  };
+}
+function summarizeSearchFilesResult(result) {
+  const record = parseJsonRecord(result);
+  const count = countMatches(result);
+  return {
+    name: "search_files",
+    ok: inferOk(record, true),
+    summary: count === null ? "completed" : `${count} match${count === 1 ? "" : "es"}`
+  };
+}
+function summarizeReadFileResult(result) {
+  const record = parseJsonRecord(result);
+  const content = typeof result === "string" ? result : readFirstString(record, "content", "text", "result");
+  const lineCount = content ? countLines(content) : null;
+  return {
+    name: "read_file",
+    ok: inferOk(record, true),
+    summary: lineCount === null ? "completed" : formatLineCount(lineCount),
+    preview: content ? previewLines(content) : void 0
+  };
+}
+function summarizePathExistsResult(result) {
+  const record = parseJsonRecord(result);
+  const ok = inferOk(record, true);
+  const exists = readFirstBoolean(record, "exists");
+  const path5 = readFirstString(record, "path", "filePath");
+  const type = readFirstString(record, "type", "kind");
+  const preview = [
+    path5 ? truncateOneLine(`path: ${path5}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    type ? `type: ${type}` : null
+  ].filter((line) => line !== null);
+  return {
+    name: "path_exists",
+    ok,
+    summary: exists === null ? ok ? "completed" : "failed" : String(exists),
+    ...preview.length > 0 ? { preview } : {}
+  };
+}
+function summarizeWriteFileResult(result) {
+  const record = parseJsonRecord(result);
+  const bytes = readFirstNumber(record, "bytesWritten", "bytes", "size") ?? (typeof result === "string" ? Buffer.byteLength(result, "utf8") : null);
+  return {
+    name: "write_file",
+    ok: inferOk(record, true),
+    summary: bytes === null ? "written" : `${formatFileSize(bytes)} written`
+  };
+}
+function summarizeGenericToolResult(result, toolName) {
+  const record = parseJsonRecord(result);
+  const ok = inferOk(record, true);
+  const textPreview = typeof result === "string" ? result : readFirstString(record, "stdout", "stderr", "text", "content", "message", "result", "detail");
+  if (!ok) {
+    return {
+      name: toolName,
+      ok: false,
+      summary: extractMeaningfulLine(record?.error) ?? extractMeaningfulLine(textPreview) ?? "failed",
+      preview: textPreview ? previewLines(textPreview) : void 0
+    };
+  }
+  const status = readFirstString(record, "status", "message");
+  if (status) {
+    return {
+      name: toolName,
+      ok: true,
+      summary: truncateOneLine(status, MAX_PREVIEW_LINE_WIDTH)
+    };
+  }
+  if (textPreview) {
+    const lineCount = countLines(textPreview);
+    return {
+      name: toolName,
+      ok: true,
+      summary: lineCount > 1 ? formatLineCount(lineCount) : truncateOneLine(textPreview, MAX_PREVIEW_LINE_WIDTH),
+      preview: lineCount > 1 ? previewLines(textPreview) : void 0
+    };
+  }
+  return {
+    name: toolName,
+    ok,
+    summary: ok ? "completed" : "failed"
+  };
+}
+function summarizeToolCall(toolName, args) {
+  const record = parseJsonRecord(args);
+  if (toolName === "shell_cmd" && record) {
+    return { name: toolName, summary: summarizeShellToolCall(record) };
+  }
+  if (toolName === "load_skill" && record) {
+    return { name: toolName, summary: summarizeLoadSkillCall(record) };
+  }
+  if (toolName === "path_exists" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "path", "filePath") };
+  }
+  if (toolName === "search_files" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "query", "pattern", "glob", "includePattern") };
+  }
+  if (toolName === "read_file" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path") };
+  }
+  if (toolName === "write_file" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path") };
+  }
+  return { name: toolName, summary: summarizeGenericCall(args) };
+}
+function summarizeToolResult(toolName, result) {
+  if (toolName === "shell_cmd") {
+    return summarizeShellToolResult(result);
+  }
+  if (toolName === "search_files") {
+    return summarizeSearchFilesResult(result);
+  }
+  if (toolName === "read_file") {
+    return summarizeReadFileResult(result);
+  }
+  if (toolName === "path_exists") {
+    return summarizePathExistsResult(result);
+  }
+  if (toolName === "write_file") {
+    return summarizeWriteFileResult(result);
+  }
+  return summarizeGenericToolResult(result, toolName);
+}
+function formatToolCallDiagnostic(toolCall) {
+  const view = summarizeToolCall(toolCall.name, toolCall.arguments);
+  return `tool.call: ${view.name}${view.summary ? ` ${view.summary}` : ""}
+`;
+}
+function formatToolResultDiagnostic(toolResult) {
+  const view = summarizeToolResult(toolResult.name, toolResult.result);
+  const lines = [
+    `tool.result: ${view.name} ${view.ok ? "ok" : "error"} ${view.summary || (view.ok ? "completed" : "failed")}`
+  ];
+  for (const previewLine of view.preview ?? []) {
+    lines.push(`  ${previewLine}`);
+  }
+  return `${lines.join("\n")}
+`;
 }
 
 // cli/src/agent-runtime.ts
@@ -2041,7 +2416,7 @@ function createTurnExecutor(options) {
                 createdAt: (/* @__PURE__ */ new Date()).toISOString()
               });
             }
-            lastStreamType = "reasoningContent";
+            lastStreamType = "reasoning";
           }
           if (chunk.content) {
             options.io.stdout.write(chunk.content);
@@ -2060,7 +2435,7 @@ function createTurnExecutor(options) {
         onToolCall: options.streamOff ? void 0 : (toolCall) => {
           if (options.verbose) {
             writeTypeTransitionSeparator(stderr, lastStreamType, "tool");
-            writeDiagnostic(stderr, "tool", toolCall.name);
+            stderr.write(formatToolCallDiagnostic(toolCall));
           }
           if (streamTraceEnabled) {
             streamTraceEvents.push({
@@ -2068,6 +2443,13 @@ function createTurnExecutor(options) {
               text: toolCall.arguments ? `${toolCall.name} ${toolCall.arguments}` : toolCall.name,
               createdAt: (/* @__PURE__ */ new Date()).toISOString()
             });
+          }
+          lastStreamType = "tool";
+        },
+        onToolResult: options.streamOff ? void 0 : (toolResult) => {
+          if (options.verbose) {
+            writeTypeTransitionSeparator(stderr, lastStreamType, "tool");
+            stderr.write(formatToolResultDiagnostic(toolResult));
           }
           lastStreamType = "tool";
         },

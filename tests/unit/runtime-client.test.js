@@ -9,6 +9,9 @@
  * - Keeps provider credentials in environment variables.
  * - Resolves provider/model from runtime config or provider defaults.
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
+ *
+ * Recent changes:
+ * - 2026-05-16: Added coverage for runtime tool-result callbacks.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -240,5 +243,97 @@ describe('runtime-client', () => {
     expect(result.assistantText).toBe('Hello world');
     expect(result.messages.at(-1)).toEqual({ role: 'assistant', content: 'Hello world' });
     expect(disposeLLMEnvironment).toHaveBeenCalledWith({ environmentId: 'env-1' });
+  });
+
+  it('forwards tool calls and tool results through runtime callbacks', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const loadSkillExecute = vi.fn().mockResolvedValue({ ok: true, status: 'loaded' });
+    resolveToolsAsync.mockResolvedValue({
+      load_skill: {
+        execute: loadSkillExecute,
+      },
+    });
+    respondWithTools.mockImplementation(async ({ initialState, onToolCallsResponse, onTextResponse }) => {
+      const toolStep = await onToolCallsResponse({
+        state: initialState,
+        response: {
+          assistantMessage: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'tool-1',
+                function: {
+                  name: 'load_skill',
+                  arguments: '{"skillId":"agent-cli-core"}',
+                },
+              },
+            ],
+          },
+          tool_calls: [
+            {
+              id: 'tool-1',
+              function: {
+                name: 'load_skill',
+                arguments: '{"skillId":"agent-cli-core"}',
+              },
+            },
+          ],
+        },
+      });
+
+      return await onTextResponse({
+        state: toolStep.state,
+        response: {
+          assistantMessage: {
+            role: 'assistant',
+            content: 'Loaded skill',
+          },
+        },
+        responseText: 'Loaded skill',
+      });
+    });
+
+    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const onToolCall = vi.fn();
+    const onToolResult = vi.fn();
+
+    const result = await runChatTurn({
+      chat: {
+        id: 'chat-1',
+        messages: [],
+      },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onToolCall,
+      onToolResult,
+    });
+
+    expect(loadSkillExecute).toHaveBeenCalledWith({ skillId: 'agent-cli-core' }, expect.objectContaining({
+      toolCallId: 'tool-1',
+    }));
+    expect(onToolCall).toHaveBeenCalledWith({
+      id: 'tool-1',
+      name: 'load_skill',
+      arguments: '{"skillId":"agent-cli-core"}',
+    });
+    expect(onToolResult).toHaveBeenCalledWith({
+      id: 'tool-1',
+      name: 'load_skill',
+      result: { ok: true, status: 'loaded' },
+    });
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'tool',
+      tool_call_id: 'tool-1',
+      content: '{\n  "ok": true,\n  "status": "loaded"\n}',
+    }));
+    expect(result.assistantText).toBe('Loaded skill');
   });
 });
