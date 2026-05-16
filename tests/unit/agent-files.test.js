@@ -12,6 +12,7 @@
  * Recent changes:
  * - 2026-05-07: Added targeted Vitest coverage for agent file loading.
  * - 2026-05-11: Added coverage for separate built-in and project prompt sources.
+ * - 2026-05-16: Added assertions for the stronger built-in workspace guidance.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -82,6 +83,10 @@ describe('agent-files', () => {
     const { DEFAULT_SYSTEM_PROMPT, getBuiltInSystemPrompt } = await loadAgentFiles(rootPath);
 
     expect(getBuiltInSystemPrompt()).toBe(DEFAULT_SYSTEM_PROMPT);
+    expect(DEFAULT_SYSTEM_PROMPT).toContain('Prefer workspace evidence over speculation');
+    expect(DEFAULT_SYSTEM_PROMPT).toContain('Use available read-only tools before asking the user');
+    expect(DEFAULT_SYSTEM_PROMPT).toContain('use `load_skill` when a relevant skill is available');
+    expect(DEFAULT_SYSTEM_PROMPT).toContain('Do not reveal secret values by default');
   });
 
   it('returns an empty project prompt when AGENTS.md is missing', async () => {

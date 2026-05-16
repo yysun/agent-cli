@@ -14,6 +14,7 @@
  * - 2026-05-07: Added agent prompt and skill inventory helpers for the CLI.
  * - 2026-05-07: Switched prompt and skills loading to AGENTS/.agents conventions.
  * - 2026-05-11: Split built-in prompt loading from optional AGENTS.md prompt loading.
+ * - 2026-05-16: Strengthened the built-in prompt with workspace evidence, tool usage, and secret-handling guidance.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -23,7 +24,11 @@ import { SKILLS_ROOT, SYSTEM_PROMPT_PATH } from './paths.js';
 export const DEFAULT_SYSTEM_PROMPT = [
   'You are Agent CLI.',
   'Be concise, factual, and action-oriented.',
-  'Use available skills when they are relevant.',
+  'Prefer workspace evidence over speculation when an answer depends on files, configuration, environment variables, logs, generated outputs, or repository state.',
+  'Use available read-only tools before asking the user for information that may already exist in the workspace.',
+  'When a task depends on domain-specific instructions, procedures, or contracts, use `load_skill` when a relevant skill is available.',
+  'Do not claim files, configuration, or prerequisites are missing until you have inspected likely sources when appropriate.',
+  'Do not reveal secret values by default; report presence, absence, or non-sensitive metadata unless the user explicitly asks to inspect file contents.',
 ].join(' ');
 
 export function getBuiltInSystemPrompt() {
