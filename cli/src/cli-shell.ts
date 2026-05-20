@@ -1,4 +1,18 @@
+/**
+ * Agent CLI Shell
+ *
+ * Purpose:
+ * - Parse CLI arguments and route execution into one-shot, remote, or interactive chat modes.
+ *
+ * Key features:
+ * - Applies project-root and runtime overrides before loading project-local resources.
+ * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
+ *
+ * Recent changes:
+ * - 2026-05-20: Added automatic interactive mode and quiet idempotent project .env loading.
+ */
 import { realpathSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { config as loadDotEnvConfig } from 'dotenv';
@@ -43,6 +57,7 @@ const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'AZURE_OPENAI_DEPLOYMENT_NAME',
   'AZURE_OPENAI_API_VERSION',
 ]);
+const loadedDotEnvRoots = new Set<string>();
 
 export interface ParsedArguments {
   help: boolean;
@@ -58,12 +73,25 @@ export interface ParsedArguments {
 export interface MainOptions {
   agentConfig?: Record<string, unknown>;
   agentId?: string;
+  interactivePrompt?: InteractivePrompt;
+}
+
+export interface InteractivePrompt {
+  question(query: string): Promise<string>;
+  close?(): void;
 }
 
 function loadAllowedDotEnvEnvironment(): void {
+  if (loadedDotEnvRoots.has(REPO_ROOT)) {
+    return;
+  }
+
+  loadedDotEnvRoots.add(REPO_ROOT);
+
   const parsed = loadDotEnvConfig({
     processEnv: {},
     path: path.join(REPO_ROOT, '.env'),
+    quiet: true,
   }).parsed ?? {};
 
   for (const [key, value] of Object.entries(parsed)) {
@@ -117,6 +145,13 @@ export function startupText(cwd = REPO_ROOT): string {
 
 export function runtimeSelectionText(runtimeSettings: { provider: string; model: string }): string {
   return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
+}
+
+function createDefaultInteractivePrompt(): InteractivePrompt {
+  return createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
 }
 
 export function readRemoteRelayServerUrl(
@@ -360,6 +395,121 @@ export function parseArguments(argv: string[]): ParsedArguments {
   };
 }
 
+function formatChatListItem(chat: {
+  id: string,
+  messageCount?: number,
+  updatedAt?: string,
+  createdAt?: string,
+  isCurrent?: boolean,
+}): string {
+  const marker = chat.isCurrent ? '*' : ' ';
+  const timestamp = String(chat.updatedAt || chat.createdAt || '').trim();
+  const messageCount = Number.isFinite(chat.messageCount) ? Number(chat.messageCount) : 0;
+
+  return `${marker} ${chat.id} (${messageCount} messages)${timestamp ? ` updated ${timestamp}` : ''}`;
+}
+
+function isInteractiveExitError(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? String(error.code)
+    : '';
+
+  return code === 'ERR_USE_AFTER_CLOSE' || code === 'ABORT_ERR';
+}
+
+async function runInteractiveSession({
+  prompt,
+  executeTurn,
+  initialChat,
+  io,
+}: {
+  prompt: InteractivePrompt,
+  executeTurn: ReturnType<typeof createTurnExecutor>,
+  initialChat: Awaited<ReturnType<typeof loadRequestedChat>>,
+  io: CliIo,
+}) {
+  const stderr = io.stderr ?? process.stderr;
+  let chat = initialChat;
+
+  io.stdout.write('Agent CLI interactive mode. Commands: /new, /clear, /chats, /use <chatId>, /exit\n\n');
+
+  try {
+    while (true) {
+      let input = '';
+
+      try {
+        input = (await prompt.question('> ')).trim();
+      } catch (error) {
+        if (isInteractiveExitError(error)) {
+          io.stdout.write('\n');
+          break;
+        }
+
+        throw error;
+      }
+
+      if (!input) {
+        continue;
+      }
+
+      if (input === '/exit' || input === '/quit') {
+        break;
+      }
+
+      if (input === '/new' || input === '/clear') {
+        chat = await createPersistedChat();
+        io.stdout.write(input === '/clear' ? 'history cleared\n\n' : `new chat ${chat.id}\n\n`);
+        continue;
+      }
+
+      if (input === '/chats') {
+        const chats = await listPersistedChats();
+        if (chats.length === 0) {
+          io.stdout.write('no chats\n\n');
+          continue;
+        }
+
+        io.stdout.write(`${chats.map(formatChatListItem).join('\n')}\n\n`);
+        continue;
+      }
+
+      if (input.startsWith('/use ')) {
+        const chatId = input.slice('/use '.length).trim();
+
+        try {
+          chat = await setCurrentChat(chatId);
+          io.stdout.write(`selected chat ${chat.id}\n\n`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          stderr.write(`command failed: ${message}\n\n`);
+        }
+
+        continue;
+      }
+
+      if (input.startsWith('/')) {
+        stderr.write(`unknown command: ${input}\n\n`);
+        continue;
+      }
+
+      try {
+        await executeTurn({
+          chat,
+          message: input,
+        });
+        io.stdout.write('\n');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr.write(`request failed: ${message}\n\n`);
+      }
+    }
+  } finally {
+    prompt.close?.();
+  }
+
+  return null;
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   io: CliIo = { stdout: process.stdout, stderr: process.stderr },
@@ -380,10 +530,6 @@ export async function main(
   if (help) {
     io.stdout.write(`${usageText()}\n`);
     return null;
-  }
-
-  if (!message && !remoteControl) {
-    throw new Error(`Missing user message.\n\n${usageText()}`);
   }
 
   const agentConfig = await resolveEffectiveAgentConfig({
@@ -453,6 +599,15 @@ export async function main(
     }
   }
 
+  if (!message) {
+    return await runInteractiveSession({
+      prompt: options.interactivePrompt ?? createDefaultInteractivePrompt(),
+      executeTurn,
+      initialChat: chat,
+      io,
+    });
+  }
+
   return await executeTurn({
     chat,
     message,
@@ -470,7 +625,7 @@ export async function runCli(
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}\n`);
 
-      if (parsed.message) {
+      if (parsed.message || (!parsed.remoteControl && !parsed.help)) {
         const agentConfig = await resolveEffectiveAgentConfig({
           runtimeOverrides: parsed.runtimeOverrides,
         });

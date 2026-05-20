@@ -11,7 +11,7 @@
  * - Confirms env remains limited to provider credentials and relay configuration.
  *
  * Recent changes:
- * - 2026-05-16: Added coverage for structured verbose tool-call and tool-result rendering.
+ * - 2026-05-20: Added coverage for automatic interactive mode when no message is provided.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -57,6 +57,16 @@ function restoreCliEnvironment(snapshot) {
 
 function applyMinimalRuntimeEnvironment() {
   process.env.OPENAI_API_KEY = 'test-openai-key';
+}
+
+/** @param {string[]} inputs */
+function createScriptedPrompt(inputs) {
+  const pendingInputs = [...inputs];
+
+  return {
+    question: vi.fn(async () => pendingInputs.shift() ?? '/exit'),
+    close: vi.fn(),
+  };
 }
 
 /** @param {string} filePath */
@@ -438,23 +448,42 @@ describe('agent-cli entrypoint', () => {
     expect(isCliEntrypoint(otherPath, pathToFileURL(cliPath).href)).toBe(false);
   });
 
-  it('reports missing messages through the CLI error path', async () => {
+  it('starts interactive mode when no message and no --remote flag are provided', async () => {
+    applyMinimalRuntimeEnvironment();
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await ensureSkillsRoot(rootPath);
 
-    const { runCli } = await loadCliModule(rootPath);
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk }) => {
+      onStreamChunk?.({ content: 'interactive ok' });
+
+      return {
+        assistantText: 'interactive ok',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'interactive ok' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
     const io = createIoCapture();
-    const originalExitCode = process.exitCode;
+    const interactivePrompt = createScriptedPrompt(['hello', '/exit']);
 
-    process.exitCode = undefined;
-    await runCli([], io);
+    await main([], io, { interactivePrompt });
 
-    expect(io.getStdout()).toBe('');
-    expect(io.getStderr()).toContain('Missing user message.');
-    expect(io.getStderr()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
+    expect(interactivePrompt.question).toHaveBeenCalledWith('> ');
+    expect(interactivePrompt.close).toHaveBeenCalled();
+    expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
+      userMessage: 'hello',
+    }));
+    expect(io.getStdout()).toContain('Agent CLI interactive mode.');
+    expect(io.getStdout()).toContain('interactive ok\n\n');
+    expect(io.getStderr()).toBe('');
   });
 
   it('prints help even when runtime.json is malformed', async () => {
@@ -469,23 +498,86 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
   });
 
-  it('reports missing messages before validating malformed runtime.json', async () => {
+  it('validates runtime config before starting automatic interactive mode', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeFile(path.join(rootPath, 'runtime.json'), '{\n  "schemaVersion": 1,\n  "maxTokens": "not-a-number"\n}\n', 'utf8');
 
-    const { runCli } = await loadCliModule(rootPath);
+    const { main } = await loadCliModule(rootPath);
     const io = createIoCapture();
-    const originalExitCode = process.exitCode;
+    const interactivePrompt = createScriptedPrompt(['/exit']);
 
-    process.exitCode = undefined;
-    await runCli([], io);
+    await expect(main([], io, { interactivePrompt })).rejects.toThrow('Invalid agent config value for maxTokens');
+    expect(interactivePrompt.question).not.toHaveBeenCalled();
+  });
 
-    expect(io.getStderr()).toContain('Missing user message.');
-    expect(io.getStderr()).not.toContain('Invalid agent config value for maxTokens');
-    expect(process.exitCode).toBe(1);
+  it('handles interactive chat commands without running a model turn', async () => {
+    applyMinimalRuntimeEnvironment();
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await ensureSkillsRoot(rootPath);
 
-    process.exitCode = originalExitCode;
+    const runChatTurn = vi.fn().mockResolvedValue({
+      assistantText: 'unused',
+      messages: [],
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture();
+    const interactivePrompt = createScriptedPrompt([
+      '/new',
+      '/chats',
+      '/clear',
+      '/use missing-chat',
+      '/exit',
+    ]);
+
+    await main([], io, { interactivePrompt });
+
+    expect(runChatTurn).not.toHaveBeenCalled();
+    expect(io.getStdout()).toContain('new chat ');
+    expect(io.getStdout()).toContain('history cleared');
+    expect(io.getStdout()).toContain('messages');
+    expect(io.getStderr()).toContain('command failed: Missing chat session file: ');
+  });
+
+  it('keeps interactive mode alive after a failed turn', async () => {
+    applyMinimalRuntimeEnvironment();
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await ensureSkillsRoot(rootPath);
+
+    const runChatTurn = vi.fn()
+      .mockRejectedValueOnce(new Error('first turn failed'))
+      .mockImplementationOnce(async ({ onStreamChunk }) => {
+        onStreamChunk?.({ content: 'second ok' });
+
+        return {
+          assistantText: 'second ok',
+          messages: [
+            { role: 'user', content: 'second' },
+            { role: 'assistant', content: 'second ok' },
+          ],
+        };
+      });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture();
+    const interactivePrompt = createScriptedPrompt(['first', 'second', '/exit']);
+
+    await main([], io, { interactivePrompt });
+
+    expect(runChatTurn).toHaveBeenCalledTimes(2);
+    expect(io.getStderr()).toContain('request failed: first turn failed');
+    expect(io.getStdout()).toContain('second ok\n\n');
   });
 
   it('reports missing runtime environment variables before attempting the turn', async () => {

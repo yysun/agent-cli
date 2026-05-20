@@ -28,6 +28,14 @@ Follow-up messages reuse the current chat automatically:
 npm run agent-cli -- "What should I do first?"
 ```
 
+Run without a message to start an interactive terminal chat. The prompt keeps using the current persisted chat until you switch or clear it.
+
+```bash
+npm run agent-cli --
+```
+
+Interactive commands are `/new`, `/clear`, `/chats`, `/use <chatId>`, `/exit`, and `/quit`.
+
 Use `--verbose` when you want startup and runtime-selection diagnostics on stderr without affecting the assistant response on stdout.
 
 Streaming is enabled by default. While streaming, response text chunks stream on stdout. Diagnostics such as `warning: ...`, `error: ...`, `reasoning: ...`, and `tool: ...` are printed to stderr only when `--verbose` is set. There is no `data: [DONE]` marker. Pass `--stream-off` to force non-stream (generate) mode and print only the final plain-text answer.

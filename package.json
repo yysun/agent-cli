@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build:core": "tsc --project ./tsconfig.core.json",
-    "build:cli": "tsc --project ./tsconfig.cli.json && esbuild ./cli/src/index.ts --bundle --packages=external --platform=node --format=esm --target=node20 --outfile=./bin/agent-cli.js --banner:js='#!/usr/bin/env node'",
-    "build:server": "esbuild ./server/src/relay-server-cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=./bin/server.js --banner:js='#!/usr/bin/env node'",
+    "build:cli": "tsc --project ./tsconfig.cli.json && esbuild ./cli/src/index.ts --bundle --packages=external --platform=node --format=esm --target=node20 --outfile=./bin/agent-cli.js --banner:js='#!/usr/bin/env node' && chmod +x ./bin/agent-cli.js",
+    "build:server": "esbuild ./server/src/relay-server-cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=./bin/server.js --banner:js='#!/usr/bin/env node' && chmod +x ./bin/server.js",
     "build": "npm run build:core && npm run build:cli && npm run build:server",
     "prepare": "npm run build",
     "test": "npm run test:syntax && npm run test:unit && npm run test:e2e:relay && npm run web:typecheck",

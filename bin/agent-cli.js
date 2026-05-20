@@ -7,6 +7,7 @@ var __export = (target, all) => {
 
 // cli/src/cli-shell.ts
 import { realpathSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import path4 from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { config as loadDotEnvConfig } from "dotenv";
@@ -2857,10 +2858,16 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AZURE_OPENAI_DEPLOYMENT_NAME",
   "AZURE_OPENAI_API_VERSION"
 ]);
+var loadedDotEnvRoots = /* @__PURE__ */ new Set();
 function loadAllowedDotEnvEnvironment() {
+  if (loadedDotEnvRoots.has(REPO_ROOT)) {
+    return;
+  }
+  loadedDotEnvRoots.add(REPO_ROOT);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(REPO_ROOT, ".env")
+    path: path4.join(REPO_ROOT, ".env"),
+    quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
     if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
@@ -2907,6 +2914,12 @@ function startupText(cwd = REPO_ROOT) {
 }
 function runtimeSelectionText(runtimeSettings) {
   return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
+}
+function createDefaultInteractivePrompt() {
+  return createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
 }
 function readRemoteRelayServerUrl(environment = process.env) {
   const relayServer = String(environment[REMOTE_RELAY_SERVER_ENV_KEY] ?? "").trim();
@@ -3092,6 +3105,100 @@ function parseArguments(argv) {
     message: messageParts.join(" ").trim()
   };
 }
+function formatChatListItem(chat) {
+  const marker = chat.isCurrent ? "*" : " ";
+  const timestamp = String(chat.updatedAt || chat.createdAt || "").trim();
+  const messageCount = Number.isFinite(chat.messageCount) ? Number(chat.messageCount) : 0;
+  return `${marker} ${chat.id} (${messageCount} messages)${timestamp ? ` updated ${timestamp}` : ""}`;
+}
+function isInteractiveExitError(error) {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+  return code === "ERR_USE_AFTER_CLOSE" || code === "ABORT_ERR";
+}
+async function runInteractiveSession({
+  prompt,
+  executeTurn,
+  initialChat,
+  io
+}) {
+  const stderr = io.stderr ?? process.stderr;
+  let chat = initialChat;
+  io.stdout.write("Agent CLI interactive mode. Commands: /new, /clear, /chats, /use <chatId>, /exit\n\n");
+  try {
+    while (true) {
+      let input = "";
+      try {
+        input = (await prompt.question("> ")).trim();
+      } catch (error) {
+        if (isInteractiveExitError(error)) {
+          io.stdout.write("\n");
+          break;
+        }
+        throw error;
+      }
+      if (!input) {
+        continue;
+      }
+      if (input === "/exit" || input === "/quit") {
+        break;
+      }
+      if (input === "/new" || input === "/clear") {
+        chat = await createPersistedChat();
+        io.stdout.write(input === "/clear" ? "history cleared\n\n" : `new chat ${chat.id}
+
+`);
+        continue;
+      }
+      if (input === "/chats") {
+        const chats = await listPersistedChats();
+        if (chats.length === 0) {
+          io.stdout.write("no chats\n\n");
+          continue;
+        }
+        io.stdout.write(`${chats.map(formatChatListItem).join("\n")}
+
+`);
+        continue;
+      }
+      if (input.startsWith("/use ")) {
+        const chatId = input.slice("/use ".length).trim();
+        try {
+          chat = await setCurrentChat(chatId);
+          io.stdout.write(`selected chat ${chat.id}
+
+`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          stderr.write(`command failed: ${message}
+
+`);
+        }
+        continue;
+      }
+      if (input.startsWith("/")) {
+        stderr.write(`unknown command: ${input}
+
+`);
+        continue;
+      }
+      try {
+        await executeTurn({
+          chat,
+          message: input
+        });
+        io.stdout.write("\n");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stderr.write(`request failed: ${message}
+
+`);
+      }
+    }
+  } finally {
+    prompt.close?.();
+  }
+  return null;
+}
 async function main(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }, options = {}) {
   const {
     help,
@@ -3108,11 +3215,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     io.stdout.write(`${usageText()}
 `);
     return null;
-  }
-  if (!message && !remoteControl) {
-    throw new Error(`Missing user message.
-
-${usageText()}`);
   }
   const agentConfig = await resolveEffectiveAgentConfig({
     optionAgentConfig: options.agentConfig,
@@ -3173,6 +3275,14 @@ ${usageText()}`);
       await releaseRemoteHostLock();
     }
   }
+  if (!message) {
+    return await runInteractiveSession({
+      prompt: options.interactivePrompt ?? createDefaultInteractivePrompt(),
+      executeTurn,
+      initialChat: chat,
+      io
+    });
+  }
   return await executeTurn({
     chat,
     message
@@ -3185,7 +3295,7 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}
 `);
-      if (parsed.message) {
+      if (parsed.message || !parsed.remoteControl && !parsed.help) {
         const agentConfig = await resolveEffectiveAgentConfig({
           runtimeOverrides: parsed.runtimeOverrides
         });
