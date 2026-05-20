@@ -17,18 +17,34 @@
  * - 2026-05-14: Added `.agent-world` chat and agent persistence paths.
  */
 import path from 'node:path';
-const configuredRoot = String(process.env.AGENT_CLI_ROOT ?? '').trim();
-export const REPO_ROOT = configuredRoot
-    ? path.resolve(configuredRoot)
-    : process.cwd();
-export const SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, 'AGENTS.md');
-export const ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, 'runtime.json');
-export const SKILLS_ROOT = path.join(REPO_ROOT, '.agents', 'skills');
-export const AGENT_WORLD_ROOT = path.join(REPO_ROOT, '.agent-world');
-export const WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, 'world.json');
-export const AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, 'chats');
-export const AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, 'agents');
-export const REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, 'remote-host.lock.json');
+function resolveProjectRoot(projectRoot) {
+    const configuredRoot = String(projectRoot ?? process.env.AGENT_CLI_ROOT ?? '').trim();
+    return configuredRoot
+        ? path.resolve(configuredRoot)
+        : process.cwd();
+}
+export let REPO_ROOT = '';
+export let SYSTEM_PROMPT_PATH = '';
+export let ROOT_RUNTIME_CONFIG_PATH = '';
+export let SKILLS_ROOT = '';
+export let AGENT_WORLD_ROOT = '';
+export let WORLD_STATE_PATH = '';
+export let AGENT_WORLD_CHATS_ROOT = '';
+export let AGENT_WORLD_AGENTS_ROOT = '';
+export let REMOTE_HOST_LOCK_PATH = '';
+export function configureProjectRoot(projectRoot) {
+    REPO_ROOT = resolveProjectRoot(projectRoot);
+    SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, 'AGENTS.md');
+    ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, 'runtime.json');
+    SKILLS_ROOT = path.join(REPO_ROOT, '.agents', 'skills');
+    AGENT_WORLD_ROOT = path.join(REPO_ROOT, '.agent-world');
+    WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, 'world.json');
+    AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, 'chats');
+    AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, 'agents');
+    REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, 'remote-host.lock.json');
+    return REPO_ROOT;
+}
+configureProjectRoot();
 /** @param {string} chatId */
 export function buildWorldChatDirectoryPath(chatId) {
     return path.join(AGENT_WORLD_CHATS_ROOT, chatId);

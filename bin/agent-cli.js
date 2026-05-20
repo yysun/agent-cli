@@ -16,16 +16,32 @@ import { promises as fs } from "node:fs";
 
 // core/paths.js
 import path from "node:path";
-var configuredRoot = String(process.env.AGENT_CLI_ROOT ?? "").trim();
-var REPO_ROOT = configuredRoot ? path.resolve(configuredRoot) : process.cwd();
-var SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, "AGENTS.md");
-var ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, "runtime.json");
-var SKILLS_ROOT = path.join(REPO_ROOT, ".agents", "skills");
-var AGENT_WORLD_ROOT = path.join(REPO_ROOT, ".agent-world");
-var WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
-var AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
-var AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
-var REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+function resolveProjectRoot(projectRoot) {
+  const configuredRoot = String(projectRoot ?? process.env.AGENT_CLI_ROOT ?? "").trim();
+  return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
+}
+var REPO_ROOT = "";
+var SYSTEM_PROMPT_PATH = "";
+var ROOT_RUNTIME_CONFIG_PATH = "";
+var SKILLS_ROOT = "";
+var AGENT_WORLD_ROOT = "";
+var WORLD_STATE_PATH = "";
+var AGENT_WORLD_CHATS_ROOT = "";
+var AGENT_WORLD_AGENTS_ROOT = "";
+var REMOTE_HOST_LOCK_PATH = "";
+function configureProjectRoot(projectRoot) {
+  REPO_ROOT = resolveProjectRoot(projectRoot);
+  SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, "AGENTS.md");
+  ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, "runtime.json");
+  SKILLS_ROOT = path.join(REPO_ROOT, ".agents", "skills");
+  AGENT_WORLD_ROOT = path.join(REPO_ROOT, ".agent-world");
+  WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
+  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
+  AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
+  REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+  return REPO_ROOT;
+}
+configureProjectRoot();
 function buildWorldChatDirectoryPath(chatId) {
   return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
@@ -437,7 +453,9 @@ import { randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import path3 from "node:path";
 var DEFAULT_AGENT_ID = "default";
-var DEFAULT_WORLD_NAME = path3.basename(REPO_ROOT) || "agent-world";
+function defaultWorldName() {
+  return path3.basename(REPO_ROOT) || "agent-world";
+}
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   return `${timestamp}-${randomUUID().slice(0, 8)}`;
@@ -649,7 +667,7 @@ async function ensureDefaultAgentFiles(agentId) {
   const inferredRuntime = await inferDefaultAgentRuntime(agentId);
   await writeJsonAtomic(buildAgentMetadataPath(agentId), {
     id: agentId,
-    name: String(existingAgentMetadata?.name ?? `${DEFAULT_WORLD_NAME} agent`).trim() || `${DEFAULT_WORLD_NAME} agent`,
+    name: String(existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`,
     provider: String(existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider,
     model: String(existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model,
     createdAt: String(existingAgentMetadata?.createdAt ?? now),
@@ -713,7 +731,7 @@ async function ensureWorldBootstrap() {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     world = {
       id: createWorldId(),
-      name: DEFAULT_WORLD_NAME,
+      name: defaultWorldName(),
       defaultAgentId: DEFAULT_AGENT_ID,
       currentChatId: "",
       createdAt: now,
@@ -2854,11 +2872,14 @@ function loadAllowedDotEnvEnvironment() {
     process.env[key] = value;
   }
 }
-loadAllowedDotEnvEnvironment();
+function prepareProjectEnvironment(projectRoot) {
+  configureProjectRoot(projectRoot);
+  loadAllowedDotEnvEnvironment();
+}
 function usageText() {
   return [
-    "Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
-    "       agent-cli --remote [--new-chat] [initial message]",
+    "Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
+    "       agent-cli [--project <path>] --remote [--new-chat] [initial message]",
     "",
     "Runtime options override runtime.json defaults when provided:",
     "  --provider <name>                 --model <name>",
@@ -2866,6 +2887,7 @@ function usageText() {
     "  --tool-permission <auto|ask|read> --reasoning-effort <level>",
     "  --past-messages <count>           --stream-trace <true|false>",
     "  --web-search <true|false|low|medium|high>",
+    "  --project <path>",
     "  --remote",
     "",
     `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
@@ -2875,6 +2897,7 @@ function usageText() {
     '  agent-cli "What should I do first?"',
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
+    '  agent-cli --project /path/to/project "Summarize this repo"',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
     "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
   ].join("\n");
@@ -2908,6 +2931,7 @@ function parseArguments(argv) {
   let help = false;
   let remoteControl = false;
   let verbose = false;
+  let projectRoot;
   const messageParts = [];
   const runtimeOverrides = {};
   const normalizeFlagName = (rawValue) => rawValue.trim().toLowerCase();
@@ -2991,6 +3015,12 @@ function parseArguments(argv) {
         index = result.nextIndex;
         continue;
       }
+      if (flagName === "project") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        projectRoot = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
       if (flagName === "model") {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         runtimeOverrides.model = result.value;
@@ -3054,6 +3084,7 @@ function parseArguments(argv) {
   return {
     help,
     newChat,
+    ...projectRoot !== void 0 ? { projectRoot } : {},
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
@@ -3065,12 +3096,14 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
   const {
     help,
     newChat,
+    projectRoot,
     remoteControl,
     runtimeOverrides,
     streamOff,
     verbose,
     message
   } = parseArguments(argv);
+  prepareProjectEnvironment(projectRoot);
   if (help) {
     io.stdout.write(`${usageText()}
 `);
@@ -3148,6 +3181,7 @@ ${usageText()}`);
 async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
     const parsed = parseArguments(argv);
+    prepareProjectEnvironment(parsed.projectRoot);
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}
 `);

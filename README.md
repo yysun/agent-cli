@@ -43,6 +43,7 @@ Paired browsers observe the same shared remote session over SSE. Shared assistan
 Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
 
 Runtime settings can be supplied through `runtime.json` and overridden on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
+Use `--project <path>` to run against a specific project folder without changing your shell's current directory.
 
 Remote hosting uses:
 
@@ -128,7 +129,7 @@ If `./AGENTS.md` is present and non-empty, its content is added after the built-
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
 
-The CLI uses `AGENT_CLI_ROOT` as the project root when that environment variable is set. Otherwise it falls back to the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
+The CLI uses `--project <path>` as the project root when provided, otherwise `AGENT_CLI_ROOT` when that environment variable is set, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
 
 Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agents/skills/`.
 

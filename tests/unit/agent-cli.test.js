@@ -214,6 +214,16 @@ describe('agent-cli entrypoint', () => {
       verbose: false,
       message: '',
     });
+    expect(parseArguments(['--project', '/tmp/project-a', 'Inspect', 'status'])).toEqual({
+      help: false,
+      newChat: false,
+      projectRoot: '/tmp/project-a',
+      remoteControl: false,
+      runtimeOverrides: {},
+      streamOff: false,
+      verbose: false,
+      message: 'Inspect status',
+    });
   });
 
   it('parses CLI runtime overrides and normalizes their values', async () => {
@@ -441,7 +451,7 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain('Missing user message.');
-    expect(io.getStderr()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+    expect(io.getStderr()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
@@ -456,7 +466,7 @@ describe('agent-cli entrypoint', () => {
     const io = createIoCapture();
 
     await expect(main(['--help'], io)).resolves.toBeNull();
-    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+    expect(io.getStdout()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
   });
 
   it('reports missing messages before validating malformed runtime.json', async () => {
@@ -532,7 +542,21 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('loads .env from AGENT_CLI_ROOT and uses that root in startup diagnostics', async () => {
+  it('loads .env from --project and uses that root in startup diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+
+    delete process.env.GOOGLE_API_KEY;
+
+    const { main, startupText } = await loadCliModule();
+    await main(['--project', rootPath, '--help'], createIoCapture());
+
+    expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
+    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
+  });
+
+  it('still honors AGENT_CLI_ROOT when --project is absent', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
@@ -540,10 +564,41 @@ describe('agent-cli entrypoint', () => {
     delete process.env.GOOGLE_API_KEY;
     process.env.AGENT_CLI_ROOT = rootPath;
 
-    const { startupText } = await loadCliModule();
+    const { main, startupText } = await loadCliModule();
+    await main(['--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
+  });
+
+  it('stores project state under --project instead of the process cwd', async () => {
+    const rootPath = await createTestRoot();
+    const cwdRoot = await createTestRoot();
+    rootsToClean.push(rootPath, cwdRoot);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await ensureSkillsRoot(rootPath);
+    process.env.AGENT_CLI_ROOT = cwdRoot;
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockResolvedValue({
+      assistantText: 'ok',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'ok' },
+      ],
+      streamEvents: [],
+    });
+
+    const { main } = await loadCliModule(cwdRoot, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+
+    await main(['--project', rootPath, '--new-chat', 'hello'], createIoCapture());
+
+    expect(await readdir(path.join(rootPath, '.agent-world'))).toContain('world.json');
+    await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
   });
 
   it('applies CLI runtime overrides over runtime.json defaults', async () => {
@@ -873,7 +928,7 @@ describe('agent-cli entrypoint', () => {
 
     await runCli(['--help'], io);
 
-    expect(io.getStdout()).toContain('Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+    expect(io.getStdout()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
     expect(io.getStderr()).toBe('');
   });
 });

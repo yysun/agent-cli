@@ -37,7 +37,10 @@ import {
 } from './paths.js';
 
 const DEFAULT_AGENT_ID = 'default';
-const DEFAULT_WORLD_NAME = path.basename(REPO_ROOT) || 'agent-world';
+
+function defaultWorldName() {
+  return path.basename(REPO_ROOT) || 'agent-world';
+}
 
 /**
  * @param {Date} [now]
@@ -369,7 +372,7 @@ async function ensureDefaultAgentFiles(agentId) {
 
   await writeJsonAtomic(buildAgentMetadataPath(agentId), {
     id: agentId,
-    name: String(existingAgentMetadata?.name ?? `${DEFAULT_WORLD_NAME} agent`).trim() || `${DEFAULT_WORLD_NAME} agent`,
+    name: String(existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`,
     provider: String(existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider,
     model: String(existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model,
     createdAt: String(existingAgentMetadata?.createdAt ?? now),
@@ -451,7 +454,7 @@ async function ensureWorldBootstrap() {
     const now = new Date().toISOString();
     world = {
       id: createWorldId(),
-      name: DEFAULT_WORLD_NAME,
+      name: defaultWorldName(),
       defaultAgentId: DEFAULT_AGENT_ID,
       currentChatId: '',
       createdAt: now,

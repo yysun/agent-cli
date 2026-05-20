@@ -5,7 +5,7 @@ import { config as loadDotEnvConfig } from 'dotenv';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
 import { loadProjectSystemPrompt, loadSkillInventory } from '../../core/agent-files.js';
-import { REPO_ROOT } from '../../core/paths.js';
+import { configureProjectRoot, REPO_ROOT } from '../../core/paths.js';
 import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
@@ -49,6 +49,7 @@ export interface ParsedArguments {
   newChat: boolean;
   remoteControl: boolean;
   runtimeOverrides: Record<string, unknown>;
+  projectRoot?: string;
   streamOff: boolean;
   verbose: boolean;
   message: string;
@@ -78,12 +79,15 @@ function loadAllowedDotEnvEnvironment(): void {
   }
 }
 
-loadAllowedDotEnvEnvironment();
+function prepareProjectEnvironment(projectRoot?: string): void {
+  configureProjectRoot(projectRoot);
+  loadAllowedDotEnvEnvironment();
+}
 
 export function usageText(): string {
   return [
-    'Usage: agent-cli [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
-    '       agent-cli --remote [--new-chat] [initial message]',
+    'Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
+    '       agent-cli [--project <path>] --remote [--new-chat] [initial message]',
     '',
     'Runtime options override runtime.json defaults when provided:',
     '  --provider <name>                 --model <name>',
@@ -91,6 +95,7 @@ export function usageText(): string {
     '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
     '  --past-messages <count>           --stream-trace <true|false>',
     '  --web-search <true|false|low|medium|high>',
+    '  --project <path>',
     '  --remote',
     '',
     `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
@@ -100,6 +105,7 @@ export function usageText(): string {
     '  agent-cli "What should I do first?"',
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
+    '  agent-cli --project /path/to/project "Summarize this repo"',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
     '  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote',
   ].join('\n');
@@ -146,6 +152,7 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let help = false;
   let remoteControl = false;
   let verbose = false;
+  let projectRoot: string | undefined;
   const messageParts: string[] = [];
   const runtimeOverrides: Record<string, unknown> = {};
 
@@ -262,6 +269,13 @@ export function parseArguments(argv: string[]): ParsedArguments {
         continue;
       }
 
+      if (flagName === 'project') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        projectRoot = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
+
       if (flagName === 'model') {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         runtimeOverrides.model = result.value;
@@ -337,6 +351,7 @@ export function parseArguments(argv: string[]): ParsedArguments {
   return {
     help,
     newChat,
+    ...(projectRoot !== undefined ? { projectRoot } : {}),
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
@@ -353,12 +368,14 @@ export async function main(
   const {
     help,
     newChat,
+    projectRoot,
     remoteControl,
     runtimeOverrides,
     streamOff,
     verbose,
     message,
   } = parseArguments(argv);
+  prepareProjectEnvironment(projectRoot);
 
   if (help) {
     io.stdout.write(`${usageText()}\n`);
@@ -448,6 +465,7 @@ export async function runCli(
 ): Promise<void> {
   try {
     const parsed = parseArguments(argv);
+    prepareProjectEnvironment(parsed.projectRoot);
 
     if (parsed.verbose && !parsed.help) {
       io.stderr.write(`${startupText()}\n`);
