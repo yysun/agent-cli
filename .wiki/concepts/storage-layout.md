@@ -9,12 +9,14 @@ source_paths:
   - ".gitignore"
   - "README.md"
   - ".docs/done/2026/05/14/agent-world-storage.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-20"
 ---
 
 # Storage Layout
 
 This page explains where Agent CLI keeps its saved state on disk. The main folder is `.agent-world/`, and it sits under the same project root that also holds prompts, skills, settings, and `.env`.
+
+The project root can be chosen with `--project <path>`, then `AGENT_CLI_ROOT`, then the current working directory. Once that root is configured, all storage path helpers point at the matching `.agent-world/` tree. That prevents a remote host or one-shot turn from mixing state across projects.
 
 ## Top-Level Files And Folders
 

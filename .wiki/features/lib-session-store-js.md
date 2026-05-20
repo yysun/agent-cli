@@ -8,7 +8,7 @@ source_paths:
   - "core/session-store.ts"
   - "README.md"
   - ".docs/done/2026/05/14/agent-world-storage.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-20"
 ---
 
 # Saved State On Disk
@@ -23,6 +23,8 @@ updated_at: "2026-05-16"
 - the remote-host coordination lock at `.agent-world/remote-host.lock.json`
 
 [[storage-layout]] breaks down the meaning of each file.
+
+The default world and default agent names are derived from the configured project root when storage is bootstrapped. That detail matters now that `--project <path>` can choose a project without changing the shell's current directory.
 
 ## Why The Split Matters
 

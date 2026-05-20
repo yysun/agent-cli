@@ -11,7 +11,7 @@ source_paths:
   - "core/runtime-client.ts"
   - "core/paths.ts"
   - ".docs/done/2026/05/14/agent-world-storage.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-20"
 ---
 
 # Configuration And Runtime Precedence
@@ -20,11 +20,12 @@ This page explains where the app gets its settings and which source wins when th
 
 ## Which Folder Counts As The Project?
 
-- The project root is `AGENT_CLI_ROOT` when that environment variable is set.
-- Otherwise the project root is the real current working directory.
+- The project root is `--project <path>` when the flag is provided.
+- Otherwise it is `AGENT_CLI_ROOT` when that environment variable is set.
+- Otherwise it is the real current working directory.
 - `AGENTS.md`, `.agents/skills`, `runtime.json`, `.env`, and `.agent-world` all resolve from that same root.
 
-This matters because the app reads prompts, skills, settings, and saved chat data from that one chosen folder. [[storage-layout]] shows what gets stored there.
+This matters because the app reads prompts, skills, settings, and saved chat data from that one chosen folder. `core/paths.ts` exposes `configureProjectRoot(...)` so CLI startup can apply `--project` before loading files. [[storage-layout]] shows what gets stored there.
 
 ## Runtime Layers
 
@@ -38,13 +39,15 @@ The cleanup logic in [[lib-agent-config-js]] converts older spellings such as `m
 
 ## What `.env` Still Does
 
-The CLI still reads `.env`, but only for secrets and relay connection details. It does not use `.env` for normal behavior settings like model choice, temperature, tool mode, or search settings.
+The CLI still reads `.env`, but only for provider credential keys. It does not use `.env` for normal behavior settings like model choice, temperature, tool mode, or search settings.
 
 That means:
 
 - use `runtime.json` or CLI flags for behavior
 - use `.env` or process environment variables for secrets such as API keys
-- use `AGENT_CLI_RELAY_SERVER_URL` only when running [[remote-session-lifecycle]]
+- export `AGENT_CLI_RELAY_SERVER_URL` in the process environment when running [[remote-session-lifecycle]]
+
+This is stricter than the product description might suggest. `cli/src/cli-shell.ts` allow-lists provider credential variables from local `.env`; the relay URL is read directly from the environment by `readRemoteRelayServerUrl(...)`.
 
 ## Provider Validation
 

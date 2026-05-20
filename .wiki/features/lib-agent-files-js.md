@@ -7,7 +7,8 @@ source_paths:
   - "AGENTS.md"
   - "core/agent-files.ts"
   - "README.md"
-updated_at: "2026-05-16"
+  - ".docs/done/2026/05/16/upgrade-built-in-prompt.md"
+updated_at: "2026-05-20"
 ---
 
 # Prompt And Skill Loading
@@ -22,6 +23,8 @@ There are two prompt sources:
 2. optional project instructions from `AGENTS.md`
 
 `AGENTS.md` is additive, not a replacement. If the file is missing, the CLI still runs with the built-in prompt.
+
+The built-in prompt is intentionally stronger than a generic "be helpful" default. It tells the model to prefer workspace evidence over speculation, use read-only tools before asking for facts that likely exist locally, load relevant skills through `load_skill`, and avoid revealing secret values by default. That is product behavior, not decoration: the CLI should inspect the user's workspace when the answer depends on files, config, logs, or repo state.
 
 ## Skill Discovery
 

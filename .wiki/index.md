@@ -3,8 +3,8 @@ title: "Project Wiki"
 type: "index"
 status: "active"
 language: "default"
-last_commit: "10a954f16dd06ee63b17ce7d1f71d43d51d53490"
-updated_at: "2026-05-16"
+last_commit: "4d0e55cd2b2dd31078b6ba7902382b9d178244de"
+updated_at: "2026-05-20"
 ---
 
 # Agent CLI Wiki
@@ -25,6 +25,7 @@ Agent CLI is a command-line chat tool that runs on your machine. It can also ope
 - [[lib-agent-config-js]] covers how the app turns file settings and flags into one clean runtime config.
 - [[lib-agent-files-js]] covers the built-in prompt, `AGENTS.md`, and skill discovery.
 - [[lib-runtime-client-js]] covers the handoff into the shared model runner and tool context.
+- [[cli-src-tool-trace-renderer-ts]] covers compact verbose tool-call and tool-result rendering.
 - [[lib-session-store-js]] covers how `.agent-world` is created, how chats are saved, and how remote-host locking works.
 - [[server-src-relay-server-ts]] covers the small relay server that links the local host to browser clients.
 - [[web-src-app-tsx]] covers the browser UI for pairing, watching output, and sending chat commands.
@@ -37,6 +38,6 @@ Agent CLI is a command-line chat tool that runs on your machine. It can also ope
 
 ## Coverage Notes
 
-This wiki was refreshed from tracked repository files at `HEAD`, including `README.md`, `package.json`, `AGENTS.md`, `runtime.json`, the active TypeScript sources, the relay and remote-host tests, `.gitignore`, and the recent done docs under `.docs/done/`.
+This wiki was refreshed from tracked repository files at `HEAD`, including `README.md`, `package.json`, `AGENTS.md`, `runtime.json`, the active TypeScript sources, the relay and remote-host tests, `.gitignore`, and the recent planning and done docs under `.docs/`.
 
-The current coverage is intentionally focused on the big moving parts: where settings come from, where data is saved, how the browser pairing works, and how the project is verified. The pages now lead with plain-English explanations first, then introduce the exact file or code term when it helps.
+The current coverage is intentionally focused on the big moving parts: where settings come from, where data is saved, how the browser pairing works, how the `llm-runtime` loop is owned, how verbose traces stay readable, and how the project is verified. The pages lead with plain-English explanations first, then introduce the exact file or code term when it helps.

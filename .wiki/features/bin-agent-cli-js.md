@@ -9,8 +9,10 @@ source_paths:
   - "cli/src/index.ts"
   - "cli/src/cli-shell.ts"
   - "cli/src/agent-runtime.ts"
+  - "cli/src/tool-trace-renderer.ts"
   - "README.md"
-updated_at: "2026-05-16"
+  - ".docs/done/2026/05/16/port-trace-renderer.md"
+updated_at: "2026-05-20"
 ---
 
 # CLI Entry And Host Modes
@@ -42,3 +44,5 @@ That mode is described in [[remote-session-lifecycle]] and relies on [[server-sr
 - `--stream-off` suppresses chunked output and prints only the final assistant text
 
 Those output rules are designed so other programs can safely read stdout, while humans can still inspect live details on stderr.
+
+Verbose tool display now goes through [[cli-src-tool-trace-renderer-ts]]. The important boundary is unchanged: stdout remains parseable assistant text, and stderr gets bounded human-readable rows for tool calls and results.

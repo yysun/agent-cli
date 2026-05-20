@@ -16,7 +16,7 @@ source_paths:
   - "tests/e2e/agent-cli-remote.e2e.test.js"
   - "tests/e2e/relay-server.e2e.test.js"
   - "tests/e2e/agent-cli.e2e.test.js"
-updated_at: "2026-05-16"
+updated_at: "2026-05-20"
 ---
 
 # Testing Strategy
@@ -37,10 +37,11 @@ That means the default repo validation already covers the long-running remote ho
 ## Unit Test Focus
 
 - `agent-cli.test.js` checks CLI parsing, startup behavior, `.env` loading, and user-facing output.
+- `agent-cli.test.js` also checks that streaming diagnostics stay off stderr unless `--verbose` is enabled, then render structured tool-call and tool-result rows through [[cli-src-tool-trace-renderer-ts]].
 - `paths.test.js` checks `AGENT_CLI_ROOT` versus `cwd` resolution.
 - `agent-config.test.js` checks runtime normalization and precedence rules.
-- `agent-files.test.js` checks `AGENTS.md` and skill inventory loading.
-- `runtime-client.test.js` checks provider validation and the handoff into `llm-runtime`.
+- `agent-files.test.js` checks `AGENTS.md`, skill inventory loading, and the stronger built-in prompt guidance covered in [[lib-agent-files-js]].
+- `runtime-client.test.js` checks provider validation, the `llm-runtime` 0.5 completion-loop handoff, approval rejection behavior, runtime-backed tool-executor fallback, and tool-result callbacks.
 - `session-store.test.js` checks `.agent-world` bootstrap and durable file behavior.
 - `relay-server.test.js` and `remote-control.test.js` check the transport and host-side remote protocol.
 
