@@ -137,7 +137,7 @@ If `./AGENTS.md` is present and non-empty, its content is added after the built-
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
 
-The CLI uses `--project <path>` as the project root when provided, otherwise `AGENT_CLI_ROOT` when that environment variable is set, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
+The CLI uses `--project <path>` as the project root when provided, otherwise `AGENT_CLI_ROOT` when that environment variable is set, otherwise `AGENT_CLI_ROOT` from the current working directory's `.env`, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
 
 Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agents/skills/`.
 

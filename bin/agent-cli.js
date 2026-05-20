@@ -2845,6 +2845,7 @@ function createTurnExecutor(options) {
 
 // cli/src/cli-shell.ts
 var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
+var PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -2879,8 +2880,20 @@ function loadAllowedDotEnvEnvironment() {
     process.env[key] = value;
   }
 }
+function readProjectRootDotEnvFallback() {
+  if (String(process.env[PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
+    return void 0;
+  }
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path4.join(process.cwd(), ".env"),
+    quiet: true
+  }).parsed ?? {};
+  const projectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? "").trim();
+  return projectRoot || void 0;
+}
 function prepareProjectEnvironment(projectRoot) {
-  configureProjectRoot(projectRoot);
+  configureProjectRoot(projectRoot ?? readProjectRootDotEnvFallback());
   loadAllowedDotEnvEnvironment();
 }
 function usageText() {
@@ -3292,9 +3305,11 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
   try {
     const parsed = parseArguments(argv);
     prepareProjectEnvironment(parsed.projectRoot);
-    if (parsed.verbose && !parsed.help) {
+    if (!parsed.help) {
       io.stderr.write(`${startupText()}
 `);
+    }
+    if (parsed.verbose && !parsed.help) {
       if (parsed.message || !parsed.remoteControl && !parsed.help) {
         const agentConfig = await resolveEffectiveAgentConfig({
           runtimeOverrides: parsed.runtimeOverrides

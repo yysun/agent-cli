@@ -606,7 +606,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('logs startup diagnostics only in verbose mode', async () => {
+  it('always logs the project root on startup and keeps runtime selection verbose-only', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -628,6 +628,33 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
     expect(io.getStderr()).toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).toContain('Synthetic turn failure');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('logs the project root for non-verbose CLI startup', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await ensureSkillsRoot(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { runCli } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      },
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['hello'], io);
+
+    expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
+    expect(io.getStderr()).not.toContain('provider=openai model=gpt-5');
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
@@ -661,6 +688,24 @@ describe('agent-cli entrypoint', () => {
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
+  });
+
+  it('falls back to AGENT_CLI_ROOT from cwd .env when no project flag or environment variable is set', async () => {
+    const cwdRoot = await createTestRoot();
+    const projectRoot = path.join(cwdRoot, 'project-from-dotenv');
+    rootsToClean.push(cwdRoot);
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(path.join(cwdRoot, '.env'), 'AGENT_CLI_ROOT=project-from-dotenv\n', 'utf8');
+    await writeFile(path.join(projectRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+
+    delete process.env.AGENT_CLI_ROOT;
+    delete process.env.GOOGLE_API_KEY;
+
+    const { main, startupText } = await loadCliModule(cwdRoot);
+    await main(['--help'], createIoCapture());
+
+    expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
+    expect(startupText()).toBe(`Agent CLI starting in ${path.resolve('project-from-dotenv')}`);
   });
 
   it('stores project state under --project instead of the process cwd', async () => {

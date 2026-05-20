@@ -9,7 +9,7 @@
  * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
  *
  * Recent changes:
- * - 2026-05-20: Added automatic interactive mode and quiet idempotent project .env loading.
+ * - 2026-05-20: Added startup project-root output and cwd .env fallback for AGENT_CLI_ROOT.
  */
 import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
@@ -43,6 +43,7 @@ import {
 } from './agent-runtime.js';
 
 export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
+export const PROJECT_ROOT_ENV_KEY = 'AGENT_CLI_ROOT';
 
 const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'OPENAI_API_KEY',
@@ -107,8 +108,23 @@ function loadAllowedDotEnvEnvironment(): void {
   }
 }
 
+function readProjectRootDotEnvFallback(): string | undefined {
+  if (String(process.env[PROJECT_ROOT_ENV_KEY] ?? '').trim()) {
+    return undefined;
+  }
+
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path.join(process.cwd(), '.env'),
+    quiet: true,
+  }).parsed ?? {};
+  const projectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? '').trim();
+
+  return projectRoot || undefined;
+}
+
 function prepareProjectEnvironment(projectRoot?: string): void {
-  configureProjectRoot(projectRoot);
+  configureProjectRoot(projectRoot ?? readProjectRootDotEnvFallback());
   loadAllowedDotEnvEnvironment();
 }
 
@@ -622,9 +638,11 @@ export async function runCli(
     const parsed = parseArguments(argv);
     prepareProjectEnvironment(parsed.projectRoot);
 
-    if (parsed.verbose && !parsed.help) {
+    if (!parsed.help) {
       io.stderr.write(`${startupText()}\n`);
+    }
 
+    if (parsed.verbose && !parsed.help) {
       if (parsed.message || (!parsed.remoteControl && !parsed.help)) {
         const agentConfig = await resolveEffectiveAgentConfig({
           runtimeOverrides: parsed.runtimeOverrides,
