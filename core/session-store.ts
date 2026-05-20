@@ -7,9 +7,11 @@
  *
  * Key features:
  * - Bootstraps `world.json`, default-agent records, and chat directories on demand.
+ * - Creates and selects named agents under `.agent-world/agents/{agentId}`.
  * - Keeps the exported chat-store API stable for the CLI and remote host.
  *
  * Recent changes:
+ * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.
  * - 2026-05-07: Added file-backed chat persistence for the CLI.
  * - 2026-05-13: Added chat listing and explicit selection helpers for remote multi-client flows.
  * - 2026-05-14: Moved durable storage to `./.agent-world`.
@@ -27,6 +29,7 @@ import {
   buildAgentInboxPath,
   buildAgentMemoryPath,
   buildAgentMetadataPath,
+  buildAgentRuntimeConfigPath,
   buildAgentStatePath,
   buildWorldChatMessagesPath,
   buildWorldChatMetadataPath,
@@ -40,6 +43,17 @@ const DEFAULT_AGENT_ID = 'default';
 
 function defaultWorldName() {
   return path.basename(REPO_ROOT) || 'agent-world';
+}
+
+/** @param {string | undefined | null} agentId */
+function normalizeAgentId(agentId) {
+  const normalizedAgentId = String(agentId ?? '').trim();
+
+  if (!normalizedAgentId) {
+    return DEFAULT_AGENT_ID;
+  }
+
+  return normalizedAgentId;
 }
 
 /**
@@ -364,20 +378,37 @@ async function inferDefaultAgentRuntime(agentId) {
   };
 }
 
-/** @param {string} agentId */
-async function ensureDefaultAgentFiles(agentId) {
+/**
+ * @param {string} agentId
+ * @param {{ name?: string, provider?: string, model?: string }} [metadata]
+ */
+async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   const now = new Date().toISOString();
   const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(agentId));
   const inferredRuntime = await inferDefaultAgentRuntime(agentId);
+  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim()
+    || `${defaultWorldName()} agent`;
+  const provider = String(metadata.provider ?? existingAgentMetadata?.provider ?? inferredRuntime.provider).trim()
+    || inferredRuntime.provider;
+  const model = String(metadata.model ?? existingAgentMetadata?.model ?? inferredRuntime.model).trim()
+    || inferredRuntime.model;
 
   await writeJsonAtomic(buildAgentMetadataPath(agentId), {
     id: agentId,
-    name: String(existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`,
-    provider: String(existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider,
-    model: String(existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model,
+    name,
+    provider,
+    model,
     createdAt: String(existingAgentMetadata?.createdAt ?? now),
     updatedAt: now,
   });
+
+  if (metadata.provider || metadata.model || !(await pathExists(buildAgentRuntimeConfigPath(agentId)))) {
+    await writeJsonAtomic(buildAgentRuntimeConfigPath(agentId), {
+      schemaVersion: 1,
+      provider,
+      model,
+    });
+  }
 
   if (!await pathExists(buildAgentStatePath(agentId))) {
     await writeJsonAtomic(buildAgentStatePath(agentId), {
@@ -477,6 +508,55 @@ async function ensureWorldBootstrap() {
   return /** @type {{ id: string, name: string, defaultAgentId: string, currentChatId: string, createdAt?: string, updatedAt?: string }} */ (world);
 }
 
+/** @param {string} agentId */
+export async function loadAgentMetadata(agentId) {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const metadata = await readJsonIfPresent(buildAgentMetadataPath(normalizedAgentId));
+
+  return metadata && typeof metadata === 'object' ? metadata : null;
+}
+
+/**
+ * @param {{
+ *   agentId?: string,
+ *   name?: string,
+ *   provider?: string,
+ *   model?: string,
+ *   setDefault?: boolean,
+ * }} [options]
+ */
+export async function ensureAgentSelection(options = {}) {
+  const agentId = normalizeAgentId(options.agentId);
+  const world = await ensureWorldBootstrap();
+
+  await ensureDefaultAgentFiles(agentId, {
+    name: options.name,
+    provider: options.provider,
+    model: options.model,
+  });
+
+  if (options.setDefault !== false && String(world.defaultAgentId ?? '') !== agentId) {
+    await writeWorldState({
+      world,
+      updates: {
+        defaultAgentId: agentId,
+        currentChatId: '',
+      },
+    });
+  }
+
+  return await loadAgentMetadata(agentId);
+}
+
+/** @param {string} chatId */
+async function loadWorldChatMetadata(chatId) {
+  return await readJson(
+    buildWorldChatMetadataPath(chatId),
+    `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`,
+    `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`,
+  );
+}
+
 /** @param {string} chatId */
 async function loadWorldChatById(chatId) {
   const normalizedChatId = String(chatId ?? '').trim();
@@ -485,11 +565,7 @@ async function loadWorldChatById(chatId) {
     throw new Error('Missing chat ID.');
   }
 
-  const metadata = await readJson(
-    buildWorldChatMetadataPath(normalizedChatId),
-    `Missing chat session file: ${buildWorldChatMessagesPath(normalizedChatId)}`,
-    `Invalid chat session file: ${buildWorldChatMetadataPath(normalizedChatId)}`,
-  );
+  const metadata = await loadWorldChatMetadata(normalizedChatId);
   const messages = (await readJsonl(buildWorldChatMessagesPath(normalizedChatId)))
     .map((message) => normalizePersistedMessage(message, new Date().toISOString()));
 
@@ -677,14 +753,15 @@ export async function setCurrentChat(chatId) {
 }
 
 /**
- * @param {{ newChat: boolean }} params
+ * @param {{ newChat: boolean, agentId?: string }} params
  */
-export async function loadRequestedChat({ newChat }) {
+export async function loadRequestedChat({ newChat, agentId }) {
   if (newChat) {
     return createEmptyChat();
   }
 
   const world = await ensureWorldBootstrap();
+  const selectedAgentId = normalizeAgentId(agentId ?? world.defaultAgentId);
   const chatId = String(world.currentChatId ?? '').trim();
 
   if (!chatId) {
@@ -692,6 +769,13 @@ export async function loadRequestedChat({ newChat }) {
   }
 
   try {
+    const metadata = await loadWorldChatMetadata(chatId);
+    const chatAgentId = String(metadata.agentId ?? '').trim();
+
+    if (chatAgentId && chatAgentId !== selectedAgentId) {
+      return createEmptyChat();
+    }
+
     return await loadChatById(chatId);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Missing chat session file: ')) {

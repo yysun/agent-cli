@@ -52,6 +52,7 @@ Remote sessions created by `agent-cli --remote` do not expire by default. They s
 
 Runtime settings can be supplied through `runtime.json` and overridden on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
 Use `--project <path>` to run against a specific project folder without changing your shell's current directory.
+Use `--agent-id <id>` to select an agent, or `--new-agent <id>` to create/select one.
 
 Remote hosting uses:
 
@@ -126,7 +127,7 @@ Durable local state lives under `./.agent-world/`:
 - `chats/{chatId}/chat.json`, `messages.jsonl`, and `summary.md` store chat metadata, ordered message history, and summary text
 - `agents/{agentId}/agent.json`, `inbox.jsonl`, `state.json`, `events.jsonl`, and `memory.md` store agent-scoped metadata, inbox, mutable state, event traces, and memory
 
-Optional default-agent runtime overrides can also live at `./.agent-world/agents/{agentId}/runtime.json`. When `./.agent-world/world.json` defines `defaultAgentId`, that agent runtime file overrides matching keys from the repo-root `./runtime.json`.
+Agent runtime config can live in `./.agent-world/agents/{agentId}/agent.json` and `./.agent-world/agents/{agentId}/runtime.json`. `agent.json` provides the agent identity plus provider/model fallback; `runtime.json` stores runtime overrides and wins over matching `agent.json` fields.
 
 Remote host coordination also lives under `./.agent-world/remote-host.lock.json` while a `--remote` host session is active. Agent CLI now treats `./.agent-world/` as the only supported local storage contract for world, chat, agent, and remote-host state.
 
@@ -143,11 +144,12 @@ Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL
 
 ### Runtime Configuration
 
-Runtime defaults can come from two file layers:
+Runtime defaults can come from three file layers:
 - `./runtime.json`
-- `./.agent-world/agents/{defaultAgentId}/runtime.json` when `./.agent-world/world.json` declares `defaultAgentId`
+- `./.agent-world/agents/{agentId}/agent.json`
+- `./.agent-world/agents/{agentId}/runtime.json`
 
-Precedence is: CLI flags, then agent-level `runtime.json`, then repo-root `runtime.json`.
+Precedence is: CLI flags, then agent-level `runtime.json`, then agent-level `agent.json`, then repo-root `runtime.json`. `--agent-id <id>` selects the agent for the invocation. `--new-agent <id>` creates the folder under `./.agent-world/agents/{id}`, prompts for missing name/provider/model when running interactively, writes `agent.json` and `runtime.json`, and sets `world.json.defaultAgentId`.
 
 The runtime file schema currently supports:
 

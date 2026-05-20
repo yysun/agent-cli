@@ -7,8 +7,10 @@
  * Key features:
  * - Applies project-root and runtime overrides before loading project-local resources.
  * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
+ * - Selects and initializes named agents before resolving runtime config.
  *
  * Recent changes:
+ * - 2026-05-20: Added --agent-id and --new-agent agent selection.
  * - 2026-05-20: Added startup project-root output and cwd .env fallback for AGENT_CLI_ROOT.
  */
 import { realpathSync } from 'node:fs';
@@ -24,6 +26,8 @@ import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
   createPersistedChat,
+  ensureAgentSelection,
+  loadAgentMetadata,
   loadChatById,
   loadRequestedChat,
   listPersistedChats,
@@ -44,6 +48,7 @@ import {
 
 export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
 export const PROJECT_ROOT_ENV_KEY = 'AGENT_CLI_ROOT';
+const DEFAULT_AGENT_ID = 'default';
 
 const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'OPENAI_API_KEY',
@@ -62,7 +67,9 @@ const loadedDotEnvRoots = new Set<string>();
 
 export interface ParsedArguments {
   help: boolean;
+  agentId?: string;
   newChat: boolean;
+  newAgentId?: string;
   remoteControl: boolean;
   runtimeOverrides: Record<string, unknown>;
   projectRoot?: string;
@@ -139,6 +146,7 @@ export function usageText(): string {
     '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
     '  --past-messages <count>           --stream-trace <true|false>',
     '  --web-search <true|false|low|medium|high>',
+    '  --agent-id <id>                  --new-agent <id>',
     '  --project <path>',
     '  --remote',
     '',
@@ -150,6 +158,7 @@ export function usageText(): string {
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
     '  agent-cli --project /path/to/project "Summarize this repo"',
+    '  agent-cli --new-agent research --provider ollama --model gemma4:e4b',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
     '  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote',
   ].join('\n');
@@ -203,6 +212,8 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let help = false;
   let remoteControl = false;
   let verbose = false;
+  let agentId: string | undefined;
+  let newAgentId: string | undefined;
   let projectRoot: string | undefined;
   const messageParts: string[] = [];
   const runtimeOverrides: Record<string, unknown> = {};
@@ -320,6 +331,20 @@ export function parseArguments(argv: string[]): ParsedArguments {
         continue;
       }
 
+      if (flagName === 'agent-id') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        agentId = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
+
+      if (flagName === 'new-agent') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        newAgentId = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
+
       if (flagName === 'project') {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         projectRoot = String(result.value);
@@ -401,7 +426,9 @@ export function parseArguments(argv: string[]): ParsedArguments {
 
   return {
     help,
+    ...(agentId !== undefined ? { agentId } : {}),
     newChat,
+    ...(newAgentId !== undefined ? { newAgentId } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
@@ -409,6 +436,96 @@ export function parseArguments(argv: string[]): ParsedArguments {
     verbose,
     message: messageParts.join(' ').trim(),
   };
+}
+
+/** @param {unknown} value */
+function normalizeOptionalText(value): string {
+  return String(value ?? '').trim();
+}
+
+function defaultModelForProvider(provider: string): string {
+  return provider.trim().toLowerCase() === 'openai' ? 'gpt-5' : '';
+}
+
+async function askAgentField({
+  prompt,
+  label,
+  fallback,
+}: {
+  prompt?: InteractivePrompt,
+  label: string,
+  fallback: string,
+}): Promise<string> {
+  if (!prompt) {
+    return fallback;
+  }
+
+  const suffix = fallback ? ` (${fallback})` : '';
+  const answer = (await prompt.question(`${label}${suffix}: `)).trim();
+
+  return answer || fallback;
+}
+
+async function prepareSelectedAgent({
+  parsed,
+  prompt,
+}: {
+  parsed: ParsedArguments,
+  prompt?: InteractivePrompt,
+}): Promise<string> {
+  const selectedAgentId = normalizeOptionalText(parsed.newAgentId ?? parsed.agentId) || DEFAULT_AGENT_ID;
+  const explicitAgentSelection = Boolean(parsed.newAgentId || parsed.agentId);
+
+  if (!explicitAgentSelection) {
+    return selectedAgentId;
+  }
+
+  const existingMetadata = await loadAgentMetadata(selectedAgentId);
+  const creatingAgent = Boolean(parsed.newAgentId) || !existingMetadata;
+  const overrideProvider = normalizeOptionalText(parsed.runtimeOverrides.provider);
+  const overrideModel = normalizeOptionalText(parsed.runtimeOverrides.model);
+  let name = normalizeOptionalText(existingMetadata?.name);
+  let provider = normalizeOptionalText(existingMetadata?.provider);
+  let model = normalizeOptionalText(existingMetadata?.model);
+
+  if (creatingAgent || !name) {
+    name = prompt
+      ? await askAgentField({
+        prompt,
+        label: 'Agent name',
+        fallback: name || `${selectedAgentId} agent`,
+      })
+      : name || `${selectedAgentId} agent`;
+  }
+
+  if (creatingAgent || !provider) {
+    provider = prompt
+      ? await askAgentField({
+        prompt,
+        label: 'Provider',
+        fallback: provider || overrideProvider || 'openai',
+      })
+      : provider || overrideProvider;
+  }
+
+  if (creatingAgent || !model) {
+    model = prompt
+      ? await askAgentField({
+        prompt,
+        label: 'Model',
+        fallback: model || overrideModel || defaultModelForProvider(provider),
+      })
+      : model || overrideModel;
+  }
+
+  await ensureAgentSelection({
+    agentId: selectedAgentId,
+    name,
+    provider,
+    model,
+  });
+
+  return selectedAgentId;
 }
 
 function formatChatListItem(chat: {
@@ -533,7 +650,9 @@ export async function main(
 ) {
   const {
     help,
+    agentId,
     newChat,
+    newAgentId,
     projectRoot,
     remoteControl,
     runtimeOverrides,
@@ -542,8 +661,39 @@ export async function main(
     message,
   } = parseArguments(argv);
   prepareProjectEnvironment(projectRoot);
+  const parsedArguments = {
+    help,
+    ...(agentId !== undefined ? { agentId } : {}),
+    newChat,
+    ...(newAgentId !== undefined ? { newAgentId } : {}),
+    ...(projectRoot !== undefined ? { projectRoot } : {}),
+    remoteControl,
+    runtimeOverrides,
+    streamOff,
+    verbose,
+    message,
+  };
+
+  if (help && !newAgentId && !agentId) {
+    io.stdout.write(`${usageText()}\n`);
+    return null;
+  }
+
+  const shouldCreateAgentPrompt = Boolean((newAgentId || agentId) && process.stdin.isTTY);
+  const agentSetupPrompt = options.interactivePrompt
+    ?? (shouldCreateAgentPrompt ? createDefaultInteractivePrompt() : undefined);
+  let agentSetupPromptPassedToInteractive = false;
+
+  const selectedAgentId = await prepareSelectedAgent({
+    parsed: parsedArguments,
+    prompt: agentSetupPrompt,
+  });
 
   if (help) {
+    if (!options.interactivePrompt) {
+      agentSetupPrompt?.close?.();
+    }
+
     io.stdout.write(`${usageText()}\n`);
     return null;
   }
@@ -551,9 +701,17 @@ export async function main(
   const agentConfig = await resolveEffectiveAgentConfig({
     optionAgentConfig: options.agentConfig,
     runtimeOverrides,
-    agentId: options.agentId,
+    agentId: options.agentId ?? selectedAgentId,
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
+
+  if (!newAgentId && !agentId) {
+    await ensureAgentSelection({
+      agentId: selectedAgentId,
+      provider: normalizeOptionalText(agentConfig.provider),
+      model: normalizeOptionalText(agentConfig.model),
+    });
+  }
 
   if (!remoteControl) {
     await assertNoActiveRemoteHost();
@@ -562,7 +720,7 @@ export async function main(
   const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
     loadProjectSystemPrompt(),
     loadSkillInventory(),
-    loadRequestedChat({ newChat }),
+    loadRequestedChat({ newChat, agentId: selectedAgentId }),
   ]);
   const executeTurn = createTurnExecutor({
     io,
@@ -574,6 +732,10 @@ export async function main(
   });
 
   if (remoteControl) {
+    if (!options.interactivePrompt) {
+      agentSetupPrompt?.close?.();
+    }
+
     await acquireRemoteHostLock({ chat });
     const relayServer = readRemoteRelayServerUrl(process.env);
 
@@ -616,18 +778,26 @@ export async function main(
   }
 
   if (!message) {
+    agentSetupPromptPassedToInteractive = Boolean(agentSetupPrompt);
+
     return await runInteractiveSession({
-      prompt: options.interactivePrompt ?? createDefaultInteractivePrompt(),
+      prompt: agentSetupPrompt ?? createDefaultInteractivePrompt(),
       executeTurn,
       initialChat: chat,
       io,
     });
   }
 
-  return await executeTurn({
-    chat,
-    message,
-  });
+  try {
+    return await executeTurn({
+      chat,
+      message,
+    });
+  } finally {
+    if (!options.interactivePrompt && !agentSetupPromptPassedToInteractive) {
+      agentSetupPrompt?.close?.();
+    }
+  }
 }
 
 export async function runCli(
@@ -646,6 +816,7 @@ export async function runCli(
       if (parsed.message || (!parsed.remoteControl && !parsed.help)) {
         const agentConfig = await resolveEffectiveAgentConfig({
           runtimeOverrides: parsed.runtimeOverrides,
+          agentId: parsed.newAgentId ?? parsed.agentId ?? DEFAULT_AGENT_ID,
         });
         io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}\n`);
       }

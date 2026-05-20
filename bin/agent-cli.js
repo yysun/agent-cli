@@ -299,9 +299,11 @@ async function loadPersistedRuntimeConfig(options = {}) {
   if (!defaultAgentId) {
     return rootRuntimeConfig;
   }
+  const agentMetadataConfig = normalizeAgentConfig(await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {});
   const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
   return {
     ...rootRuntimeConfig,
+    ...agentMetadataConfig,
     ...agentRuntimeConfig
   };
 }
@@ -456,6 +458,13 @@ import path3 from "node:path";
 var DEFAULT_AGENT_ID = "default";
 function defaultWorldName() {
   return path3.basename(REPO_ROOT) || "agent-world";
+}
+function normalizeAgentId2(agentId) {
+  const normalizedAgentId = String(agentId ?? "").trim();
+  if (!normalizedAgentId) {
+    return DEFAULT_AGENT_ID;
+  }
+  return normalizedAgentId;
 }
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
@@ -662,18 +671,28 @@ async function inferDefaultAgentRuntime(agentId) {
     model
   };
 }
-async function ensureDefaultAgentFiles(agentId) {
+async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(agentId));
   const inferredRuntime = await inferDefaultAgentRuntime(agentId);
+  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`;
+  const provider = String(metadata.provider ?? existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider;
+  const model = String(metadata.model ?? existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model;
   await writeJsonAtomic(buildAgentMetadataPath(agentId), {
     id: agentId,
-    name: String(existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`,
-    provider: String(existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider,
-    model: String(existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model,
+    name,
+    provider,
+    model,
     createdAt: String(existingAgentMetadata?.createdAt ?? now),
     updatedAt: now
   });
+  if (metadata.provider || metadata.model || !await pathExists(buildAgentRuntimeConfigPath(agentId))) {
+    await writeJsonAtomic(buildAgentRuntimeConfigPath(agentId), {
+      schemaVersion: 1,
+      provider,
+      model
+    });
+  }
   if (!await pathExists(buildAgentStatePath(agentId))) {
     await writeJsonAtomic(buildAgentStatePath(agentId), {
       id: agentId,
@@ -753,12 +772,39 @@ async function ensureWorldBootstrap() {
     world
   );
 }
+async function loadAgentMetadata(agentId) {
+  const normalizedAgentId = normalizeAgentId2(agentId);
+  const metadata = await readJsonIfPresent(buildAgentMetadataPath(normalizedAgentId));
+  return metadata && typeof metadata === "object" ? metadata : null;
+}
+async function ensureAgentSelection(options = {}) {
+  const agentId = normalizeAgentId2(options.agentId);
+  const world = await ensureWorldBootstrap();
+  await ensureDefaultAgentFiles(agentId, {
+    name: options.name,
+    provider: options.provider,
+    model: options.model
+  });
+  if (options.setDefault !== false && String(world.defaultAgentId ?? "") !== agentId) {
+    await writeWorldState({
+      world,
+      updates: {
+        defaultAgentId: agentId,
+        currentChatId: ""
+      }
+    });
+  }
+  return await loadAgentMetadata(agentId);
+}
+async function loadWorldChatMetadata(chatId) {
+  return await readJson(buildWorldChatMetadataPath(chatId), `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`, `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`);
+}
 async function loadWorldChatById(chatId) {
   const normalizedChatId = String(chatId ?? "").trim();
   if (!normalizedChatId) {
     throw new Error("Missing chat ID.");
   }
-  const metadata = await readJson(buildWorldChatMetadataPath(normalizedChatId), `Missing chat session file: ${buildWorldChatMessagesPath(normalizedChatId)}`, `Invalid chat session file: ${buildWorldChatMetadataPath(normalizedChatId)}`);
+  const metadata = await loadWorldChatMetadata(normalizedChatId);
   const messages = (await readJsonl(buildWorldChatMessagesPath(normalizedChatId))).map((message) => normalizePersistedMessage(message, (/* @__PURE__ */ new Date()).toISOString()));
   return {
     id: String(metadata.id ?? normalizedChatId),
@@ -887,16 +933,22 @@ async function setCurrentChat(chatId) {
   });
   return chat;
 }
-async function loadRequestedChat({ newChat }) {
+async function loadRequestedChat({ newChat, agentId }) {
   if (newChat) {
     return createEmptyChat();
   }
   const world = await ensureWorldBootstrap();
+  const selectedAgentId = normalizeAgentId2(agentId ?? world.defaultAgentId);
   const chatId = String(world.currentChatId ?? "").trim();
   if (!chatId) {
     return createEmptyChat();
   }
   try {
+    const metadata = await loadWorldChatMetadata(chatId);
+    const chatAgentId = String(metadata.agentId ?? "").trim();
+    if (chatAgentId && chatAgentId !== selectedAgentId) {
+      return createEmptyChat();
+    }
     return await loadChatById(chatId);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Missing chat session file: ")) {
@@ -2846,6 +2898,7 @@ function createTurnExecutor(options) {
 // cli/src/cli-shell.ts
 var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
 var PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
+var DEFAULT_AGENT_ID2 = "default";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -2907,6 +2960,7 @@ function usageText() {
     "  --tool-permission <auto|ask|read> --reasoning-effort <level>",
     "  --past-messages <count>           --stream-trace <true|false>",
     "  --web-search <true|false|low|medium|high>",
+    "  --agent-id <id>                  --new-agent <id>",
     "  --project <path>",
     "  --remote",
     "",
@@ -2918,6 +2972,7 @@ function usageText() {
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
     '  agent-cli --project /path/to/project "Summarize this repo"',
+    "  agent-cli --new-agent research --provider ollama --model gemma4:e4b",
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
     "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
   ].join("\n");
@@ -2957,6 +3012,8 @@ function parseArguments(argv) {
   let help = false;
   let remoteControl = false;
   let verbose = false;
+  let agentId;
+  let newAgentId;
   let projectRoot;
   const messageParts = [];
   const runtimeOverrides = {};
@@ -3041,6 +3098,18 @@ function parseArguments(argv) {
         index = result.nextIndex;
         continue;
       }
+      if (flagName === "agent-id") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        agentId = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
+      if (flagName === "new-agent") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        newAgentId = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
       if (flagName === "project") {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         projectRoot = String(result.value);
@@ -3109,7 +3178,9 @@ function parseArguments(argv) {
   }
   return {
     help,
+    ...agentId !== void 0 ? { agentId } : {},
     newChat,
+    ...newAgentId !== void 0 ? { newAgentId } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
@@ -3117,6 +3188,69 @@ function parseArguments(argv) {
     verbose,
     message: messageParts.join(" ").trim()
   };
+}
+function normalizeOptionalText(value) {
+  return String(value ?? "").trim();
+}
+function defaultModelForProvider(provider) {
+  return provider.trim().toLowerCase() === "openai" ? "gpt-5" : "";
+}
+async function askAgentField({
+  prompt,
+  label,
+  fallback
+}) {
+  if (!prompt) {
+    return fallback;
+  }
+  const suffix = fallback ? ` (${fallback})` : "";
+  const answer = (await prompt.question(`${label}${suffix}: `)).trim();
+  return answer || fallback;
+}
+async function prepareSelectedAgent({
+  parsed,
+  prompt
+}) {
+  const selectedAgentId = normalizeOptionalText(parsed.newAgentId ?? parsed.agentId) || DEFAULT_AGENT_ID2;
+  const explicitAgentSelection = Boolean(parsed.newAgentId || parsed.agentId);
+  if (!explicitAgentSelection) {
+    return selectedAgentId;
+  }
+  const existingMetadata = await loadAgentMetadata(selectedAgentId);
+  const creatingAgent = Boolean(parsed.newAgentId) || !existingMetadata;
+  const overrideProvider = normalizeOptionalText(parsed.runtimeOverrides.provider);
+  const overrideModel = normalizeOptionalText(parsed.runtimeOverrides.model);
+  let name = normalizeOptionalText(existingMetadata?.name);
+  let provider = normalizeOptionalText(existingMetadata?.provider);
+  let model = normalizeOptionalText(existingMetadata?.model);
+  if (creatingAgent || !name) {
+    name = prompt ? await askAgentField({
+      prompt,
+      label: "Agent name",
+      fallback: name || `${selectedAgentId} agent`
+    }) : name || `${selectedAgentId} agent`;
+  }
+  if (creatingAgent || !provider) {
+    provider = prompt ? await askAgentField({
+      prompt,
+      label: "Provider",
+      fallback: provider || overrideProvider || "openai"
+    }) : provider || overrideProvider;
+  }
+  if (creatingAgent || !model) {
+    model = prompt ? await askAgentField({
+      prompt,
+      label: "Model",
+      fallback: model || overrideModel || defaultModelForProvider(provider)
+    }) : model || overrideModel;
+  }
+  await ensureAgentSelection({
+    agentId: selectedAgentId,
+    name,
+    provider,
+    model
+  });
+  return selectedAgentId;
 }
 function formatChatListItem(chat) {
   const marker = chat.isCurrent ? "*" : " ";
@@ -3215,7 +3349,9 @@ async function runInteractiveSession({
 async function main(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }, options = {}) {
   const {
     help,
+    agentId,
     newChat,
+    newAgentId,
     projectRoot,
     remoteControl,
     runtimeOverrides,
@@ -3224,7 +3360,34 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     message
   } = parseArguments(argv);
   prepareProjectEnvironment(projectRoot);
+  const parsedArguments = {
+    help,
+    ...agentId !== void 0 ? { agentId } : {},
+    newChat,
+    ...newAgentId !== void 0 ? { newAgentId } : {},
+    ...projectRoot !== void 0 ? { projectRoot } : {},
+    remoteControl,
+    runtimeOverrides,
+    streamOff,
+    verbose,
+    message
+  };
+  if (help && !newAgentId && !agentId) {
+    io.stdout.write(`${usageText()}
+`);
+    return null;
+  }
+  const shouldCreateAgentPrompt = Boolean((newAgentId || agentId) && process.stdin.isTTY);
+  const agentSetupPrompt = options.interactivePrompt ?? (shouldCreateAgentPrompt ? createDefaultInteractivePrompt() : void 0);
+  let agentSetupPromptPassedToInteractive = false;
+  const selectedAgentId = await prepareSelectedAgent({
+    parsed: parsedArguments,
+    prompt: agentSetupPrompt
+  });
   if (help) {
+    if (!options.interactivePrompt) {
+      agentSetupPrompt?.close?.();
+    }
     io.stdout.write(`${usageText()}
 `);
     return null;
@@ -3232,16 +3395,23 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
   const agentConfig = await resolveEffectiveAgentConfig({
     optionAgentConfig: options.agentConfig,
     runtimeOverrides,
-    agentId: options.agentId
+    agentId: options.agentId ?? selectedAgentId
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
+  if (!newAgentId && !agentId) {
+    await ensureAgentSelection({
+      agentId: selectedAgentId,
+      provider: normalizeOptionalText(agentConfig.provider),
+      model: normalizeOptionalText(agentConfig.model)
+    });
+  }
   if (!remoteControl) {
     await assertNoActiveRemoteHost();
   }
   const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
     loadProjectSystemPrompt(),
     loadSkillInventory(),
-    loadRequestedChat({ newChat })
+    loadRequestedChat({ newChat, agentId: selectedAgentId })
   ]);
   const executeTurn = createTurnExecutor({
     io,
@@ -3252,6 +3422,9 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     skillInventory
   });
   if (remoteControl) {
+    if (!options.interactivePrompt) {
+      agentSetupPrompt?.close?.();
+    }
     await acquireRemoteHostLock({ chat });
     const relayServer = readRemoteRelayServerUrl(process.env);
     try {
@@ -3289,17 +3462,24 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     }
   }
   if (!message) {
+    agentSetupPromptPassedToInteractive = Boolean(agentSetupPrompt);
     return await runInteractiveSession({
-      prompt: options.interactivePrompt ?? createDefaultInteractivePrompt(),
+      prompt: agentSetupPrompt ?? createDefaultInteractivePrompt(),
       executeTurn,
       initialChat: chat,
       io
     });
   }
-  return await executeTurn({
-    chat,
-    message
-  });
+  try {
+    return await executeTurn({
+      chat,
+      message
+    });
+  } finally {
+    if (!options.interactivePrompt && !agentSetupPromptPassedToInteractive) {
+      agentSetupPrompt?.close?.();
+    }
+  }
 }
 async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
@@ -3312,7 +3492,8 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
     if (parsed.verbose && !parsed.help) {
       if (parsed.message || !parsed.remoteControl && !parsed.help) {
         const agentConfig = await resolveEffectiveAgentConfig({
-          runtimeOverrides: parsed.runtimeOverrides
+          runtimeOverrides: parsed.runtimeOverrides,
+          agentId: parsed.newAgentId ?? parsed.agentId ?? DEFAULT_AGENT_ID2
         });
         io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}
 `);

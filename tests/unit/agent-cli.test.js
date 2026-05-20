@@ -37,6 +37,7 @@ const CLI_ENVIRONMENT_KEYS = [
   'AGENT_CLI_ROOT',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
+  'OLLAMA_BASE_URL',
   'OPENAI_API_KEY',
 ];
 const originalCliEnvironment = Object.fromEntries(CLI_ENVIRONMENT_KEYS.map((key) => [key, process.env[key]]));
@@ -234,6 +235,17 @@ describe('agent-cli entrypoint', () => {
       verbose: false,
       message: 'Inspect status',
     });
+    expect(parseArguments(['--agent-id', 'research', '--new-agent=writer', 'Draft'])).toEqual({
+      help: false,
+      agentId: 'research',
+      newChat: false,
+      newAgentId: 'writer',
+      remoteControl: false,
+      runtimeOverrides: {},
+      streamOff: false,
+      verbose: false,
+      message: 'Draft',
+    });
   });
 
   it('parses CLI runtime overrides and normalizes their values', async () => {
@@ -411,7 +423,7 @@ describe('agent-cli entrypoint', () => {
       },
     });
 
-    await main(['--temperature', '0.1', 'Inspect', 'status'], createIoCapture());
+    await main(['--agent-id', 'agent-7', '--temperature', '0.1', 'Inspect', 'status'], createIoCapture());
 
     expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
       stream: false,
@@ -634,6 +646,43 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
+  it('uses default agent runtime for verbose startup when no agent flag is supplied', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await ensureSkillsRoot(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await writeRootRuntimeConfig(rootPath, {
+      provider: 'openai',
+      model: 'gpt-5',
+    });
+    await writeAgentRuntimeConfig(rootPath, 'research', {
+      provider: 'unsupported-provider',
+      model: 'model-x',
+    });
+
+    const runChatTurn = vi.fn().mockResolvedValue({
+      assistantText: 'ok',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'ok' },
+      ],
+    });
+    const { runCli } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture();
+
+    await runCli(['--verbose', 'hello'], io);
+
+    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).not.toContain('unsupported-provider');
+    expect(runChatTurn).toHaveBeenCalled();
+  });
+
   it('logs the project root for non-verbose CLI startup', async () => {
     applyMinimalRuntimeEnvironment();
 
@@ -736,6 +785,85 @@ describe('agent-cli entrypoint', () => {
 
     expect(await readdir(path.join(rootPath, '.agent-world'))).toContain('world.json');
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
+  });
+
+  it('creates a new agent from CLI flags and uses it for runtime and persistence', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await ensureSkillsRoot(rootPath);
+    process.env.OLLAMA_BASE_URL = 'http://localhost:11434/v1';
+
+    const runChatTurn = vi.fn().mockResolvedValue({
+      assistantText: 'ok',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'ok' },
+      ],
+    });
+
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+
+    await main([
+      '--new-agent', 'research',
+      '--provider', 'ollama',
+      '--model', 'gemma4:e4b',
+      'hello',
+    ], createIoCapture());
+
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'agent.json'));
+    const runtime = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'runtime.json'));
+
+    expect(world.defaultAgentId).toBe('research');
+    expect(agent).toMatchObject({
+      id: 'research',
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
+    expect(runtime).toMatchObject({
+      schemaVersion: 1,
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
+    expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
+      agentConfig: expect.objectContaining({
+        provider: 'ollama',
+        model: 'gemma4:e4b',
+      }),
+    }));
+  });
+
+  it('prompts for missing new-agent metadata when a prompt is available', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { main } = await loadCliModule(rootPath);
+    const interactivePrompt = createScriptedPrompt(['Draft Agent', 'ollama', 'gemma4:e4b']);
+
+    await main(['--new-agent', 'draft', '--help'], createIoCapture(), { interactivePrompt });
+
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'draft', 'agent.json'));
+    const runtime = await readJson(path.join(rootPath, '.agent-world', 'agents', 'draft', 'runtime.json'));
+
+    expect(interactivePrompt.question).toHaveBeenCalledWith('Agent name (draft agent): ');
+    expect(interactivePrompt.question).toHaveBeenCalledWith('Provider (openai): ');
+    expect(interactivePrompt.question).toHaveBeenCalledWith('Model: ');
+    expect(agent).toMatchObject({
+      id: 'draft',
+      name: 'Draft Agent',
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
+    expect(runtime).toMatchObject({
+      schemaVersion: 1,
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
   });
 
   it('applies CLI runtime overrides over runtime.json defaults', async () => {
@@ -1050,9 +1178,6 @@ describe('agent-cli entrypoint', () => {
     );
     await expect(
       readFile(path.join(rootPath, '.agent-world', 'chats'), 'utf8'),
-    ).rejects.toThrow();
-    await expect(
-      readFile(path.join(rootPath, '.agent-world', 'world.json'), 'utf8'),
     ).rejects.toThrow();
   });
 

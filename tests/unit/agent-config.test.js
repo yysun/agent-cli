@@ -7,8 +7,11 @@
  *
  * Key features:
  * - Covers common field aliases such as `modal`, `tokens`, and `permissions`.
- * - Verifies runtime.json defaults and default-agent runtime overrides merge predictably.
+ * - Verifies runtime.json, agent.json, and default-agent runtime overrides merge predictably.
  * - Verifies invalid override values fail early with clear messages.
+ *
+ * Recent changes:
+ * - 2026-05-20: Added coverage for agent.json provider/model runtime fallback.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -189,6 +192,32 @@ describe('agent-config', () => {
       toolPermission: 'read',
       pastMessages: 20,
       stream: false,
+    });
+  });
+
+  it('loads provider and model from agent.json when runtime.json is absent', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await mkdir(path.join(rootPath, '.agent-world', 'agents', 'default'), { recursive: true });
+    await writeFile(path.join(rootPath, '.agent-world', 'world.json'), `${JSON.stringify({
+      id: 'world-1',
+      name: 'Test World',
+      defaultAgentId: 'default',
+      currentChatId: '',
+    }, null, 2)}\n`, 'utf8');
+    await writeFile(path.join(rootPath, '.agent-world', 'agents', 'default', 'agent.json'), `${JSON.stringify({
+      id: 'default',
+      name: 'Local Agent',
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    }, null, 2)}\n`, 'utf8');
+
+    const { loadPersistedRuntimeConfig } = await loadAgentConfigModule(rootPath);
+
+    await expect(loadPersistedRuntimeConfig()).resolves.toEqual({
+      provider: 'ollama',
+      model: 'gemma4:e4b',
     });
   });
 

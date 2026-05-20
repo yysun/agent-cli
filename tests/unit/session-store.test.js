@@ -7,9 +7,11 @@
  *
  * Key features:
  * - Covers world bootstrap, current-chat selection, and agent-scoped trace/state files.
+ * - Covers named-agent creation and selection.
  * - Verifies tool metadata survives JSONL serialization.
  *
  * Recent changes:
+ * - 2026-05-20: Added named-agent selection coverage.
  * - 2026-05-14: Reworked coverage for `.agent-world` storage.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -113,6 +115,39 @@ describe('session-store', () => {
     expect(storedMessages[1].tool_calls).toHaveLength(1);
 
     await expect(readFile(path.join(rootPath, '.agent-world', 'chats', chat.id, 'summary.md'), 'utf8')).resolves.toBe('');
+  });
+
+  it('creates and selects a named agent with metadata and runtime config', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { ensureAgentSelection } = await loadSessionStore(rootPath);
+
+    await ensureAgentSelection({
+      agentId: 'research',
+      name: 'Research Agent',
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
+
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'agent.json'));
+    const runtime = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'runtime.json'));
+
+    expect(world.defaultAgentId).toBe('research');
+    expect(world.currentChatId).toBe('');
+    expect(agent).toMatchObject({
+      id: 'research',
+      name: 'Research Agent',
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
+    expect(runtime).toMatchObject({
+      schemaVersion: 1,
+      provider: 'ollama',
+      model: 'gemma4:e4b',
+    });
+    await expect(readFile(path.join(rootPath, '.agent-world', 'research', 'agent.json'), 'utf8')).rejects.toThrow();
   });
 
   it('reloads the current chat from world.json.currentChatId', async () => {

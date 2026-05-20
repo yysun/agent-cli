@@ -8,16 +8,17 @@
  * Key features:
  * - Normalizes common aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
  * - Loads repo-root runtime defaults from `./runtime.json` when present.
- * - Applies an optional default-agent runtime override from `./.agent-world/agents/{agentId}/runtime.json`.
+ * - Applies agent metadata and runtime overrides from `./.agent-world/agents/{agentId}`.
  * - Validates supported enum values before runtime calls.
  * - Keeps runtime override parsing separate from provider credential environment variables.
  *
  * Recent changes:
+ * - 2026-05-20: Load provider/model fallback from agent.json before agent runtime.json.
  * - 2026-05-07: Retired JSON config-file loading in favor of CLI/runtime-file config.
  * - 2026-05-14: Restored optional runtime.json defaults at the repo root and default-agent scope.
  */
 import { promises as fs } from 'node:fs';
-import { buildAgentRuntimeConfigPath, ROOT_RUNTIME_CONFIG_PATH, WORLD_STATE_PATH, } from './paths.js';
+import { buildAgentMetadataPath, buildAgentRuntimeConfigPath, ROOT_RUNTIME_CONFIG_PATH, WORLD_STATE_PATH, } from './paths.js';
 const REASONING_EFFORTS = new Set(['default', 'none', 'low', 'medium', 'high']);
 const TOOL_PERMISSIONS = new Set(['auto', 'ask', 'read']);
 const WEB_SEARCH_CONTEXT_SIZES = new Set(['low', 'medium', 'high']);
@@ -311,9 +312,11 @@ export async function loadPersistedRuntimeConfig(options = {}) {
     if (!defaultAgentId) {
         return rootRuntimeConfig;
     }
+    const agentMetadataConfig = normalizeAgentConfig(await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), 'agent metadata') ?? {});
     const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
     return {
         ...rootRuntimeConfig,
+        ...agentMetadataConfig,
         ...agentRuntimeConfig,
     };
 }
