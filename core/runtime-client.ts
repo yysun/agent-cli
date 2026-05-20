@@ -13,7 +13,7 @@
  * Recent changes:
  * - 2026-05-07: Added `llm-runtime` orchestration for the CLI.
  * - 2026-05-11: Layered built-in prompt, AGENTS.md, and skill inventory in explicit order.
- * - 2026-05-16: Added tool-result callbacks so CLI renderers can summarize executed tools.
+ * - 2026-05-20: Added tool-result duration and argument context for richer CLI trace rendering.
  * - 2026-05-16: Migrated the host adapter to the `llm-runtime` 0.5.0 completion loop API.
  */
 import {
@@ -355,7 +355,7 @@ function selectContextMessages(messages, historyMessageLimit) {
  *     warnings?: unknown[],
  *   }) => void,
  *   onToolCall?: (toolCall: { id: string, name: string, arguments?: string }) => void,
- *   onToolResult?: (toolResult: { id: string, name: string, result: unknown }) => void,
+ *   onToolResult?: (toolResult: { id: string, name: string, result: unknown, arguments?: string, durationMs?: number }) => void,
  *   historyMessageLimit?: number,
  *   builtInSystemPrompt: string,
  *   projectSystemPrompt?: string,
@@ -449,22 +449,24 @@ export async function runChatTurn({
 
         for (const toolCall of response.tool_calls ?? []) {
           const toolName = toolCall.function?.name ?? 'unknown_tool';
+          const toolArguments = toolCall.function?.arguments;
 
           if (typeof onToolCall === 'function') {
             onToolCall({
               id: toolCall.id,
               name: toolName,
-              arguments: toolCall.function?.arguments,
+              arguments: toolArguments,
             });
           }
 
           let toolResult;
+          const toolStartedAt = Date.now();
 
           if (executionContext.toolPermission === 'ask' && approvalGate?.requestApproval) {
             const approvalDecision = await approvalGate.requestApproval({
               toolCallId: toolCall.id,
               toolName,
-              arguments: parseToolArguments(toolCall.function?.arguments ?? '{}'),
+              arguments: parseToolArguments(toolArguments ?? '{}'),
             });
 
             if (!approvalDecision?.approved) {
@@ -490,6 +492,8 @@ export async function runChatTurn({
               id: toolCall.id,
               name: toolName,
               result: toolResult,
+              arguments: toolArguments,
+              durationMs: Date.now() - toolStartedAt,
             });
           }
 

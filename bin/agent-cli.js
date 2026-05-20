@@ -1873,19 +1873,21 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
         const activeToolExecutor = providedToolExecutor ?? toolExecutor;
         for (const toolCall of response.tool_calls ?? []) {
           const toolName = toolCall.function?.name ?? "unknown_tool";
+          const toolArguments = toolCall.function?.arguments;
           if (typeof onToolCall === "function") {
             onToolCall({
               id: toolCall.id,
               name: toolName,
-              arguments: toolCall.function?.arguments
+              arguments: toolArguments
             });
           }
           let toolResult;
+          const toolStartedAt = Date.now();
           if (executionContext.toolPermission === "ask" && approvalGate?.requestApproval) {
             const approvalDecision = await approvalGate.requestApproval({
               toolCallId: toolCall.id,
               toolName,
-              arguments: parseToolArguments(toolCall.function?.arguments ?? "{}")
+              arguments: parseToolArguments(toolArguments ?? "{}")
             });
             if (!approvalDecision?.approved) {
               toolResult = createRejectedToolResult(toolCall.id, toolName, approvalDecision?.reason || `Tool execution rejected: ${toolName}`);
@@ -1903,7 +1905,9 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
             onToolResult({
               id: toolCall.id,
               name: toolName,
-              result: toolResult
+              result: toolResult,
+              arguments: toolArguments,
+              durationMs: Date.now() - toolStartedAt
             });
           }
           const toolMessage = {
@@ -1949,8 +1953,9 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
 
 // cli/src/tool-trace-renderer.ts
 var MAX_COMMAND_WIDTH = 100;
-var MAX_PREVIEW_LINES = 3;
+var MAX_PREVIEW_LINES = 5;
 var MAX_PREVIEW_LINE_WIDTH = 120;
+var MAX_VERBOSE_JSON_WIDTH = 320;
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1980,7 +1985,7 @@ function truncateOneLine(value, maxWidth) {
   if (normalized.length <= maxWidth) {
     return normalized;
   }
-  return `${normalized.slice(0, Math.max(0, maxWidth - 3)).trimEnd()}...`;
+  return `${normalized.slice(0, Math.max(0, maxWidth - 1)).trimEnd()}...`;
 }
 function countLines(value) {
   if (!value) {
@@ -1995,7 +2000,22 @@ function countLines(value) {
 }
 function previewLines(value, maxLines = MAX_PREVIEW_LINES, maxWidth = MAX_PREVIEW_LINE_WIDTH) {
   const normalized = value.replace(/\r\n/g, "\n");
-  return normalized.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim().length > 0).slice(0, maxLines).map((line) => truncateOneLine(line, maxWidth));
+  const lines = normalized.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim().length > 0).map((line) => truncateOneLine(line, maxWidth));
+  const compactLines = lines.filter((line) => !/^[\[{]$|^[}\])][,]?$/.test(line.trim()));
+  if (compactLines.length > 0) {
+    return compactLines.slice(0, maxLines);
+  }
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+  const closingLine = lines.at(-1);
+  if (closingLine && /^[}\])][,]?$/.test(closingLine.trim())) {
+    return [
+      ...lines.slice(0, maxLines),
+      closingLine
+    ];
+  }
+  return lines.slice(0, maxLines);
 }
 function readFirstString(record, ...keys) {
   if (!record) {
@@ -2043,6 +2063,27 @@ function compactJsonPreview(value, maxWidth = MAX_COMMAND_WIDTH) {
 function formatLineCount(lineCount) {
   return `${lineCount} line${lineCount === 1 ? "" : "s"}`;
 }
+function formatRequestedLineSummary(args) {
+  const record = parseJsonRecord(args);
+  if (!record) {
+    return null;
+  }
+  const startLine = readFirstNumber(record, "startLine");
+  const endLine = readFirstNumber(record, "endLine");
+  if (startLine !== null && endLine !== null && startLine > 0 && endLine >= startLine) {
+    return startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`;
+  }
+  if (startLine !== null && startLine > 0) {
+    return `from line ${startLine}`;
+  }
+  if (endLine !== null && endLine > 0) {
+    return `through line ${endLine}`;
+  }
+  return null;
+}
+function isReadFileLikeToolName(toolName) {
+  return toolName === "read_file";
+}
 function formatFileSize(bytes) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -2084,6 +2125,9 @@ function summarizePathLikeCall(args, ...keys) {
   const value = readFirstString(args, ...keys);
   return value ? truncateOneLine(value, MAX_COMMAND_WIDTH) : compactJsonPreview(args);
 }
+function summarizePathExistsCall(args) {
+  return summarizePathLikeCall(args, "path", "filePath");
+}
 function summarizeLoadSkillCall(args) {
   const skillId = readFirstString(args, "skillId", "id", "name");
   return skillId ? truncateOneLine(skillId, MAX_COMMAND_WIDTH) : compactJsonPreview(args);
@@ -2121,7 +2165,7 @@ function countMatches(result) {
   if (!record) {
     return null;
   }
-  for (const key of ["matches", "results", "files", "items"]) {
+  for (const key of ["matches", "results", "files", "items", "entries"]) {
     const value = record[key];
     if (Array.isArray(value)) {
       return value.length;
@@ -2129,8 +2173,9 @@ function countMatches(result) {
   }
   return readFirstNumber(record, "count", "matchCount", "total");
 }
-function summarizeShellToolResult(result) {
+function summarizeShellToolResult(result, forcedDurationMs) {
   const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const exitCode = readFirstNumber(record, "exit_code", "exitCode");
   const aborted = readFirstBoolean(record, "aborted") === true;
   const timedOut = readFirstBoolean(record, "timed_out", "timedOut") === true;
@@ -2141,24 +2186,30 @@ function summarizeShellToolResult(result) {
     return {
       name: "shell_cmd",
       ok: false,
+      durationMs,
       summary: "timed out",
-      preview: stderr ? previewLines(stderr) : void 0
+      preview: stderr ? previewLines(stderr, 3) : void 0,
+      raw: result
     };
   }
   if (aborted) {
     return {
       name: "shell_cmd",
       ok: false,
+      durationMs,
       summary: "aborted",
-      preview: stderr ? previewLines(stderr) : void 0
+      preview: stderr ? previewLines(stderr, 3) : void 0,
+      raw: result
     };
   }
   if (!ok) {
     return {
       name: "shell_cmd",
       ok: false,
+      durationMs,
       summary: extractMeaningfulLine(stderr) ?? extractMeaningfulLine(record?.error) ?? extractMeaningfulLine(stdout) ?? (exitCode === null ? "command failed" : `exit ${exitCode}`),
-      preview: stderr ? previewLines(stderr) : void 0
+      preview: stderr ? previewLines(stderr, 3) : void 0,
+      raw: result
     };
   }
   if (stdout) {
@@ -2166,38 +2217,46 @@ function summarizeShellToolResult(result) {
     return {
       name: "shell_cmd",
       ok: true,
+      durationMs,
       summary: `stdout ${formatLineCount(lineCount)}`,
-      preview: previewLines(stdout, Math.min(MAX_PREVIEW_LINES, lineCount || 1))
+      preview: previewLines(stdout, Math.min(MAX_PREVIEW_LINES, lineCount || 1)),
+      raw: result
     };
   }
   return {
     name: "shell_cmd",
     ok: true,
-    summary: exitCode === null ? "completed" : `exit ${exitCode}`
+    durationMs,
+    summary: exitCode === null ? "completed" : `exit ${exitCode}`,
+    raw: result
   };
 }
-function summarizeSearchFilesResult(result) {
+function summarizeSearchFilesResult(result, forcedDurationMs) {
   const record = parseJsonRecord(result);
   const count = countMatches(result);
   return {
     name: "search_files",
     ok: inferOk(record, true),
-    summary: count === null ? "completed" : `${count} match${count === 1 ? "" : "es"}`
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: count === null ? "completed" : `${count} match${count === 1 ? "" : "es"}`,
+    raw: result
   };
 }
-function summarizeReadFileResult(result) {
+function summarizeReadFileResult(result, forcedDurationMs, callArgs, toolName = "read_file") {
   const record = parseJsonRecord(result);
   const content = typeof result === "string" ? result : readFirstString(record, "content", "text", "result");
   const lineCount = content ? countLines(content) : null;
   return {
-    name: "read_file",
+    name: toolName,
     ok: inferOk(record, true),
-    summary: lineCount === null ? "completed" : formatLineCount(lineCount),
-    preview: content ? previewLines(content) : void 0
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: formatRequestedLineSummary(callArgs) ?? (lineCount === null ? "completed" : formatLineCount(lineCount)),
+    raw: result
   };
 }
-function summarizePathExistsResult(result) {
+function summarizePathExistsResult(result, forcedDurationMs) {
   const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const exists = readFirstBoolean(record, "exists");
   const path5 = readFirstString(record, "path", "filePath");
@@ -2209,37 +2268,199 @@ function summarizePathExistsResult(result) {
   return {
     name: "path_exists",
     ok,
+    durationMs,
     summary: exists === null ? ok ? "completed" : "failed" : String(exists),
-    ...preview.length > 0 ? { preview } : {}
+    ...preview.length > 0 ? { preview } : {},
+    raw: result
   };
 }
-function summarizeWriteFileResult(result) {
+function summarizeWriteFileResult(result, forcedDurationMs) {
   const record = parseJsonRecord(result);
   const bytes = readFirstNumber(record, "bytesWritten", "bytes", "size") ?? (typeof result === "string" ? Buffer.byteLength(result, "utf8") : null);
   return {
     name: "write_file",
     ok: inferOk(record, true),
-    summary: bytes === null ? "written" : `${formatFileSize(bytes)} written`
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: bytes === null ? "written" : `${formatFileSize(bytes)} written`,
+    raw: result
   };
 }
-function summarizeGenericToolResult(result, toolName) {
+function summarizeListFilesResult(result, forcedDurationMs) {
   const record = parseJsonRecord(result);
+  const entryCount = countMatches(result) ?? readFirstNumber(record, "entryCount", "lineCount") ?? (typeof result === "string" ? countLines(result) : null);
+  return {
+    name: "list_files",
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: entryCount === null ? "completed" : formatLineCount(entryCount),
+    raw: result
+  };
+}
+function summarizeCreateDirectoryResult(result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const status = readFirstString(record, "status", "message");
+  return {
+    name: "create_directory",
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: status ? truncateOneLine(status, MAX_PREVIEW_LINE_WIDTH) : "completed",
+    raw: result
+  };
+}
+function summarizeApiRequestResult(result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  const bodySaved = readFirstBoolean(record, "bodySaved") === true;
+  const bodyFilePath = readFirstString(record, "bodyFilePath");
+  if (ok && bodySaved && bodyFilePath) {
+    return {
+      name: "api_request",
+      ok,
+      durationMs,
+      summary: `completed \xB7 saved to ${truncateOneLine(bodyFilePath, MAX_PREVIEW_LINE_WIDTH)}`,
+      raw: result
+    };
+  }
+  return summarizeGenericToolResult(result, "api_request", forcedDurationMs);
+}
+function summarizeApiRequestOutputPathFailure(result, forcedDurationMs, callArgs) {
+  const record = parseJsonRecord(result);
+  const errorText = readFirstString(record, "error", "message", "detail");
+  const args = parseJsonRecord(callArgs);
+  const outputFilePath = readFirstString(args, "outputFilePath");
+  if (!errorText || !outputFilePath) {
+    return null;
+  }
+  if (!/api_request outputFilePath must /i.test(errorText)) {
+    return null;
+  }
+  return {
+    name: "api_request",
+    ok: false,
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: `cannot save to: ${truncateOneLine(outputFilePath, MAX_PREVIEW_LINE_WIDTH)}`,
+    raw: result
+  };
+}
+function readDataField(result) {
+  const record = parseJsonRecord(result);
+  return record?.data;
+}
+function summarizeResolveObjectResult(result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "resolve_object", forcedDurationMs);
+  }
+  const data = readDataField(result);
+  const matches = Array.isArray(data) ? data.filter(isRecord) : [];
+  const first = matches[0];
+  const displayName = readFirstString(first ?? null, "displayName");
+  const canonicalPath = readFirstString(first ?? null, "canonicalPath");
+  const preview = displayName || canonicalPath ? [truncateOneLine([displayName, canonicalPath].filter((value) => !!value).join(" \xB7 "), MAX_PREVIEW_LINE_WIDTH)] : void 0;
+  return {
+    name: "resolve_object",
+    ok: true,
+    durationMs,
+    summary: `${matches.length} match${matches.length === 1 ? "" : "es"}`,
+    preview,
+    raw: result
+  };
+}
+function summarizeSearchContentResult(result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "search_content", forcedDurationMs);
+  }
+  const data = readDataField(result);
+  const matches = Array.isArray(data) ? data.filter(isRecord) : [];
+  const firstPath = readFirstString(matches[0] ?? null, "path");
+  return {
+    name: "search_content",
+    ok: true,
+    durationMs,
+    summary: `${matches.length} match${matches.length === 1 ? "" : "es"}`,
+    preview: firstPath ? [truncateOneLine(firstPath, MAX_PREVIEW_LINE_WIDTH)] : void 0,
+    raw: result
+  };
+}
+function summarizeListContentResult(result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "list_content", forcedDurationMs);
+  }
+  const data = readDataField(result);
+  const entries = Array.isArray(data) ? data.filter(isRecord) : [];
+  const firstPath = readFirstString(entries[0] ?? null, "path");
+  return {
+    name: "list_content",
+    ok: true,
+    durationMs,
+    summary: `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`,
+    preview: firstPath ? [truncateOneLine(firstPath, MAX_PREVIEW_LINE_WIDTH)] : void 0,
+    raw: result
+  };
+}
+function summarizeReadContentResult(result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "read_content", forcedDurationMs);
+  }
+  const data = parseJsonRecord(readDataField(result));
+  const contentType = readFirstString(data, "contentType") ?? "content";
+  const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
+  const path5 = readFirstString(data, "path");
+  const content = readFirstString(data, "content");
+  const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
+  const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
+  return {
+    name: "read_content",
+    ok: true,
+    durationMs,
+    summary,
+    preview: path5 ? [`path: ${truncateOneLine(path5, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    raw: result
+  };
+}
+function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, toolName, forcedDurationMs);
+  }
+  const data = isRecord(record?.data) ? record.data : null;
+  const path5 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
+  return {
+    name: toolName,
+    ok: true,
+    durationMs,
+    summary: path5 ? `${summary} \xB7 ${truncateOneLine(path5, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    raw: result
+  };
+}
+function summarizeGenericToolResult(result, toolName, forcedDurationMs) {
+  const record = parseJsonRecord(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const textPreview = typeof result === "string" ? result : readFirstString(record, "stdout", "stderr", "text", "content", "message", "result", "detail");
   if (!ok) {
     return {
       name: toolName,
       ok: false,
+      durationMs,
       summary: extractMeaningfulLine(record?.error) ?? extractMeaningfulLine(textPreview) ?? "failed",
-      preview: textPreview ? previewLines(textPreview) : void 0
-    };
-  }
-  const status = readFirstString(record, "status", "message");
-  if (status) {
-    return {
-      name: toolName,
-      ok: true,
-      summary: truncateOneLine(status, MAX_PREVIEW_LINE_WIDTH)
+      preview: textPreview ? previewLines(textPreview, 3) : void 0,
+      raw: result
     };
   }
   if (textPreview) {
@@ -2247,71 +2468,180 @@ function summarizeGenericToolResult(result, toolName) {
     return {
       name: toolName,
       ok: true,
+      durationMs,
       summary: lineCount > 1 ? formatLineCount(lineCount) : truncateOneLine(textPreview, MAX_PREVIEW_LINE_WIDTH),
-      preview: lineCount > 1 ? previewLines(textPreview) : void 0
+      preview: lineCount > 1 ? previewLines(textPreview, 3) : void 0,
+      raw: result
     };
   }
+  const status = readFirstString(record, "status", "message");
   return {
     name: toolName,
     ok,
-    summary: ok ? "completed" : "failed"
+    durationMs,
+    summary: status ? truncateOneLine(status, MAX_PREVIEW_LINE_WIDTH) : ok ? "completed" : "failed",
+    raw: result
   };
+}
+function rawFieldLines(record) {
+  return Object.entries(record).map(([key, value]) => {
+    const serialized = stringifyCompact(value);
+    return serialized ? `  ${key}: ${serialized}` : null;
+  }).filter((line) => line !== null);
+}
+function formatRawCallPayload(toolName, args) {
+  if (toolName === "shell_cmd" && isRecord(args)) {
+    const lines = [];
+    if (typeof args.command === "string") {
+      lines.push(`  command: ${JSON.stringify(args.command)}`);
+    }
+    if (Array.isArray(args.parameters)) {
+      lines.push(`  args: ${JSON.stringify(args.parameters)}`);
+    }
+    for (const key of ["directory", "timeout", "output_format", "output_detail"]) {
+      if (args[key] !== void 0) {
+        const serialized = stringifyCompact(args[key]);
+        if (serialized) {
+          lines.push(`  ${key}: ${serialized}`);
+        }
+      }
+    }
+    return lines.length > 0 ? `
+${lines.join("\n")}` : "";
+  }
+  if (isRecord(args)) {
+    const lines = rawFieldLines(args);
+    return lines.length > 0 ? `
+${lines.join("\n")}` : "";
+  }
+  if (typeof args === "string") {
+    return `
+  result: ${JSON.stringify(args)}`;
+  }
+  return "";
+}
+function formatRawResultPayload(result) {
+  const record = parseJsonRecord(result);
+  if (record) {
+    const lines = rawFieldLines(record);
+    return lines.length > 0 ? `
+${lines.join("\n")}` : "";
+  }
+  if (typeof result === "string") {
+    return `
+  result: ${JSON.stringify(result)}`;
+  }
+  return "";
 }
 function summarizeToolCall(toolName, args) {
   const record = parseJsonRecord(args);
   if (toolName === "shell_cmd" && record) {
-    return { name: toolName, summary: summarizeShellToolCall(record) };
+    return { name: toolName, summary: summarizeShellToolCall(record), args: record };
   }
   if (toolName === "load_skill" && record) {
-    return { name: toolName, summary: summarizeLoadSkillCall(record) };
+    return { name: toolName, summary: summarizeLoadSkillCall(record), args: record };
   }
   if (toolName === "path_exists" && record) {
-    return { name: toolName, summary: summarizePathLikeCall(record, "path", "filePath") };
+    return { name: toolName, summary: summarizePathExistsCall(record), args: record };
   }
   if (toolName === "search_files" && record) {
-    return { name: toolName, summary: summarizePathLikeCall(record, "query", "pattern", "glob", "includePattern") };
+    return { name: toolName, summary: summarizePathLikeCall(record, "query", "pattern", "glob", "includePattern"), args: record };
   }
-  if (toolName === "read_file" && record) {
-    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path") };
+  if (toolName === "list_files" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "requestedPath", "path", "filePath"), args: record };
   }
-  if (toolName === "write_file" && record) {
-    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path") };
+  if (isReadFileLikeToolName(toolName) && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path"), args: record };
   }
-  return { name: toolName, summary: summarizeGenericCall(args) };
+  if ((toolName === "write_file" || toolName === "create_directory") && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path"), args: record };
+  }
+  return { name: toolName, summary: summarizeGenericCall(args), args };
 }
-function summarizeToolResult(toolName, result) {
+function summarizeToolResult(toolName, result, durationMs, callArgs) {
   if (toolName === "shell_cmd") {
-    return summarizeShellToolResult(result);
+    return summarizeShellToolResult(result, durationMs);
   }
   if (toolName === "search_files") {
-    return summarizeSearchFilesResult(result);
+    return summarizeSearchFilesResult(result, durationMs);
   }
-  if (toolName === "read_file") {
-    return summarizeReadFileResult(result);
+  if (isReadFileLikeToolName(toolName)) {
+    return summarizeReadFileResult(result, durationMs, callArgs, toolName);
   }
   if (toolName === "path_exists") {
-    return summarizePathExistsResult(result);
+    return summarizePathExistsResult(result, durationMs);
   }
   if (toolName === "write_file") {
-    return summarizeWriteFileResult(result);
+    return summarizeWriteFileResult(result, durationMs);
   }
-  return summarizeGenericToolResult(result, toolName);
+  if (toolName === "list_files") {
+    return summarizeListFilesResult(result, durationMs);
+  }
+  if (toolName === "create_directory") {
+    return summarizeCreateDirectoryResult(result, durationMs);
+  }
+  if (toolName === "api_request") {
+    return summarizeApiRequestOutputPathFailure(result, durationMs, callArgs) ?? summarizeApiRequestResult(result, durationMs);
+  }
+  if (toolName === "resolve_object") {
+    return summarizeResolveObjectResult(result, durationMs);
+  }
+  if (toolName === "search_content") {
+    return summarizeSearchContentResult(result, durationMs);
+  }
+  if (toolName === "list_content") {
+    return summarizeListContentResult(result, durationMs);
+  }
+  if (toolName === "read_content") {
+    return summarizeReadContentResult(result, durationMs);
+  }
+  if (toolName === "write_content" || toolName === "create_content" || toolName === "delete_content") {
+    return summarizeAiwContentMutationResult(toolName, result, durationMs);
+  }
+  return summarizeGenericToolResult(result, toolName, durationMs);
 }
-function formatToolCallDiagnostic(toolCall) {
-  const view = summarizeToolCall(toolCall.name, toolCall.arguments);
-  return `tool.call: ${view.name}${view.summary ? ` ${view.summary}` : ""}
+function renderToolCall(view, mode) {
+  if (mode === "debug") {
+    return `
+[tool.call] ${view.name}${formatRawCallPayload(view.name, view.args)}`;
+  }
+  const lines = [`  \u21B3 ${view.name}${view.summary ? ` ${view.summary}` : ""}`];
+  if (mode === "verbose" && typeof view.args !== "undefined") {
+    lines.push(`    args: ${compactJsonPreview(view.args, MAX_VERBOSE_JSON_WIDTH)}`);
+  }
+  return `
+${lines.join("\n")}`;
+}
+function renderToolResult(view, mode) {
+  if (mode === "debug") {
+    return `
+[tool.result] ${view.name}${formatRawResultPayload(view.raw)}
 `;
-}
-function formatToolResultDiagnostic(toolResult) {
-  const view = summarizeToolResult(toolResult.name, toolResult.result);
-  const lines = [
-    `tool.result: ${view.name} ${view.ok ? "ok" : "error"} ${view.summary || (view.ok ? "completed" : "failed")}`
-  ];
+  }
+  const statusIcon = view.ok ? "\u2713" : "\u2717";
+  const parts = [];
+  if (typeof view.durationMs === "number" && Number.isFinite(view.durationMs)) {
+    parts.push(`${Math.round(view.durationMs)}ms`);
+  }
+  parts.push(view.summary || (view.ok ? "completed" : "failed"));
+  const lines = [`  ${statusIcon} ${view.name} ${parts.join(" \xB7 ")}`];
   for (const previewLine of view.preview ?? []) {
-    lines.push(`  ${previewLine}`);
+    lines.push(`    ${previewLine}`);
   }
-  return `${lines.join("\n")}
+  if (mode === "verbose" && typeof view.raw !== "undefined") {
+    lines.push(`    raw: ${compactJsonPreview(view.raw, MAX_VERBOSE_JSON_WIDTH)}`);
+  }
+  return `
+${lines.join("\n")}
 `;
+}
+function formatToolCallDiagnostic(toolCall, mode = "default") {
+  const view = summarizeToolCall(toolCall.name, toolCall.arguments);
+  return renderToolCall(view, mode);
+}
+function formatToolResultDiagnostic(toolResult, mode = "default") {
+  const view = summarizeToolResult(toolResult.name, toolResult.result, toolResult.durationMs, toolResult.arguments);
+  return renderToolResult(view, mode);
 }
 
 // cli/src/agent-runtime.ts
@@ -2435,7 +2765,6 @@ function createTurnExecutor(options) {
         },
         onToolCall: options.streamOff ? void 0 : (toolCall) => {
           if (options.verbose) {
-            writeTypeTransitionSeparator(stderr, lastStreamType, "tool");
             stderr.write(formatToolCallDiagnostic(toolCall));
           }
           if (streamTraceEnabled) {
@@ -2449,7 +2778,6 @@ function createTurnExecutor(options) {
         },
         onToolResult: options.streamOff ? void 0 : (toolResult) => {
           if (options.verbose) {
-            writeTypeTransitionSeparator(stderr, lastStreamType, "tool");
             stderr.write(formatToolResultDiagnostic(toolResult));
           }
           lastStreamType = "tool";

@@ -681,12 +681,12 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStderr()).toContain('warning: web search is disabled\n');
     expect(io.getStderr()).toContain('reasoning: "thinking..."\n');
-    expect(io.getStderr()).toContain('tool.call: load_skill agent-cli-core\n');
-    expect(io.getStderr()).toContain('tool.result: load_skill ok loaded\n');
-    expect(io.getStderr()).toContain('tool.call: read_file /tmp/demo.md\n');
-    expect(io.getStderr()).toContain('tool.result: read_file ok 2 lines\n');
-    expect(io.getStderr()).toContain('  alpha\n');
-    expect(io.getStderr()).toContain('  beta\n');
+    expect(io.getStderr()).toContain('  ↳ load_skill agent-cli-core');
+    expect(io.getStderr()).toContain('  ✓ load_skill loaded\n');
+    expect(io.getStderr()).toContain('  ↳ read_file /tmp/demo.md');
+    expect(io.getStderr()).toContain('  ✓ read_file 2 lines\n');
+    expect(io.getStderr()).not.toContain('  alpha\n');
+    expect(io.getStderr()).not.toContain('  beta\n');
     expect(io.getStdout()).toContain('Hello\n');
   });
 

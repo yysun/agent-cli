@@ -241,7 +241,6 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           ? undefined
           : (toolCall) => {
             if (options.verbose) {
-              writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
               stderr.write(formatToolCallDiagnostic(toolCall));
             }
 
@@ -259,7 +258,6 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           ? undefined
           : (toolResult) => {
             if (options.verbose) {
-              writeTypeTransitionSeparator(stderr, lastStreamType, 'tool');
               stderr.write(formatToolResultDiagnostic(toolResult));
             }
 

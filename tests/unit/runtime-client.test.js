@@ -343,11 +343,13 @@ describe('runtime-client', () => {
       name: 'load_skill',
       arguments: '{"skillId":"agent-cli-core"}',
     });
-    expect(onToolResult).toHaveBeenCalledWith({
+    expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
       id: 'tool-1',
       name: 'load_skill',
       result: { ok: true, status: 'loaded' },
-    });
+      arguments: '{"skillId":"agent-cli-core"}',
+      durationMs: expect.any(Number),
+    }));
     expect(result.messages).toContainEqual(expect.objectContaining({
       role: 'tool',
       tool_call_id: 'tool-1',
@@ -438,7 +440,7 @@ describe('runtime-client', () => {
       arguments: { skillId: 'agent-cli-core' },
     });
     expect(loadSkillExecute).not.toHaveBeenCalled();
-    expect(onToolResult).toHaveBeenCalledWith({
+    expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
       id: 'tool-1',
       name: 'load_skill',
       result: expect.objectContaining({
@@ -447,7 +449,9 @@ describe('runtime-client', () => {
         toolName: 'load_skill',
         message: 'Nope',
       }),
-    });
+      arguments: '{"skillId":"agent-cli-core"}',
+      durationMs: expect.any(Number),
+    }));
     expect(result.messages).toContainEqual(expect.objectContaining({
       role: 'tool',
       tool_call_id: 'tool-1',
