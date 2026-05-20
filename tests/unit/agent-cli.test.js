@@ -618,7 +618,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('always logs the project root on startup and keeps runtime selection verbose-only', async () => {
+  it('logs project root, agent id, provider, and model on startup', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -639,6 +639,7 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
+    expect(io.getStderr()).toContain('Agent CLI agent id: default');
     expect(io.getStderr()).toContain('provider=openai model=gpt-5');
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
@@ -678,9 +679,41 @@ describe('agent-cli entrypoint', () => {
 
     await runCli(['--verbose', 'hello'], io);
 
+    expect(io.getStderr()).toContain('Agent CLI agent id: default');
     expect(io.getStderr()).toContain('provider=openai model=gpt-5');
     expect(io.getStderr()).not.toContain('unsupported-provider');
     expect(runChatTurn).toHaveBeenCalled();
+  });
+
+  it('logs the selected agent id on startup', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await ensureSkillsRoot(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await writeAgentRuntimeConfig(rootPath, 'research', {
+      provider: 'openai',
+      model: 'gpt-5-mini',
+    });
+
+    const { runCli } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      },
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['--agent-id', 'research', 'hello'], io);
+
+    expect(io.getStderr()).toContain('Agent CLI agent id: research');
+    expect(io.getStderr()).toContain('provider=openai model=gpt-5-mini');
+    expect(io.getStderr()).toContain('Synthetic turn failure');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
   });
 
   it('logs the project root for non-verbose CLI startup', async () => {
@@ -703,7 +736,8 @@ describe('agent-cli entrypoint', () => {
     await runCli(['hello'], io);
 
     expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
-    expect(io.getStderr()).not.toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).toContain('Agent CLI agent id: default');
+    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
@@ -721,7 +755,7 @@ describe('agent-cli entrypoint', () => {
     await main(['--project', rootPath, '--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
-    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
+    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
   });
 
   it('still honors AGENT_CLI_ROOT when --project is absent', async () => {
@@ -736,7 +770,7 @@ describe('agent-cli entrypoint', () => {
     await main(['--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
-    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
+    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
   });
 
   it('falls back to AGENT_CLI_ROOT from cwd .env when no project flag or environment variable is set', async () => {
@@ -754,7 +788,9 @@ describe('agent-cli entrypoint', () => {
     await main(['--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
-    expect(startupText()).toBe(`Agent CLI starting in ${path.resolve('project-from-dotenv')}`);
+    expect(startupText()).toBe(
+      `Agent CLI starting in ${path.resolve('project-from-dotenv')}\nAgent CLI agent id: default`,
+    );
   });
 
   it('stores project state under --project instead of the process cwd', async () => {

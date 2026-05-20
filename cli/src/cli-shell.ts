@@ -8,8 +8,10 @@
  * - Applies project-root and runtime overrides before loading project-local resources.
  * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
  * - Selects and initializes named agents before resolving runtime config.
+ * - Prints startup diagnostics for project root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-20: Added startup agent-id output.
  * - 2026-05-20: Added --agent-id and --new-agent agent selection.
  * - 2026-05-20: Added startup project-root output and cwd .env fallback for AGENT_CLI_ROOT.
  */
@@ -39,7 +41,6 @@ import {
 } from '../../core/session-store.js';
 import * as relayClient from '../../core/relay-client.js';
 import { runRemoteControlSession } from '../../core/remote-control.js';
-import { validateRuntimeEnvironment } from '../../core/runtime-client.js';
 import {
   type CliIo,
   createTurnExecutor,
@@ -82,6 +83,7 @@ export interface MainOptions {
   agentConfig?: Record<string, unknown>;
   agentId?: string;
   interactivePrompt?: InteractivePrompt;
+  startupDiagnostics?: boolean;
 }
 
 export interface InteractivePrompt {
@@ -164,8 +166,21 @@ export function usageText(): string {
   ].join('\n');
 }
 
-export function startupText(cwd = REPO_ROOT): string {
-  return `Agent CLI starting in ${cwd}`;
+export function startupText(
+  cwd = REPO_ROOT,
+  agentId = DEFAULT_AGENT_ID,
+  runtimeSettings?: { provider: string; model: string },
+): string {
+  const lines = [
+    `Agent CLI starting in ${cwd}`,
+    `Agent CLI agent id: ${agentId}`,
+  ];
+
+  if (runtimeSettings) {
+    lines.push(runtimeSelectionText(runtimeSettings));
+  }
+
+  return lines.join('\n');
 }
 
 export function runtimeSelectionText(runtimeSettings: { provider: string; model: string }): string {
@@ -447,6 +462,13 @@ function defaultModelForProvider(provider: string): string {
   return provider.trim().toLowerCase() === 'openai' ? 'gpt-5' : '';
 }
 
+function runtimeSettingsForStartup(agentConfig: Record<string, unknown>): { provider: string; model: string } {
+  const provider = (normalizeOptionalText(agentConfig.provider) || 'openai').toLowerCase();
+  const model = normalizeOptionalText(agentConfig.model) || defaultModelForProvider(provider);
+
+  return { provider, model };
+}
+
 async function askAgentField({
   prompt,
   label,
@@ -705,6 +727,12 @@ export async function main(
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
 
+  if (options.startupDiagnostics) {
+    (io.stderr ?? process.stderr).write(
+      `${startupText(REPO_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}\n`,
+    );
+  }
+
   if (!newAgentId && !agentId) {
     await ensureAgentSelection({
       agentId: selectedAgentId,
@@ -808,21 +836,7 @@ export async function runCli(
     const parsed = parseArguments(argv);
     prepareProjectEnvironment(parsed.projectRoot);
 
-    if (!parsed.help) {
-      io.stderr.write(`${startupText()}\n`);
-    }
-
-    if (parsed.verbose && !parsed.help) {
-      if (parsed.message || (!parsed.remoteControl && !parsed.help)) {
-        const agentConfig = await resolveEffectiveAgentConfig({
-          runtimeOverrides: parsed.runtimeOverrides,
-          agentId: parsed.newAgentId ?? parsed.agentId ?? DEFAULT_AGENT_ID,
-        });
-        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}\n`);
-      }
-    }
-
-    await main(argv, io);
+    await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     io.stderr.write(`${message.trim()}\n`);

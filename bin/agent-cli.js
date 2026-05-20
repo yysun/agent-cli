@@ -2977,8 +2977,15 @@ function usageText() {
     "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
   ].join("\n");
 }
-function startupText(cwd = REPO_ROOT) {
-  return `Agent CLI starting in ${cwd}`;
+function startupText(cwd = REPO_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings) {
+  const lines = [
+    `Agent CLI starting in ${cwd}`,
+    `Agent CLI agent id: ${agentId}`
+  ];
+  if (runtimeSettings) {
+    lines.push(runtimeSelectionText(runtimeSettings));
+  }
+  return lines.join("\n");
 }
 function runtimeSelectionText(runtimeSettings) {
   return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
@@ -3195,6 +3202,11 @@ function normalizeOptionalText(value) {
 function defaultModelForProvider(provider) {
   return provider.trim().toLowerCase() === "openai" ? "gpt-5" : "";
 }
+function runtimeSettingsForStartup(agentConfig) {
+  const provider = (normalizeOptionalText(agentConfig.provider) || "openai").toLowerCase();
+  const model = normalizeOptionalText(agentConfig.model) || defaultModelForProvider(provider);
+  return { provider, model };
+}
 async function askAgentField({
   prompt,
   label,
@@ -3398,6 +3410,12 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     agentId: options.agentId ?? selectedAgentId
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
+  if (options.startupDiagnostics) {
+    (io.stderr ?? process.stderr).write(
+      `${startupText(REPO_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}
+`
+    );
+  }
   if (!newAgentId && !agentId) {
     await ensureAgentSelection({
       agentId: selectedAgentId,
@@ -3485,21 +3503,7 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
   try {
     const parsed = parseArguments(argv);
     prepareProjectEnvironment(parsed.projectRoot);
-    if (!parsed.help) {
-      io.stderr.write(`${startupText()}
-`);
-    }
-    if (parsed.verbose && !parsed.help) {
-      if (parsed.message || !parsed.remoteControl && !parsed.help) {
-        const agentConfig = await resolveEffectiveAgentConfig({
-          runtimeOverrides: parsed.runtimeOverrides,
-          agentId: parsed.newAgentId ?? parsed.agentId ?? DEFAULT_AGENT_ID2
-        });
-        io.stderr.write(`${runtimeSelectionText(validateRuntimeEnvironment(process.env, agentConfig))}
-`);
-      }
-    }
-    await main(argv, io);
+    await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     io.stderr.write(`${message.trim()}
