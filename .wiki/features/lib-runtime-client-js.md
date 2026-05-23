@@ -9,7 +9,8 @@ source_paths:
   - "core/paths.ts"
   - "README.md"
   - ".docs/done/2026/05/16/upgrade-llm-runtime-v0-5-0.md"
-updated_at: "2026-05-20"
+  - ".docs/done/2026/05/23/cli-input-ui.md"
+updated_at: "2026-05-23"
 ---
 
 # Model Runner Handoff
@@ -43,6 +44,8 @@ That keeps long-term persisted chat history separate from repo instructions and 
 The module owns the turn loop through `runCompletionLoop(...)`, not the package's higher-level prompt wrapper. That choice matters because Agent CLI wants local ownership of the exact system prompt: built-in prompt, optional `AGENTS.md`, then skill inventory.
 
 When the model requests tools, `onToolCallsResponse(...)` appends the assistant tool-call message, executes each tool, appends the tool result, and tells the loop to continue. The CLI still owns approval gating before execution, so rejected calls become explicit rejected tool-result artifacts instead of silently disappearing.
+
+The runtime also accepts a `handleToolCall` hook before falling through to default tool execution. That hook lets the CLI handle local-only tool families such as terminal user input without moving stdout, stderr, or prompt behavior into core runtime code. [[cli-input-ui]] uses this hook for `ask_user_input`-family tools.
 
 The runtime normally receives a provided tool executor from the loop. If it does not, Agent CLI falls back to `executeToolCall(...)` against its own created runtime. That fallback is narrow but important: `load_skill` and other runtime tools still work even when the lower-level callback omits a bound executor.
 

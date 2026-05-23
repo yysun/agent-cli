@@ -8,7 +8,8 @@ source_paths:
   - "core/agent-config.ts"
   - "core/paths.ts"
   - "README.md"
-updated_at: "2026-05-16"
+  - ".docs/done/2026/05/20/agent-id-config.md"
+updated_at: "2026-05-23"
 ---
 
 # Runtime Settings Cleanup
@@ -18,7 +19,8 @@ This module takes setting input from files and flags and turns it into one clean
 ## What It Loads
 
 - repo defaults from `runtime.json`
-- optional default-agent overrides from `.agent-world/agents/{agentId}/runtime.json`
+- selected-agent metadata from `.agent-world/agents/{agentId}/agent.json`
+- selected-agent overrides from `.agent-world/agents/{agentId}/runtime.json`
 - runtime overrides coming from CLI flags
 
 The merged result is the final setting set used by [[bin-agent-cli-js]] and [[lib-runtime-client-js]].
@@ -39,6 +41,8 @@ It also accepts a few older or shorter names such as `modal`, `tokens`, `permiss
 ## What It Does Not Do
 
 It does not load provider secrets. Credentials still come from `.env` or the process environment, which keeps behavior settings separate from secret values. [[configuration-and-runtime-precedence]] covers that split.
+
+It also does not decide which agent is active. The shell and session store do that first; this module only loads and normalizes the config for the chosen agent. See [[named-agent-selection]].
 
 ## Validation Style
 

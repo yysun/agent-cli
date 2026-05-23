@@ -8,7 +8,9 @@ source_paths:
   - "core/session-store.ts"
   - "README.md"
   - ".docs/done/2026/05/14/agent-world-storage.md"
-updated_at: "2026-05-20"
+  - ".docs/done/2026/05/20/agent-id-config.md"
+  - ".docs/done/2026/05/20/auto-interactive-mode.md"
+updated_at: "2026-05-23"
 ---
 
 # Saved State On Disk
@@ -19,12 +21,14 @@ updated_at: "2026-05-20"
 
 - `world.json` for the selected chat and default agent
 - chat directories under `.agent-world/chats/{chatId}`
-- agent directories under `.agent-world/agents/{agentId}`
+- agent directories under `.agent-world/agents/{agentId}`, including `agent.json`, `runtime.json`, state, inbox, events, and memory files
 - the remote-host coordination lock at `.agent-world/remote-host.lock.json`
 
 [[storage-layout]] breaks down the meaning of each file.
 
 The default world and default agent names are derived from the configured project root when storage is bootstrapped. That detail matters now that `--project <path>` can choose a project without changing the shell's current directory.
+
+Named-agent selection is part of this module's contract. `ensureAgentSelection(...)` initializes the selected agent and updates `world.json.defaultAgentId`, while preserving the `.agent-world/agents/{agentId}` layout described in [[named-agent-selection]].
 
 ## Why The Split Matters
 
@@ -45,3 +49,5 @@ The store also cleans up timestamps so chat ordering stays stable even when mess
 Remote host state is local too. The session store acquires, updates, and releases the remote lock and keeps the selected chat in sync when remote clients use `/new` or `/use`.
 
 That behavior is a core part of [[remote-session-lifecycle]] and one of the main outcomes of [[agent-world-storage-migration]].
+
+The same chat helpers are now used by [[auto-interactive-mode]] for `/new`, `/clear`, `/chats`, and `/use <chatId>`, so local terminal chat commands and remote browser chat commands share the persistence model.

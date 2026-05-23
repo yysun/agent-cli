@@ -9,7 +9,8 @@ source_paths:
   - ".gitignore"
   - "README.md"
   - ".docs/done/2026/05/14/agent-world-storage.md"
-updated_at: "2026-05-20"
+  - ".docs/done/2026/05/20/agent-id-config.md"
+updated_at: "2026-05-23"
 ---
 
 # Storage Layout
@@ -25,13 +26,15 @@ The project root can be chosen with `--project <path>`, then `AGENT_CLI_ROOT`, t
 - `.agent-world/chats/{chatId}/messages.jsonl` stores the conversation transcript in order.
 - `.agent-world/chats/{chatId}/summary.md` is reserved for a shorter recap of the chat.
 - `.agent-world/agents/{agentId}/agent.json` stores agent metadata.
+- `.agent-world/agents/{agentId}/runtime.json` stores agent-level runtime overrides.
 - `.agent-world/agents/{agentId}/state.json` stores changeable agent state, including remote-session details.
+- `.agent-world/agents/{agentId}/inbox.jsonl` and `memory.md` reserve agent-scoped inbox and memory state.
 - `.agent-world/agents/{agentId}/events.jsonl` stores streaming event logs.
 - `.agent-world/remote-host.lock.json` prevents two remote hosts from trying to control the same project at once.
 
 ## Source Of Truth
 
-`world.json` is the main pointer file for the current chat and the default agent. The repo no longer relies on the older current-chat pointer layout as the main state record.
+`world.json` is the main pointer file for the current chat and the default agent. `--agent-id` and `--new-agent` update `defaultAgentId` through [[named-agent-selection]]. The repo no longer relies on the older current-chat pointer layout as the main state record.
 
 ## What Stays Out Of Git
 
