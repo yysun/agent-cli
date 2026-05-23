@@ -28,7 +28,7 @@ import {
   writeSkill,
   writeSystemPrompt,
 } from '../helpers/test-root.js';
-import { validateRuntimeEnvironment } from '../../core/runtime-client.js';
+import { validateRuntimeEnvironment } from '../../core/agent-runtime.js';
 
 const RUNTIME_ENVIRONMENT_KEYS = [
   'OPENAI_API_KEY',

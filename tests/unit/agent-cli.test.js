@@ -118,8 +118,8 @@ async function loadCliModule(rootPath, moduleOverrides = {}) {
   vi.resetModules();
 
   if (moduleOverrides.runtimeClient) {
-    vi.doMock('../../core/runtime-client.js', async () => {
-      const actual = /** @type {Record<string, unknown>} */ (await vi.importActual('../../core/runtime-client.js'));
+    vi.doMock('../../core/agent-runtime.js', async () => {
+      const actual = /** @type {Record<string, unknown>} */ (await vi.importActual('../../core/agent-runtime.js'));
       const overrides = typeof moduleOverrides.runtimeClient === 'function'
         ? moduleOverrides.runtimeClient(actual)
         : moduleOverrides.runtimeClient;
@@ -130,7 +130,7 @@ async function loadCliModule(rootPath, moduleOverrides = {}) {
       };
     });
   } else {
-    vi.doUnmock('../../core/runtime-client.js');
+    vi.doUnmock('../../core/agent-runtime.js');
   }
 
   if (moduleOverrides.remoteControl) {
@@ -155,7 +155,7 @@ async function loadCliModule(rootPath, moduleOverrides = {}) {
 afterEach(async () => {
   process.chdir(originalCwd);
   restoreCliEnvironment(originalCliEnvironment);
-  vi.doUnmock('../../core/runtime-client.js');
+  vi.doUnmock('../../core/agent-runtime.js');
   vi.doUnmock('../../core/remote-control.js');
 
   while (rootsToClean.length > 0) {

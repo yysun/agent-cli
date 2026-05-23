@@ -23,7 +23,7 @@ import {
   loadWorkspaceSystemPrompt,
 } from './agent-files.js';
 import { configureWorkspaceRoot } from './paths.js';
-import { runChatTurn } from './runtime-client.js';
+import { runChatTurn } from './agent-runtime.js';
 import {
   addQueuedMessage,
   appendAgentMemory,

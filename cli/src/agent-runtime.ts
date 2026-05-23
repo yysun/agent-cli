@@ -20,7 +20,7 @@ import {
   persistCompletedChat,
   persistStreamTraceEvents,
 } from '../../core/world-store.js';
-import { runChatTurn } from '../../core/runtime-client.js';
+import { runChatTurn } from '../../core/agent-runtime.js';
 import {
   collectHumanInputAnswer,
   type HumanInputPrompt,

@@ -489,7 +489,7 @@ function buildSkillInventoryMessage(skills) {
   ].join("\n");
 }
 
-// core/runtime-client.ts
+// core/agent-runtime.ts
 import {
   createRuntime,
   executeToolCall as executeRuntimeToolCall,

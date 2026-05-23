@@ -58,8 +58,8 @@ async function waitFor(predicate, timeoutMs = 1000) {
 async function loadRuntime(rootPath, runChatTurn) {
   process.chdir(rootPath);
   vi.resetModules();
-  vi.doMock('../../core/runtime-client.js', async () => {
-    const actual = await vi.importActual('../../core/runtime-client.js');
+  vi.doMock('../../core/agent-runtime.js', async () => {
+    const actual = await vi.importActual('../../core/agent-runtime.js');
     return {
       ...actual,
       runChatTurn,
@@ -70,7 +70,7 @@ async function loadRuntime(rootPath, runChatTurn) {
 
 afterEach(async () => {
   process.chdir(originalCwd);
-  vi.doUnmock('../../core/runtime-client.js');
+  vi.doUnmock('../../core/agent-runtime.js');
 
   while (rootsToClean.length > 0) {
     await removeTestRoot(rootsToClean.pop());

@@ -6,6 +6,7 @@ var __export = (target, all) => {
 };
 
 // cli/src/agent-cli.ts
+import path5 from "node:path";
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 
 // core/paths.ts
-import path2 from "node:path";
+import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
 function resolveWorkspaceRoot(workspaceRoot) {
@@ -23,7 +24,7 @@ function resolveWorkspaceRoot(workspaceRoot) {
     process.env[WORKSPACE_ROOT_ENV_KEY],
     process.env[LEGACY_PROJECT_ROOT_ENV_KEY]
   ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
-  return configuredRoot ? path2.resolve(configuredRoot) : process.cwd();
+  return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
 }
 var WORKSPACE_ROOT = "";
 var REPO_ROOT = "";
@@ -39,53 +40,53 @@ var REMOTE_HOST_LOCK_PATH = "";
 function configureWorkspaceRoot(workspaceRoot) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
   REPO_ROOT = WORKSPACE_ROOT;
-  SYSTEM_PROMPT_PATH = path2.join(WORKSPACE_ROOT, "AGENTS.md");
-  ROOT_RUNTIME_CONFIG_PATH = path2.join(WORKSPACE_ROOT, "runtime.json");
-  AGENT_WORLD_ROOT = path2.join(WORKSPACE_ROOT, ".agent-world");
-  SKILLS_ROOT = path2.join(AGENT_WORLD_ROOT, "skills");
-  WORLD_STATE_PATH = path2.join(AGENT_WORLD_ROOT, "world.json");
-  AGENT_WORLD_CHATS_ROOT = path2.join(AGENT_WORLD_ROOT, "chats");
-  AGENT_WORLD_AGENTS_ROOT = path2.join(AGENT_WORLD_ROOT, "agents");
-  AGENT_WORLD_QUEUES_ROOT = path2.join(AGENT_WORLD_ROOT, "queues");
-  REMOTE_HOST_LOCK_PATH = path2.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+  SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
+  ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, "runtime.json");
+  AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
+  SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
+  WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
+  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
+  AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
+  AGENT_WORLD_QUEUES_ROOT = path.join(AGENT_WORLD_ROOT, "queues");
+  REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
   return WORKSPACE_ROOT;
 }
 configureWorkspaceRoot();
 function buildWorldChatDirectoryPath(chatId) {
-  return path2.join(AGENT_WORLD_CHATS_ROOT, chatId);
+  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
 function buildWorldChatMetadataPath(chatId) {
-  return path2.join(buildWorldChatDirectoryPath(chatId), "chat.json");
+  return path.join(buildWorldChatDirectoryPath(chatId), "chat.json");
 }
 function buildWorldChatMessagesPath(chatId) {
-  return path2.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
+  return path.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
 }
 function buildWorldChatSummaryPath(chatId) {
-  return path2.join(buildWorldChatDirectoryPath(chatId), "summary.md");
+  return path.join(buildWorldChatDirectoryPath(chatId), "summary.md");
 }
 function buildAgentDirectoryPath(agentId) {
-  return path2.join(AGENT_WORLD_AGENTS_ROOT, agentId);
+  return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
 }
 function buildAgentMetadataPath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "agent.json");
+  return path.join(buildAgentDirectoryPath(agentId), "agent.json");
 }
 function buildAgentInboxPath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "inbox.jsonl");
+  return path.join(buildAgentDirectoryPath(agentId), "inbox.jsonl");
 }
 function buildAgentStatePath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "state.json");
+  return path.join(buildAgentDirectoryPath(agentId), "state.json");
 }
 function buildAgentEventsPath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "events.jsonl");
+  return path.join(buildAgentDirectoryPath(agentId), "events.jsonl");
 }
 function buildAgentMemoryPath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "memory.md");
+  return path.join(buildAgentDirectoryPath(agentId), "memory.md");
 }
 function buildAgentMemoryLogPath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
+  return path.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
 }
 function buildAgentRuntimeConfigPath(agentId) {
-  return path2.join(buildAgentDirectoryPath(agentId), "runtime.json");
+  return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
 }
 
 // core/agent-config.ts
@@ -347,7 +348,7 @@ async function loadPersistedRuntimeConfig(options = {}) {
 
 // core/agent-files.ts
 import { promises as fs2 } from "node:fs";
-import path3 from "node:path";
+import path2 from "node:path";
 var DEFAULT_SYSTEM_PROMPT = [
   "You are Agent CLI.",
   "Be concise, factual, and action-oriented.",
@@ -423,7 +424,7 @@ async function collectSkillFilePaths(rootPath) {
     const entries = await fs2.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const entryPath = path3.join(currentPath, entry.name);
+      const entryPath = path2.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         queue.push(entryPath);
         continue;
@@ -489,7 +490,7 @@ function buildSkillInventoryMessage(skills) {
 }
 
 // core/workspace-environment.ts
-import path4 from "node:path";
+import path3 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
@@ -513,7 +514,7 @@ function loadAllowedDotEnvEnvironment() {
   loadedDotEnvRoots.add(WORKSPACE_ROOT);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(WORKSPACE_ROOT, ".env"),
+    path: path3.join(WORKSPACE_ROOT, ".env"),
     quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -532,7 +533,7 @@ function readWorkspaceRootDotEnvFallback() {
   }
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(process.cwd(), ".env"),
+    path: path3.join(process.cwd(), ".env"),
     quiet: true
   }).parsed ?? {};
   const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
@@ -548,10 +549,10 @@ function prepareWorkspaceEnvironment(workspaceRoot) {
 // core/world-store.ts
 import { randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
-import path5 from "node:path";
+import path4 from "node:path";
 var DEFAULT_AGENT_ID = "default";
 function defaultWorldName() {
-  return path5.basename(WORKSPACE_ROOT) || "agent-world";
+  return path4.basename(WORKSPACE_ROOT) || "agent-world";
 }
 function normalizeAgentId2(agentId) {
   const normalizedAgentId = String(agentId ?? "").trim();
@@ -617,18 +618,18 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
   };
 }
 async function writeJsonAtomic(filePath, value) {
-  const directoryPath = path5.dirname(filePath);
-  const fileName = path5.basename(filePath);
-  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const directoryPath = path4.dirname(filePath);
+  const fileName = path4.basename(filePath);
+  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs3.mkdir(directoryPath, { recursive: true });
   await fs3.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
   await fs3.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
-  const directoryPath = path5.dirname(filePath);
-  const fileName = path5.basename(filePath);
-  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const directoryPath = path4.dirname(filePath);
+  const fileName = path4.basename(filePath);
+  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs3.mkdir(directoryPath, { recursive: true });
   await fs3.writeFile(temporaryPath, text, "utf8");
   await fs3.rename(temporaryPath, filePath);
@@ -642,7 +643,7 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs3.mkdir(path5.dirname(filePath), { recursive: true });
+  await fs3.mkdir(path4.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
   await fs3.appendFile(filePath, serialized, "utf8");
@@ -702,7 +703,7 @@ async function readJsonl(filePath) {
   }
 }
 async function ensureRemoteHostLockDirectory() {
-  await fs3.mkdir(path5.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
+  await fs3.mkdir(path4.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
 }
 async function ensureAgentWorldDirectories() {
   await Promise.all([
@@ -1815,7 +1816,7 @@ async function runRemoteControlSession(params) {
   return relaySession;
 }
 
-// core/runtime-client.ts
+// core/agent-runtime.ts
 import {
   createRuntime,
   executeToolCall as executeRuntimeToolCall,
@@ -3436,7 +3437,7 @@ function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url
   try {
     return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
   } catch {
-    return pathToFileURL(path.resolve(argvPath)).href === moduleUrl;
+    return pathToFileURL(path5.resolve(argvPath)).href === moduleUrl;
   }
 }
 function parseArguments(argv) {

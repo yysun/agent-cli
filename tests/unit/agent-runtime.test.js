@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Agent CLI Runtime Client Unit Tests
+ * Agent Runtime Unit Tests
  *
  * Purpose:
  * - Validate runtime provider resolution and chat execution plumbing.
@@ -13,7 +13,7 @@
  * Recent changes:
  * - 2026-05-16: Added coverage for runtime tool-result callbacks.
  * - 2026-05-23: Added coverage for CLI-handled tool-call results.
- * - 2026-05-16: Migrated runtime-client coverage to the `llm-runtime` 0.5.0 loop API.
+ * - 2026-05-16: Migrated agent-runtime coverage to the `llm-runtime` 0.5.0 loop API.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -74,11 +74,11 @@ afterEach(() => {
   restoreEnvironment();
 });
 
-describe('runtime-client', () => {
+describe('agent-runtime', () => {
   it('defaults to openai/gpt-5 when runtime config omits provider and model', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const { validateRuntimeEnvironment } = await import('../../core/agent-runtime.js');
     const runtime = validateRuntimeEnvironment(process.env, {});
 
     expect(runtime.provider).toBe('openai');
@@ -93,7 +93,7 @@ describe('runtime-client', () => {
   it('uses the provider and model from runtime config while still reading credentials from env', async () => {
     process.env.GOOGLE_API_KEY = 'test-google-key';
 
-    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const { validateRuntimeEnvironment } = await import('../../core/agent-runtime.js');
     const runtime = validateRuntimeEnvironment(process.env, {
       provider: 'google',
       model: 'gemini-2.5-pro',
@@ -113,7 +113,7 @@ describe('runtime-client', () => {
     process.env.AZURE_OPENAI_RESOURCE_NAME = 'example';
     process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'gpt-5-enterprise';
 
-    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const { validateRuntimeEnvironment } = await import('../../core/agent-runtime.js');
     const runtime = validateRuntimeEnvironment(process.env, {
       provider: 'azure',
     });
@@ -132,7 +132,7 @@ describe('runtime-client', () => {
   it('fails clearly when the selected provider is missing credentials', async () => {
     delete process.env.OPENAI_API_KEY;
 
-    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const { validateRuntimeEnvironment } = await import('../../core/agent-runtime.js');
 
     expect(() => validateRuntimeEnvironment(process.env, {
       provider: 'openai',
@@ -143,7 +143,7 @@ describe('runtime-client', () => {
   it('fails clearly when a provider has no configured model or built-in default', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
 
-    const { validateRuntimeEnvironment } = await import('../../core/runtime-client.js');
+    const { validateRuntimeEnvironment } = await import('../../core/agent-runtime.js');
 
     expect(() => validateRuntimeEnvironment(process.env, {
       provider: 'anthropic',
@@ -176,7 +176,7 @@ describe('runtime-client', () => {
       };
     });
 
-    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
     const onStreamChunk = vi.fn();
 
     const result = await runChatTurn({
@@ -308,7 +308,7 @@ describe('runtime-client', () => {
       };
     });
 
-    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
     const onToolCall = vi.fn();
     const onToolResult = vi.fn();
 
@@ -416,7 +416,7 @@ describe('runtime-client', () => {
       };
     });
 
-    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
     const approvalGate = {
       requestApproval: vi.fn().mockResolvedValue({ approved: false, reason: 'Nope' }),
     };
@@ -513,7 +513,7 @@ describe('runtime-client', () => {
       };
     });
 
-    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
     const handleToolCall = vi.fn().mockResolvedValue({
       handled: true,
       result: {
@@ -603,7 +603,7 @@ describe('runtime-client', () => {
       };
     });
 
-    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
 
     const result = await runChatTurn({
       chat: { id: 'chat-1', messages: [] },

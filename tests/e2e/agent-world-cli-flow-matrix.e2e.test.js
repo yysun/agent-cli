@@ -22,7 +22,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { validateRuntimeEnvironment } from '../../core/runtime-client.js';
+import { validateRuntimeEnvironment } from '../../core/agent-runtime.js';
 import { createTestRoot, removeTestRoot, writeSystemPrompt } from '../helpers/test-root.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');

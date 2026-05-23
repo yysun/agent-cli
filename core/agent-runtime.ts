@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Agent CLI LLM Runtime Client
+ * Agent Runtime
  *
  * Purpose:
  * - Bridge Agent CLI chat state into `llm-runtime` using its environment and turn-loop conventions.
