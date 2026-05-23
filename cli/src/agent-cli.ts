@@ -18,6 +18,7 @@
  * - 2026-05-20: Added --agent-id and --new-agent agent selection.
  * - 2026-05-20: Added startup root output and cwd .env fallback.
  */
+import path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
