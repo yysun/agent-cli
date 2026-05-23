@@ -276,6 +276,23 @@ describe('agent-world-cli', () => {
     expect(capture.getStderr()).toBe('');
   });
 
+  it('uses a plain interactive prompt rather than world or chat identifiers', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    const { runAgentWorldCli } = await loadAgentWorldCli(rootPath);
+    const capture = createIoCapture();
+    capture.io.stdin = Readable.from(['/new\n', '/exit\n']);
+
+    const exitCode = await runAgentWorldCli([], capture.io);
+    const chatId = /"chatId": "([^"]+)"/u.exec(capture.getStdout())?.[1] ?? '';
+
+    expect(exitCode).toBe(0);
+    expect(chatId).toBeTruthy();
+    expect(capture.getStdout()).toContain('> ');
+    expect(capture.getStdout()).not.toContain(`agent-world:${path.basename(rootPath)}> `);
+    expect(capture.getStdout()).not.toContain(`agent-world:${chatId}> `);
+  });
+
   it('streams assistant text and tool diagnostics during interactive sends', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -306,7 +323,7 @@ describe('agent-world-cli', () => {
     const exitCode = await runAgentWorldCli([], capture.io);
 
     expect(exitCode).toBe(0);
-    expect(capture.getStdout()).toContain('Hello world\n');
+    expect(capture.getStdout()).toContain(`● ${path.basename(rootPath)} agent: Hello world\n`);
     expect(capture.getStdout()).not.toContain('"assistantText": "Hello world"');
     expect(capture.getStderr()).toContain('  ↳ load_skill agent-cli-core');
     expect(capture.getStderr()).toContain('  ✓ load_skill loaded\n');

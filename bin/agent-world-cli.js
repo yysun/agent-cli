@@ -2186,7 +2186,7 @@ var AgentWorldRuntime = class {
       skillInventory,
       agentConfig,
       onStreamChunk: (chunk) => {
-        void params.onStreamChunk?.(chunk);
+        void params.onStreamChunk?.({ ...chunk, agentId: params.agentId });
         if (chunk.content) {
           this.emit({
             type: "assistant_chunk",
@@ -2198,7 +2198,7 @@ var AgentWorldRuntime = class {
         }
       },
       onToolCall: (toolCall) => {
-        void params.onToolCall?.(toolCall);
+        void params.onToolCall?.({ ...toolCall, agentId: params.agentId });
         this.emit({
           type: "tool_call",
           chatId: params.chatId,
@@ -2208,7 +2208,7 @@ var AgentWorldRuntime = class {
         });
       },
       onToolResult: (toolResult) => {
-        void params.onToolResult?.(toolResult);
+        void params.onToolResult?.({ ...toolResult, agentId: params.agentId });
         this.emit({
           type: "tool_result",
           chatId: params.chatId,
@@ -3660,13 +3660,39 @@ function requireValue(value, label) {
 }
 async function sendMessageWithInteractiveDisplay(runtime, input, io) {
   const pendingDisplay = createPendingDisplay(io.stdout);
+  const agents = await runtime.agents.list().catch(() => []);
+  const agentNames = new Map(
+    agents.map((agent) => [
+      String(agent.id ?? "").trim(),
+      String(agent.name ?? agent.id ?? "").trim()
+    ])
+  );
+  let activeSpeakerId = "";
+  const speakerName = (agentId) => {
+    const normalizedAgentId = String(agentId ?? "").trim();
+    return agentNames.get(normalizedAgentId) || normalizedAgentId || "agent";
+  };
+  const writeAgentText = (agentId, content) => {
+    if (!content) {
+      return;
+    }
+    const normalizedAgentId = String(agentId ?? "").trim();
+    if (activeSpeakerId !== normalizedAgentId) {
+      if (pendingDisplay.hasWrittenText()) {
+        io.stdout.write("\n");
+      }
+      pendingDisplay.writeText(`\u25CF ${speakerName(normalizedAgentId)}: `);
+      activeSpeakerId = normalizedAgentId;
+    }
+    pendingDisplay.writeText(content);
+  };
   pendingDisplay.start();
   try {
     const result = await runtime.messages.send({
       ...input,
       onStreamChunk: (chunk) => {
         if (chunk.content) {
-          pendingDisplay.writeText(chunk.content);
+          writeAgentText(chunk.agentId, chunk.content);
         }
       },
       onToolCall: (toolCall) => {
@@ -3682,7 +3708,7 @@ async function sendMessageWithInteractiveDisplay(runtime, input, io) {
       io.stdout.write("\n");
     } else if (result.assistantText) {
       pendingDisplay.clear();
-      io.stdout.write(`${result.assistantText}
+      io.stdout.write(`\u25CF ${speakerName(result.agentIds[0])}: ${result.assistantText}
 `);
     } else {
       pendingDisplay.clear();
@@ -3861,9 +3887,8 @@ function toInteractiveArgv(line) {
       return [command, ...rest];
   }
 }
-async function buildInteractivePrompt(runtime) {
-  const currentChat = await runtime.chats.current().catch(() => null);
-  return currentChat?.id ? `agent-world:${currentChat.id}> ` : "agent-world> ";
+async function buildInteractivePrompt(_runtime) {
+  return "> ";
 }
 async function executeInteractiveLine(line, runtime, io) {
   const argv = toInteractiveArgv(line);

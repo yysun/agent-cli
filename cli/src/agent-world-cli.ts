@@ -11,6 +11,8 @@
  * - Keeps queued sends provider-free by enqueueing without dispatching.
  *
  * Recent changes:
+ * - 2026-05-23: Prefixes streamed interactive agent replies with `● agent-name:`.
+ * - 2026-05-23: Uses a plain `> ` interactive prompt instead of chat/world identifiers.
  * - 2026-05-23: Aligned workspace flag aliases and `.env` preparation with `agent-cli`.
  * - 2026-05-23: Reused CLI stream and tool trace renderers for interactive sends.
  * - 2026-05-23: Imports the world runtime from core and keeps HITL prompt handling in this shell layer.
@@ -294,6 +296,36 @@ async function sendMessageWithInteractiveDisplay(
   io: AgentWorldCliIo,
 ): Promise<SendMessageResult> {
   const pendingDisplay = createPendingDisplay(io.stdout);
+  const agents = await runtime.agents.list().catch(() => []);
+  const agentNames = new Map(
+    agents.map((agent) => [
+      String(agent.id ?? '').trim(),
+      String(agent.name ?? agent.id ?? '').trim(),
+    ]),
+  );
+  let activeSpeakerId = '';
+
+  const speakerName = (agentId: string | undefined): string => {
+    const normalizedAgentId = String(agentId ?? '').trim();
+    return agentNames.get(normalizedAgentId) || normalizedAgentId || 'agent';
+  };
+
+  const writeAgentText = (agentId: string | undefined, content: string): void => {
+    if (!content) {
+      return;
+    }
+
+    const normalizedAgentId = String(agentId ?? '').trim();
+    if (activeSpeakerId !== normalizedAgentId) {
+      if (pendingDisplay.hasWrittenText()) {
+        io.stdout.write('\n');
+      }
+      pendingDisplay.writeText(`● ${speakerName(normalizedAgentId)}: `);
+      activeSpeakerId = normalizedAgentId;
+    }
+
+    pendingDisplay.writeText(content);
+  };
 
   pendingDisplay.start();
   try {
@@ -301,7 +333,7 @@ async function sendMessageWithInteractiveDisplay(
       ...input,
       onStreamChunk: (chunk) => {
         if (chunk.content) {
-          pendingDisplay.writeText(chunk.content);
+          writeAgentText(chunk.agentId, chunk.content);
         }
       },
       onToolCall: (toolCall) => {
@@ -317,7 +349,7 @@ async function sendMessageWithInteractiveDisplay(
       io.stdout.write('\n');
     } else if (result.assistantText) {
       pendingDisplay.clear();
-      io.stdout.write(`${result.assistantText}\n`);
+      io.stdout.write(`● ${speakerName(result.agentIds[0])}: ${result.assistantText}\n`);
     } else {
       pendingDisplay.clear();
     }
@@ -530,9 +562,8 @@ function toInteractiveArgv(line: string): string[] | null {
   }
 }
 
-async function buildInteractivePrompt(runtime: AgentWorldRuntime): Promise<string> {
-  const currentChat = await runtime.chats.current().catch(() => null);
-  return currentChat?.id ? `agent-world:${currentChat.id}> ` : 'agent-world> ';
+async function buildInteractivePrompt(_runtime: AgentWorldRuntime): Promise<string> {
+  return '> ';
 }
 
 async function executeInteractiveLine(

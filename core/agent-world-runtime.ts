@@ -10,6 +10,7 @@
  * - Persists per-agent memory and durable per-chat queue rows without replacing agent-runtime.
  *
  * Recent changes:
+ * - 2026-05-23: Included agent id in per-send stream/tool callbacks for CLI speaker labels.
  * - 2026-05-23: Added per-send stream/tool callbacks for terminal renderers without relying on global events.
  * - 2026-05-23: Moved from CLI source into core while keeping HITL UI in shell layers.
  * - 2026-05-23: Made queue API add enqueue-only so CLI queued sends do not auto-dispatch.
@@ -147,6 +148,7 @@ export interface SendMessageInput extends Record<string, unknown> {
   agentId?: string;
   queue?: boolean;
   onStreamChunk?: (chunk: {
+    agentId?: string;
     content?: string;
     reasoningContent?: string;
     reasoning?: string;
@@ -156,8 +158,9 @@ export interface SendMessageInput extends Record<string, unknown> {
     errors?: unknown[];
     error?: unknown;
   }) => void | Promise<void>;
-  onToolCall?: (toolCall: { id?: string; name: string; arguments?: string }) => void | Promise<void>;
+  onToolCall?: (toolCall: { agentId?: string; id?: string; name: string; arguments?: string }) => void | Promise<void>;
   onToolResult?: (toolResult: {
+    agentId?: string;
     id?: string;
     name: string;
     result: unknown;
@@ -952,7 +955,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
       skillInventory,
       agentConfig,
       onStreamChunk: (chunk) => {
-        void params.onStreamChunk?.(chunk);
+        void params.onStreamChunk?.({ ...chunk, agentId: params.agentId });
         if (chunk.content) {
           this.emit({
             type: 'assistant_chunk',
@@ -964,7 +967,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
         }
       },
       onToolCall: (toolCall) => {
-        void params.onToolCall?.(toolCall);
+        void params.onToolCall?.({ ...toolCall, agentId: params.agentId });
         this.emit({
           type: 'tool_call',
           chatId: params.chatId,
@@ -974,7 +977,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
         });
       },
       onToolResult: (toolResult) => {
-        void params.onToolResult?.(toolResult);
+        void params.onToolResult?.({ ...toolResult, agentId: params.agentId });
         this.emit({
           type: 'tool_result',
           chatId: params.chatId,
