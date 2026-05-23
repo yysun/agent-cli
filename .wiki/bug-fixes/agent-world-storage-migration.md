@@ -5,9 +5,9 @@ status: "active"
 language: "default"
 source_paths:
   - ".docs/done/2026/05/14/agent-world-storage.md"
-  - "core/session-store.ts"
+  - "core/world-store.ts"
   - "core/paths.ts"
-  - "tests/unit/session-store.test.js"
+  - "tests/unit/world-store.test.js"
   - "tests/e2e/agent-cli-remote.e2e.test.js"
 updated_at: "2026-05-16"
 ---
@@ -33,4 +33,4 @@ The previous layout mixed current selection state, chat data, and remote state i
 - runtime overrides can be split cleanly between repo-wide defaults and default-agent overrides
 - docs and build layout now match the real runtime paths
 
-This migration is the foundation behind [[storage-layout]] and the current [[lib-session-store-js]] behavior.
+This migration is the foundation behind [[storage-layout]] and the current [[world-store]] behavior.

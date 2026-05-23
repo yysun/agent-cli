@@ -28,7 +28,7 @@ The built-in prompt is intentionally stronger than a generic "be helpful" defaul
 
 ## Skill Discovery
 
-Skills are discovered recursively from `.agents/skills/**/SKILL.md`. The walk is deterministic: directories and files are both sorted so tests and runtime behavior stay stable.
+Skills are discovered recursively from `.agent-world/skills/**/SKILL.md`. The walk is deterministic: directories and files are both sorted so tests and runtime behavior stay stable.
 
 Only skills with usable frontmatter, the YAML block at the top of a Markdown file, are included in the inventory. The loader extracts the skill name and description, then passes them forward as `{ skillId, description, sourcePath }` records.
 
@@ -36,12 +36,12 @@ Only skills with usable frontmatter, the YAML block at the top of a Markdown fil
 
 The loader also builds a short skill inventory message that tells the model to call `load_skill` when one of the listed skills is relevant. That keeps skills explicit instead of silently injecting every skill body into every turn.
 
-The runtime layering that uses this inventory is described in [[lib-runtime-client-js]].
+The runtime layering that uses this inventory is described in [[model-runner-handoff]].
 
 ## Failure Behavior
 
 - missing `AGENTS.md` is treated as no project prompt
-- missing `.agents/skills` is treated as an empty skill inventory
+- missing `.agent-world/skills` is treated as an empty skill inventory
 - malformed skills without a usable `name` field are skipped rather than crashing the whole run
 
 That makes skill authoring forgiving while keeping the turn behavior predictable.

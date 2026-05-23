@@ -23,7 +23,7 @@ This module takes setting input from files and flags and turns it into one clean
 - selected-agent overrides from `.agent-world/agents/{agentId}/runtime.json`
 - runtime overrides coming from CLI flags
 
-The merged result is the final setting set used by [[bin-agent-cli-js]] and [[lib-runtime-client-js]].
+The merged result is the final setting set used by [[cli-entry-and-host-modes]] and [[model-runner-handoff]].
 
 ## What It Normalizes
 
@@ -42,7 +42,7 @@ It also accepts a few older or shorter names such as `modal`, `tokens`, `permiss
 
 It does not load provider secrets. Credentials still come from `.env` or the process environment, which keeps behavior settings separate from secret values. [[configuration-and-runtime-precedence]] covers that split.
 
-It also does not decide which agent is active. The shell and session store do that first; this module only loads and normalizes the config for the chosen agent. See [[named-agent-selection]].
+It also does not decide which agent is active. The shell and [[world-store]] do that first; this module only loads and normalizes the config for the chosen agent. See [[named-agent-selection]].
 
 ## Validation Style
 

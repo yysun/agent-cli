@@ -4,10 +4,10 @@ type: "flow"
 status: "active"
 language: "default"
 source_paths:
-  - "cli/src/cli-shell.ts"
+  - "cli/src/agent-cli.ts"
   - "core/remote-control.ts"
   - "core/relay-client.ts"
-  - "core/session-store.ts"
+  - "core/world-store.ts"
   - "server/src/relay-server.ts"
   - "tests/e2e/agent-cli-remote.e2e.test.js"
   - ".docs/done/2026/05/11/remote-control-relay.md"
@@ -19,8 +19,8 @@ updated_at: "2026-05-16"
 
 This is the path for `agent-cli --remote`. In plain terms, it shows how a local terminal session becomes a browser-guided session without moving the real work off the machine.
 
-1. The CLI picks the project folder, loads the allowed `.env` keys, and requires `AGENT_CLI_RELAY_SERVER_URL` so it knows which relay server to use.
-2. It checks `.agent-world/remote-host.lock.json` so two remote hosts do not try to control the same project at once.
+1. The CLI picks the workspace folder, loads the allowed `.env` keys, and requires `AGENT_CLI_RELAY_SERVER_URL` so it knows which relay server to use.
+2. It checks `.agent-world/remote-host.lock.json` so two remote hosts do not try to control the same workspace at once.
 3. It creates or loads the active chat, then opens a relay session through the relay client.
 4. It saves the remote-session details locally and prints a client connection URL for pairing.
 5. A browser pairs with the relay using the one-time token and starts reading shared events over SSE, a live event stream from server to browser.

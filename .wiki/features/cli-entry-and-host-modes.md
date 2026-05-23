@@ -7,7 +7,7 @@ source_paths:
   - "package.json"
   - "bin/agent-cli.js"
   - "cli/src/index.ts"
-  - "cli/src/cli-shell.ts"
+  - "cli/src/agent-cli.ts"
   - "cli/src/agent-runtime.ts"
   - "cli/src/human-input-ui.ts"
   - "cli/src/pending-display.ts"
@@ -22,16 +22,16 @@ updated_at: "2026-05-23"
 
 # CLI Entry And Host Modes
 
-This is the main front door of the app. `bin/agent-cli.js` is the built file that users run, while `cli/src/index.ts` and `cli/src/cli-shell.ts` hold the source code that decides what the CLI should do.
+This is the main front door of the app. `bin/agent-cli.js` is the built file that users run, while `cli/src/index.ts` and `cli/src/agent-cli.ts` hold the source code that decides what the CLI should do.
 
 ## Main Responsibilities
 
 - read user flags such as `--new-chat`, `--verbose`, `--stream-off`, `--agent-id`, `--new-agent`, and setting overrides
-- load the allowed `.env` keys from the chosen project folder
+- load the allowed `.env` keys from the chosen workspace folder
 - select or initialize the active named agent before runtime config is resolved
 - figure out the final settings before starting a turn
 - choose between a normal single chat run, [[auto-interactive-mode]], and the long-running `--remote` host mode
-- save chat and remote-session state through [[lib-session-store-js]]
+- save chat and remote-session state through [[world-store]]
 
 ## Local Chat Mode
 
@@ -45,9 +45,9 @@ If there is no message and the command is not `--remote`, the same setup path op
 
 ## Remote Host Mode
 
-With `--remote`, the CLI becomes a long-running local host. It requires `AGENT_CLI_RELAY_SERVER_URL`, takes the project-level remote lock, creates or loads the active chat, opens a relay session, and keeps serving browser commands until shutdown.
+With `--remote`, the CLI becomes a long-running local host. It requires `AGENT_CLI_RELAY_SERVER_URL`, takes the workspace-level remote lock, creates or loads the active chat, opens a relay session, and keeps serving browser commands until shutdown.
 
-That mode is described in [[remote-session-lifecycle]] and relies on [[server-src-relay-server-ts]] for the transport side.
+That mode is described in [[remote-session-lifecycle]] and relies on [[relay-server-and-session-transport]] for the transport side.
 
 ## Output Rules
 
@@ -58,6 +58,6 @@ That mode is described in [[remote-session-lifecycle]] and relies on [[server-sr
 
 Those output rules are designed so other programs can safely read stdout, while humans can still inspect live details on stderr.
 
-Verbose tool display now goes through [[cli-src-tool-trace-renderer-ts]]. The important boundary is unchanged: stdout remains parseable assistant text, and stderr gets bounded human-readable rows for tool calls and results.
+Verbose tool display now goes through [[cli-tool-trace-renderer]]. The important boundary is unchanged: stdout remains parseable assistant text, and stderr gets bounded human-readable rows for tool calls and results.
 
 Human-input tool calls are a special CLI-owned case. [[cli-input-ui]] handles those prompts locally and returns structured tool results back into the same turn loop.

@@ -9,8 +9,10 @@ source_paths:
   - "tests/unit/agent-config.test.js"
   - "tests/unit/agent-files.test.js"
   - "tests/unit/paths.test.js"
-  - "tests/unit/runtime-client.test.js"
-  - "tests/unit/session-store.test.js"
+  - "tests/unit/agent-runtime.test.js"
+  - "tests/unit/world-store.test.js"
+  - "tests/unit/agent-world-cli.test.js"
+  - "tests/unit/agent-world-runtime.test.js"
   - "tests/unit/relay-server.test.js"
   - "tests/unit/remote-control.test.js"
   - "tests/e2e/agent-cli-remote.e2e.test.js"
@@ -40,12 +42,12 @@ That means the default repo validation already covers the long-running remote ho
 ## Unit Test Focus
 
 - `agent-cli.test.js` checks CLI parsing, startup behavior, `.env` loading, no-message interactive mode, named-agent prompt wiring, TTY pending display, local input collection, and user-facing output.
-- `agent-cli.test.js` also checks that streaming diagnostics stay off stderr unless `--verbose` is enabled, then render structured tool-call and tool-result rows through [[cli-src-tool-trace-renderer-ts]].
+- `agent-cli.test.js` also checks that streaming diagnostics stay off stderr unless `--verbose` is enabled, then render structured tool-call and tool-result rows through [[cli-tool-trace-renderer]].
 - `paths.test.js` checks `AGENT_CLI_ROOT` versus `cwd` resolution.
 - `agent-config.test.js` checks runtime normalization and precedence rules, including provider/model fallback from selected-agent metadata.
-- `agent-files.test.js` checks `AGENTS.md`, skill inventory loading, and the stronger built-in prompt guidance covered in [[lib-agent-files-js]].
-- `runtime-client.test.js` checks provider validation, the `llm-runtime` 0.5 completion-loop handoff, approval rejection behavior, runtime-backed tool-executor fallback, CLI-owned tool handler persistence, and tool-result callbacks.
-- `session-store.test.js` checks `.agent-world` bootstrap, durable file behavior, and named-agent initialization.
+- `agent-files.test.js` checks `AGENTS.md`, skill inventory loading, and the stronger built-in prompt guidance covered in [[prompt-and-skill-loading]].
+- `agent-runtime.test.js` checks provider validation, the `llm-runtime` 0.5 completion-loop handoff, approval rejection behavior, runtime-backed tool-executor fallback, CLI-owned tool handler persistence, and tool-result callbacks.
+- `world-store.test.js` checks `.agent-world` bootstrap, durable file behavior, queue rows, and named-agent initialization.
 - `relay-server.test.js` and `remote-control.test.js` check the transport and host-side remote protocol.
 
 ## End-To-End Coverage

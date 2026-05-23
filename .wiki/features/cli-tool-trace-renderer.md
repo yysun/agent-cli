@@ -6,7 +6,7 @@ language: "default"
 source_paths:
   - "cli/src/tool-trace-renderer.ts"
   - "cli/src/agent-runtime.ts"
-  - "core/runtime-client.ts"
+  - "core/agent-runtime.ts"
   - "tests/unit/agent-cli.test.js"
   - ".docs/done/2026/05/16/port-trace-renderer.md"
 updated_at: "2026-05-20"
@@ -14,7 +14,7 @@ updated_at: "2026-05-20"
 
 # CLI Tool Trace Renderer
 
-This file keeps verbose streaming output useful when tools run. The old path exposed tool activity too bluntly: either too little context to understand what happened, or raw payloads that were noisy in a terminal. The new renderer gives compact status rows while preserving the stdout/stderr contract described in [[bin-agent-cli-js]].
+This file keeps verbose streaming output useful when tools run. The old path exposed tool activity too bluntly: either too little context to understand what happened, or raw payloads that were noisy in a terminal. The new renderer gives compact status rows while preserving the stdout/stderr contract described in [[cli-entry-and-host-modes]].
 
 ## What It Renders
 
@@ -36,4 +36,4 @@ Agent CLI currently routes normal `--verbose` streaming diagnostics through the 
 
 `cli/src/agent-runtime.ts` calls the renderer only for verbose stderr output. Stream trace persistence still records simple event text in `.agent-world/agents/{agentId}/events.jsonl`, so display formatting and saved trace shape do not drift together.
 
-The renderer depends on [[lib-runtime-client-js]] forwarding tool results with duration and original arguments. That context lets it say what actually happened without parsing persisted chat messages after the fact.
+The renderer depends on [[model-runner-handoff]] forwarding tool results with duration and original arguments. That context lets it say what actually happened without parsing persisted chat messages after the fact.

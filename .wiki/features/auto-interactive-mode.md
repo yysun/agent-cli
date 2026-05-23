@@ -5,7 +5,7 @@ status: "active"
 language: "default"
 source_paths:
   - "README.md"
-  - "cli/src/cli-shell.ts"
+  - "cli/src/agent-cli.ts"
   - "tests/unit/agent-cli.test.js"
   - ".docs/reqs/2026/05/20/req-auto-interactive-mode.md"
   - ".docs/done/2026/05/20/auto-interactive-mode.md"
@@ -40,12 +40,12 @@ Unknown slash commands are reported on stderr. A failed model turn is also repor
 
 ## Implementation Shape
 
-`cli/src/cli-shell.ts` keeps argument parsing and mode selection in one place. After project root setup, agent selection, runtime resolution, prompt loading, skill discovery, and chat loading, the shell creates a normal turn executor. If there is no message and the CLI is not in remote mode, it calls `runInteractiveSession(...)`.
+`cli/src/agent-cli.ts` keeps argument parsing and mode selection in one place. After workspace root setup, agent selection, runtime resolution, prompt loading, skill discovery, and chat loading, the shell creates a normal turn executor. If there is no message and the CLI is not in remote mode, it calls `runInteractiveSession(...)`.
 
-That is the key design choice: interactive turns reuse the same executor as one-shot turns. Runtime flags such as `--project`, `--provider`, `--model`, `--verbose`, `--stream-off`, and `--past-messages` still apply because they are resolved before entering the prompt loop.
+That is the key design choice: interactive turns reuse the same executor as one-shot turns. Runtime flags such as `--workspace`, legacy `--project`, `--provider`, `--model`, `--verbose`, `--stream-off`, and `--past-messages` still apply because they are resolved before entering the prompt loop.
 
 ## Persistence
 
-The prompt starts from the same persisted chat selection described in [[chat-turn-lifecycle]] and [[storage-layout]]. Commands that create or select chats delegate to [[lib-session-store-js]], so interactive mode does not introduce a second chat model.
+The prompt starts from the same persisted chat selection described in [[chat-turn-lifecycle]] and [[storage-layout]]. Commands that create or select chats delegate to [[world-store]], so interactive mode does not introduce a second chat model.
 
 This matters because the feature changes the default CLI experience without changing the storage contract.

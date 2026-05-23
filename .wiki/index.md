@@ -3,44 +3,60 @@ title: "Project Wiki"
 type: "index"
 status: "active"
 language: "default"
-last_commit: "c499c2e4ccb9df8cef187ba625f5ff165e02cf93"
+last_commit: "aa4bf954d718883fe223706f49535528bf17ea05"
 updated_at: "2026-05-23"
 ---
 
 # Agent CLI Wiki
 
-Agent CLI is a command-line chat tool that runs on your machine. It can also open an optional browser companion through a small relay server, while still keeping files, tools, and saved history local in `.agent-world/`.
+## What is this?
 
-## Start Here
+Agent CLI is a local-first command-line chat workspace. The main `agent-cli` binary runs model turns against the current workspace, saves chats and agent state under `.agent-world/`, and can optionally expose the live local session to a browser through a relay server.
 
-- [[storage-layout]] explains where the app keeps chats, agent state, and the remote lock.
-- [[configuration-and-runtime-precedence]] explains which settings win and what `.env` is still allowed to do.
-- [[chat-turn-lifecycle]] walks through a normal local prompt from command line to saved reply.
-- [[auto-interactive-mode]] explains why no-message CLI runs now open a terminal prompt instead of failing.
-- [[cli-input-ui]] explains the TTY pending animation and terminal-native `ask_user_input` flow.
-- [[named-agent-selection]] explains how `--agent-id` and `--new-agent` select per-agent runtime state.
-- [[remote-session-lifecycle]] shows how `agent-cli --remote` pairs a local host with browser clients.
-- [[local-first-remote-supervision]] explains what remote mode can and cannot move off the local machine.
+The newer `agent-world-cli` binary is the JSON-first control surface for the same saved world: inspect agents, chats, messages, queues, and send or queue work without inventing another storage layout. Start with [[cli-entry-and-host-modes]], [[agent-world-cli]], and [[world-store]].
 
-## Core Pages
+## Get started
 
-- [[bin-agent-cli-js]] covers the front door of the CLI, including one-shot, interactive, and remote host modes.
-- [[lib-agent-config-js]] covers how the app turns file settings and flags into one clean runtime config.
-- [[lib-agent-files-js]] covers the built-in prompt, `AGENTS.md`, and skill discovery.
-- [[lib-runtime-client-js]] covers the handoff into the shared model runner and tool context.
-- [[cli-src-tool-trace-renderer-ts]] covers compact verbose tool-call and tool-result rendering.
-- [[lib-session-store-js]] covers how `.agent-world` is created, how chats are saved, and how remote-host locking works.
-- [[server-src-relay-server-ts]] covers the small relay server that links the local host to browser clients.
-- [[web-src-app-tsx]] covers the browser UI for pairing, watching output, and sending chat commands.
+Run the main chat CLI with `npm run agent-cli -- --new-chat "Summarize this repo"`. Run `npm run agent-cli --` for the interactive terminal prompt. Use `npm run agent-world-cli -- world` when you want a machine-readable snapshot of the saved world.
 
-## Concepts And Flows
+You need provider credentials in the shell or in the workspace `.env`; `.env` is only for credentials and relay config. `AGENT_CLI_RELAY_SERVER_URL` is required only for `agent-cli --remote`. A successful local run prints assistant text on stdout and writes durable chat state under `.agent-world/chats/{chatId}`.
 
-- [[build-layout]] maps the editable source folders to the files users actually run.
-- [[testing-strategy]] summarizes the default validation path and the optional live-provider suite.
-- [[agent-world-storage-migration]] captures the recent move into `.agent-world` and the bugs it fixed.
+First read `README.md`, `package.json`, `cli/src/agent-cli.ts`, `cli/src/agent-world-cli.ts`, `core/world-store.ts`, and `core/agent-world-runtime.ts`. A safe first change is adding a focused unit test around argument parsing or world-store behavior. A tempting dangerous change is treating `.env` as a general runtime-config file; that breaks the explicit precedence contract in [[configuration-and-runtime-precedence]].
 
-## Coverage Notes
+## Why does it exist?
 
-This wiki was refreshed from tracked repository files at `HEAD`, including `README.md`, `package.json`, `AGENTS.md`, `runtime.json`, the active TypeScript sources, the relay and remote-host tests, `.gitignore`, and the recent planning and done docs under `.docs/`.
+The project is trying to make an AI work session feel like local software, not a remote black box. The old pressure was scattered runtime state and browser supervision that could become its own control plane. The current design keeps execution, tools, prompts, saved chats, agent memory, queues, and credentials local, while giving the browser only a supervised relay path. See [[local-first-remote-supervision]] and [[agent-world-runtime]].
 
-The current coverage is intentionally focused on the big moving parts: where settings come from, where data is saved, how named agents choose runtime config, how no-argument interactive mode works, how terminal input requests are handled, how the browser pairing works, how the `llm-runtime` loop is owned, how verbose traces stay readable, and how the project is verified. The pages lead with plain-English explanations first, then introduce the exact file or code term when it helps.
+## What happens when I run it?
+
+`agent-cli` resolves the workspace root, loads allowed `.env` keys, selects an agent, merges runtime config, loads prompts and skills, opens the current chat, then calls the shared model runner. A completed turn is persisted back to `.agent-world`. The full path is [[chat-turn-lifecycle]].
+
+`agent-cli --remote` does the same local setup, takes a remote-host lock, opens a relay session, and serves browser input until shutdown. The relay does transport; the local host still owns chat commands and storage. See [[remote-session-lifecycle]].
+
+`agent-world-cli` opens the same workspace and delegates world, agent, chat, message, queue, and send operations to `core/agent-world-runtime.ts`. Queue-only sends persist local rows without provider calls. See [[agent-world-cli]].
+
+## Where is data saved?
+
+The only supported durable app folder is `.agent-world/`. `world.json` tracks `defaultAgentId` and `currentChatId`; chats live in `.agent-world/chats/{chatId}`; agent metadata, runtime overrides, state, memory, inbox, and event logs live in `.agent-world/agents/{agentId}`; queues live in `.agent-world/queues/{chatId}.json`; the remote lock is `.agent-world/remote-host.lock.json`.
+
+`core/paths.ts` resolves those paths from the workspace root. Prefer `--workspace` and `AGENT_CLI_WORKSPACE`; `--project` and `AGENT_CLI_ROOT` remain compatibility aliases. Details are in [[storage-layout]] and [[workspace-root-resolution]].
+
+## What are the important moving parts?
+
+- [[cli-entry-and-host-modes]] covers the main `agent-cli` shell.
+- [[agent-world-cli]] covers the JSON-first world control CLI.
+- [[agent-world-runtime]] covers the workspace-local world API, routing, events, memory, and queues.
+- [[world-store]] covers durable `.agent-world` persistence.
+- [[configuration-and-runtime-precedence]] covers runtime files, agent overrides, flags, and `.env` limits.
+- [[prompt-and-skill-loading]] covers `AGENTS.md`, built-in instructions, and `.agent-world/skills`.
+- [[model-runner-handoff]] covers the core agent runtime and `llm-runtime` completion loop.
+- [[relay-server-and-session-transport]] and [[web-relay-ui]] cover the optional browser path.
+- [[testing-strategy]] covers the targeted checks that keep these contracts honest.
+
+## What should I avoid breaking?
+
+Do not reintroduce `.chats`, `.agents`, repo-root generated `core/*.js`, or `.env` runtime defaults. Do not move execution, tools, workspace files, provider keys, saved chats, agent memory, or queue state into the relay. Do not bypass `world.json` for current chat/default agent selection. Do not make `agent-world-cli send --queue` dispatch provider calls. The fragile contracts are summarized in [[storage-layout]], [[configuration-and-runtime-precedence]], [[local-first-remote-supervision]], and [[build-layout]].
+
+## Where do I look first?
+
+For a normal chat bug, read [[chat-turn-lifecycle]], then `cli/src/agent-cli.ts`, `cli/src/agent-runtime.ts`, `core/agent-runtime.ts`, and [[world-store]]. For world API or queue behavior, read [[agent-world-runtime]], [[agent-world-cli]], `core/agent-world-runtime.ts`, and `tests/unit/agent-world-runtime.test.js`. For root resolution or secrets loading, read [[workspace-root-resolution]], `core/workspace-environment.ts`, and `core/paths.ts`. For browser supervision, read [[remote-session-lifecycle]], `core/remote-control.ts`, and `server/src/relay-server.ts`.

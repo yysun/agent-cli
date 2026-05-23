@@ -1,6 +1,14 @@
 ---
 marp: true
 title: From Web App to AI Workspace
+type: "note"
+status: "active"
+language: "default"
+source_paths:
+  - "README.md"
+  - "web/src/App.tsx"
+  - "server/src/relay-server.ts"
+updated_at: "2026-05-23"
 paginate: true
 footer: 'Agent CLI - Web UI - Local runtime - Remote control'
 class: lead
@@ -204,7 +212,7 @@ Presenter Script:
 The workspace experience should feel continuous. A user can launch in the browser, keep the state local, and return later without losing the thread.
 Support:
 - Inference: The web UI is a companion surface, not the only surface.
-- Evidence gap: Exact UX behavior depends on the implemented relay and session store.
+- Evidence gap: Exact UX behavior depends on the implemented relay and world store.
 -->
 
 ---

@@ -5,12 +5,12 @@ status: "active"
 language: "default"
 source_paths:
   - "README.md"
-  - "cli/src/cli-shell.ts"
+  - "cli/src/agent-cli.ts"
   - "core/agent-config.ts"
-  - "core/session-store.ts"
+  - "core/world-store.ts"
   - "tests/unit/agent-cli.test.js"
   - "tests/unit/agent-config.test.js"
-  - "tests/unit/session-store.test.js"
+  - "tests/unit/world-store.test.js"
   - ".docs/reqs/2026/05/20/req-agent-id-config.md"
   - ".docs/done/2026/05/20/agent-id-config.md"
   - ".docs/tests/test-agent-id-config.md"
@@ -19,7 +19,7 @@ updated_at: "2026-05-23"
 
 # Named Agent Selection
 
-Agent CLI now lets a project carry multiple named agents under `.agent-world/agents/{agentId}`. The old practical model was "the default agent plus optional runtime overrides"; the new model lets the user select or create an agent explicitly and have that choice drive metadata, runtime provider/model defaults, chat persistence, stream traces, and remote state.
+Agent CLI now lets a workspace carry multiple named agents under `.agent-world/agents/{agentId}`. The old practical model was "the default agent plus optional runtime overrides"; the new model lets the user select or create an agent explicitly and have that choice drive metadata, runtime provider/model defaults, chat persistence, stream traces, and remote state.
 
 ## User Contract
 
@@ -39,11 +39,11 @@ Each selected agent can have:
 - `runtime.json` for agent-level runtime overrides.
 - `state.json`, `inbox.jsonl`, `events.jsonl`, and `memory.md` for agent-scoped state and traces.
 
-Credentials are not stored there. Provider keys still come from the environment or project `.env`, as described in [[configuration-and-runtime-precedence]].
+Credentials are not stored there. Provider keys still come from the environment or workspace `.env`, as described in [[configuration-and-runtime-precedence]].
 
 ## Creation Flow
 
-`cli/src/cli-shell.ts` parses `--agent-id` and `--new-agent`, then calls the selection path before runtime config is resolved. When an interactive prompt is available and required fields are missing, new-agent setup asks for name, provider, and model. Scripted runs can provide provider and model through normal runtime flags.
+`cli/src/agent-cli.ts` parses `--agent-id` and `--new-agent`, then calls the selection path before runtime config is resolved. When an interactive prompt is available and required fields are missing, new-agent setup asks for name, provider, and model. Scripted runs can provide provider and model through normal runtime flags.
 
 The selected agent id is printed in startup diagnostics, which makes accidental default-agent use visible when `startupDiagnostics` is enabled.
 
@@ -56,10 +56,10 @@ The effective runtime config now merges, from weakest to strongest:
 3. selected agent `runtime.json`
 4. CLI flags
 
-That middle `agent.json` layer is intentional. It means provider/model values entered during agent creation are still honored even before a richer `runtime.json` exists. [[lib-agent-config-js]] owns the file loading and normalization.
+That middle `agent.json` layer is intentional. It means provider/model values entered during agent creation are still honored even before a richer `runtime.json` exists. [[runtime-config-loading-and-normalization]] owns the file loading and normalization.
 
 ## Storage Boundary
 
-[[lib-session-store-js]] owns the bootstrap behavior. It creates world metadata, selected agent files, and chat state under the configured project root. [[storage-layout]] documents the resulting on-disk shape.
+[[world-store]] owns the bootstrap behavior. It creates world metadata, selected agent files, and chat state under the configured workspace root. [[storage-layout]] documents the resulting on-disk shape.
 
-The practical consequence is that named agents change which local agent state is active without moving the project, tools, credentials, or saved data off-machine.
+The practical consequence is that named agents change which local agent state is active without moving the workspace, tools, credentials, or saved data off-machine.

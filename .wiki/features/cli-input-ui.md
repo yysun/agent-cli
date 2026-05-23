@@ -7,9 +7,9 @@ source_paths:
   - "cli/src/agent-runtime.ts"
   - "cli/src/human-input-ui.ts"
   - "cli/src/pending-display.ts"
-  - "core/runtime-client.ts"
+  - "core/agent-runtime.ts"
   - "tests/unit/agent-cli.test.js"
-  - "tests/unit/runtime-client.test.js"
+  - "tests/unit/agent-runtime.test.js"
   - ".docs/reqs/2026/05/23/req-cli-input-ui.md"
   - ".docs/plans/2026/05/23/plan-cli-input-ui.md"
   - ".docs/done/2026/05/23/cli-input-ui.md"
@@ -41,7 +41,7 @@ The result is returned as a structured tool artifact with status such as `answer
 
 ## Runtime Boundary
 
-The terminal UI does not live in `core/runtime-client.ts`. Core runtime exposes a generic `handleToolCall` hook during the `llm-runtime` completion loop. `cli/src/agent-runtime.ts` uses that hook to intercept only the human-input tool family, collect terminal answers, and return a tool result. Normal tools still use the runtime executor path.
+The terminal UI does not live in `core/agent-runtime.ts`. Core runtime exposes a generic `handleToolCall` hook during the `llm-runtime` completion loop. `cli/src/agent-runtime.ts` uses that hook to intercept only the human-input tool family, collect terminal answers, and return a tool result. Normal tools still use the runtime executor path.
 
 That split is important. Core stays responsible for provider validation, message layering, tool-loop continuation, and persistence shape. The CLI layer owns stdout, stderr, TTY animation, and prompts.
 
@@ -49,4 +49,4 @@ That split is important. Core stays responsible for provider validation, message
 
 The collected answer becomes a normal tool message in the persisted chat. That means a completed input flow keeps the same message structure as other tool calls: original user message, assistant tool-call message, tool answer message, then final assistant response.
 
-This path is part of [[chat-turn-lifecycle]] and depends on the tool loop described in [[lib-runtime-client-js]].
+This path is part of [[chat-turn-lifecycle]] and depends on the tool loop described in [[model-runner-handoff]].

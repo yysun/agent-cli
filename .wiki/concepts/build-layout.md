@@ -10,7 +10,8 @@ source_paths:
   - "tsconfig.server.json"
   - "web/vite.config.ts"
   - ".docs/done/2026/05/14/codebase-structure-cleanup.md"
-updated_at: "2026-05-16"
+  - ".docs/done/2026/05/23/agent-world-cli-store-rename.md"
+updated_at: "2026-05-23"
 ---
 
 # Build Layout
@@ -27,12 +28,14 @@ This page answers a simple question: which files do developers edit, and which f
 ## Shipped Outputs
 
 - `bin/agent-cli.js` is the built command-line program people run.
+- `bin/agent-world-cli.js` is the built JSON-first world control program.
 - `bin/server.js` is the built relay server people run when they want browser pairing.
 - `bin/public` is the built browser app.
-- `core/*.js` are the generated JavaScript files produced from the shared TypeScript code in `core`.
+
+`core` now remains TypeScript source checked with `noEmit`. Generated JavaScript copies beside `core/*.ts` are intentionally ignored and removed from the committed source of truth.
 
 ## Why The Layout Matters
 
-The cleanup on 2026-05-14 removed duplicate JavaScript copies from the repo root and made these folders the clear home for the real code. That makes it much easier for a newcomer to tell the difference between files they should edit, files the build creates for them, and files users actually launch.
+The cleanup on 2026-05-14 removed duplicate JavaScript copies from the repo root. The May 23 build update carried that further by keeping `core` source-only and shipping runnable binaries under `bin/`. That makes it much easier for a newcomer to tell the difference between files they should edit, files the build creates for them, and files users actually launch.
 
-[[bin-agent-cli-js]], [[server-src-relay-server-ts]], and [[web-src-app-tsx]] describe the runtime behavior behind those outputs.
+[[cli-entry-and-host-modes]], [[agent-world-cli]], [[relay-server-and-session-transport]], and [[web-relay-ui]] describe the runtime behavior behind those outputs.

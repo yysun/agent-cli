@@ -37,4 +37,4 @@ It carries generic remote input and session events. Chat-specific decisions stay
 
 This design keeps browser supervision useful without turning the relay into a second brain or a second storage system. That reduces how much can go wrong and makes the privacy story easier to explain to a new reader.
 
-The browser-facing half of this model is described in [[web-src-app-tsx]], and the transport layer is described in [[server-src-relay-server-ts]].
+The browser-facing half of this model is described in [[web-relay-ui]], and the transport layer is described in [[relay-server-and-session-transport]].
