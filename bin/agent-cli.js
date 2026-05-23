@@ -12,10 +12,10 @@ import path4 from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { config as loadDotEnvConfig } from "dotenv";
 
-// core/agent-config.js
+// core/agent-config.ts
 import { promises as fs } from "node:fs";
 
-// core/paths.js
+// core/paths.ts
 import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
@@ -90,7 +90,7 @@ function buildAgentRuntimeConfigPath(agentId) {
   return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
 }
 
-// core/agent-config.js
+// core/agent-config.ts
 var REASONING_EFFORTS = /* @__PURE__ */ new Set(["default", "none", "low", "medium", "high"]);
 var TOOL_PERMISSIONS = /* @__PURE__ */ new Set(["auto", "ask", "read"]);
 var WEB_SEARCH_CONTEXT_SIZES = /* @__PURE__ */ new Set(["low", "medium", "high"]);
@@ -169,7 +169,9 @@ function normalizeEnum(value, label, allowedValues) {
   }
   const normalized = String(value).trim().toLowerCase();
   if (!allowedValues.has(normalized)) {
-    throw new Error(`Invalid agent config value for ${label}: expected one of ${[...allowedValues].join(", ")}.`);
+    throw new Error(
+      `Invalid agent config value for ${label}: expected one of ${[...allowedValues].join(", ")}.`
+    );
   }
   return normalized;
 }
@@ -210,7 +212,11 @@ function normalizeWebSearch(value) {
   if (enabled === false) {
     return false;
   }
-  const searchContextSize = normalizeEnum(readAliasedValue(value, ["searchContextSize", "contextSize", "size"]), "webSearch.searchContextSize", WEB_SEARCH_CONTEXT_SIZES);
+  const searchContextSize = normalizeEnum(
+    readAliasedValue(value, ["searchContextSize", "contextSize", "size"]),
+    "webSearch.searchContextSize",
+    WEB_SEARCH_CONTEXT_SIZES
+  );
   if (searchContextSize) {
     return { searchContextSize };
   }
@@ -237,18 +243,36 @@ function normalizeAgentConfig(source) {
     provider: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.provider), "provider"),
     model: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.model), "model"),
     temperature: normalizeNumber(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.temperature), "temperature"),
-    maxTokens: normalizePositiveInteger(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens), "maxTokens"),
-    toolPermission: normalizeToolPermission(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission)),
-    reasoningEffort: normalizeReasoningEffort(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.reasoningEffort)),
-    pastMessages: normalizeNonNegativeInteger(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.pastMessages), "pastMessages"),
-    stream: normalizeBoolean(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.stream), "stream"),
-    streamTrace: normalizeBoolean(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.streamTrace), "streamTrace")
+    maxTokens: normalizePositiveInteger(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens),
+      "maxTokens"
+    ),
+    toolPermission: normalizeToolPermission(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission)
+    ),
+    reasoningEffort: normalizeReasoningEffort(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.reasoningEffort)
+    ),
+    pastMessages: normalizeNonNegativeInteger(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.pastMessages),
+      "pastMessages"
+    ),
+    stream: normalizeBoolean(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.stream),
+      "stream"
+    ),
+    streamTrace: normalizeBoolean(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.streamTrace),
+      "streamTrace"
+    )
   };
   const webSearch = normalizeWebSearch(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.webSearch));
   if (webSearch !== void 0) {
     normalizedConfig.webSearch = webSearch;
   }
-  return Object.fromEntries(Object.entries(normalizedConfig).filter(([, value]) => value !== void 0));
+  return Object.fromEntries(
+    Object.entries(normalizedConfig).filter(([, value]) => value !== void 0)
+  );
 }
 async function readJsonFileIfPresent(filePath, label) {
   let content;
@@ -312,7 +336,9 @@ async function loadPersistedRuntimeConfig(options = {}) {
   if (!defaultAgentId) {
     return rootRuntimeConfig;
   }
-  const agentMetadataConfig = normalizeAgentConfig(await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {});
+  const agentMetadataConfig = normalizeAgentConfig(
+    await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {}
+  );
   const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
   return {
     ...rootRuntimeConfig,
@@ -321,7 +347,7 @@ async function loadPersistedRuntimeConfig(options = {}) {
   };
 }
 
-// core/agent-files.js
+// core/agent-files.ts
 import { promises as fs2 } from "node:fs";
 import path2 from "node:path";
 var DEFAULT_SYSTEM_PROMPT = [
@@ -464,7 +490,7 @@ function buildSkillInventoryMessage(skills) {
   ].join("\n");
 }
 
-// core/world-store.js
+// core/world-store.ts
 import { randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import path3 from "node:path";
@@ -639,7 +665,9 @@ function isProcessRunning(pid) {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return Boolean(error && typeof error === "object" && "code" in error && error.code === "EPERM");
+    return Boolean(
+      error && typeof error === "object" && "code" in error && error.code === "EPERM"
+    );
   }
 }
 function isActiveRemoteHostLock(remoteLock) {
@@ -649,13 +677,19 @@ function isActiveRemoteHostLock(remoteLock) {
   return isProcessRunning(Number(remoteLock.pid));
 }
 function buildRemoteHostConflictError(remoteLock) {
-  const chatId = String(remoteLock && typeof remoteLock === "object" && "chatId" in remoteLock ? remoteLock.chatId ?? "" : "").trim();
-  const pid = Number(remoteLock && typeof remoteLock === "object" && "pid" in remoteLock ? remoteLock.pid : NaN);
+  const chatId = String(
+    remoteLock && typeof remoteLock === "object" && "chatId" in remoteLock ? remoteLock.chatId ?? "" : ""
+  ).trim();
+  const pid = Number(
+    remoteLock && typeof remoteLock === "object" && "pid" in remoteLock ? remoteLock.pid : NaN
+  );
   const details = [
     chatId ? `chat ${chatId}` : null,
     Number.isInteger(pid) && pid > 0 ? `pid ${pid}` : null
   ].filter(Boolean).join(", ");
-  return new Error(details ? `Remote mode already active for this workspace root (${details}).` : "Remote mode already active for this workspace root.");
+  return new Error(
+    details ? `Remote mode already active for this workspace root (${details}).` : "Remote mode already active for this workspace root."
+  );
 }
 async function readRemoteHostLock() {
   try {
@@ -812,7 +846,11 @@ async function ensureAgentSelection(options = {}) {
   return await loadAgentMetadata(agentId);
 }
 async function loadWorldChatMetadata(chatId) {
-  return await readJson(buildWorldChatMetadataPath(chatId), `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`, `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`);
+  return await readJson(
+    buildWorldChatMetadataPath(chatId),
+    `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`,
+    `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`
+  );
 }
 async function loadWorldChatById(chatId) {
   const normalizedChatId = String(chatId ?? "").trim();
@@ -850,8 +888,12 @@ async function acquireRemoteHostLock({ chat }) {
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await fs3.writeFile(REMOTE_HOST_LOCK_PATH, `${JSON.stringify(remoteLock, null, 2)}
-`, { encoding: "utf8", flag: "wx" });
+      await fs3.writeFile(
+        REMOTE_HOST_LOCK_PATH,
+        `${JSON.stringify(remoteLock, null, 2)}
+`,
+        { encoding: "utf8", flag: "wx" }
+      );
       return remoteLock;
     } catch (error) {
       if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") {
@@ -1021,7 +1063,7 @@ async function persistRemoteSessionState({ chatId, remoteSession }) {
   return statePath;
 }
 
-// core/relay-client.js
+// core/relay-client.ts
 var relay_client_exports = {};
 __export(relay_client_exports, {
   RelayClientError: () => RelayClientError,
@@ -1161,7 +1203,7 @@ async function readRelayNotifications(input) {
   });
 }
 
-// core/remote-control.js
+// core/remote-control.ts
 import QRCode from "qrcode";
 var SENSITIVE_KEY_PATTERN = /(path|file|content|token|secret|key|env|authorization|password|prompt|workspace|memory)/i;
 function isInteractiveTerminal(stdout) {
@@ -1327,7 +1369,9 @@ function createRemoteApprovalGate({ postEvent, signal }) {
         approvalId,
         toolCallId: request.toolCallId,
         toolName: request.toolName,
-        argumentSummary: buildRemoteArgumentSummary(isPlainObject2(request.arguments) ? request.arguments : {})
+        argumentSummary: buildRemoteArgumentSummary(
+          isPlainObject2(request.arguments) ? request.arguments : {}
+        )
       });
       return await new Promise((resolve, reject) => {
         pendingApprovals.set(approvalId, { resolve, reject });
@@ -1357,7 +1401,11 @@ async function runRemoteControlSession(params) {
     }
   });
   await params.onSessionReady?.(relaySession);
-  params.io.stdout.write(await buildRemoteSessionReadyText(relaySession, params.io.stdout, params.io.stderr));
+  params.io.stdout.write(await buildRemoteSessionReadyText(
+    relaySession,
+    params.io.stdout,
+    params.io.stderr
+  ));
   let active = true;
   let waitingForInput = false;
   let commandCursor = 0;
@@ -1567,12 +1615,15 @@ async function runRemoteControlSession(params) {
           continue;
         }
         if (command.type === "approval_decision") {
-          approvalGate.resolveDecision(String(command.payload?.approvalId ?? ""), {
-            approved: Boolean(command.payload?.approved),
-            reason: String(command.payload?.reason ?? ""),
-            source: "remote",
-            decidedAt: command.createdAt
-          });
+          approvalGate.resolveDecision(
+            String(command.payload?.approvalId ?? ""),
+            {
+              approved: Boolean(command.payload?.approved),
+              reason: String(command.payload?.reason ?? ""),
+              source: "remote",
+              decidedAt: command.createdAt
+            }
+          );
           continue;
         }
         if (command.type === "cancel") {
@@ -1698,7 +1749,9 @@ async function runRemoteControlSession(params) {
         reason: finalRevokeReason
       });
     } catch (error) {
-      const statusCode = Number(error && typeof error === "object" && "statusCode" in error ? error.statusCode : 0);
+      const statusCode = Number(
+        error && typeof error === "object" && "statusCode" in error ? error.statusCode : 0
+      );
       if (statusCode !== 404 && statusCode !== 410) {
         throw error;
       }
@@ -1707,8 +1760,13 @@ async function runRemoteControlSession(params) {
   return relaySession;
 }
 
-// core/runtime-client.js
-import { createRuntime, executeToolCall as executeRuntimeToolCall, executeToolCalls as executeRuntimeToolCalls, runCompletionLoop } from "llm-runtime";
+// core/runtime-client.ts
+import {
+  createRuntime,
+  executeToolCall as executeRuntimeToolCall,
+  executeToolCalls as executeRuntimeToolCalls,
+  runCompletionLoop
+} from "llm-runtime";
 var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
   "openai",
   "anthropic",
@@ -1806,7 +1864,9 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
   );
   const providerConfig = resolveProviderConfig(provider, environment);
   const providerDefaultModel = provider === "azure" && "deployment" in providerConfig ? providerConfig.deployment : DEFAULT_MODELS[provider];
-  const model = String(agentConfig.model ?? providerDefaultModel ?? "").trim();
+  const model = String(
+    agentConfig.model ?? providerDefaultModel ?? ""
+  ).trim();
   if (!model) {
     throw new Error(`Missing LLM model. Set it in runtime.json or pass --model for provider ${provider}.`);
   }
@@ -1895,7 +1955,23 @@ function selectContextMessages(messages, historyMessageLimit) {
   }
   return messages.slice(-historyMessageLimit);
 }
-async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, handleToolCall, historyMessageLimit, builtInSystemPrompt, workspaceSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
+async function runChatTurn({
+  chat,
+  userMessage,
+  stream = true,
+  onStreamChunk,
+  onToolCall,
+  onToolResult,
+  handleToolCall,
+  historyMessageLimit,
+  builtInSystemPrompt,
+  workspaceSystemPrompt,
+  projectSystemPrompt,
+  skillInventory,
+  approvalGate,
+  agentConfig = {},
+  abortSignal
+}) {
   const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
   const environmentDefaults = buildEnvironmentDefaults(agentConfig);
   const executionContext = buildExecutionContext({
@@ -1941,7 +2017,11 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
       ...abortSignal ? { abortSignal } : {},
       buildMessages: async ({ state, transientInstruction }) => {
         const baseMessages = [
-          ...buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt ?? projectSystemPrompt, skillInventory),
+          ...buildBaseSystemMessages(
+            builtInSystemPrompt,
+            workspaceSystemPrompt ?? projectSystemPrompt,
+            skillInventory
+          ),
           ...state.conversationMessages
         ];
         if (!transientInstruction) {
@@ -1978,7 +2058,11 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
               arguments: parseToolArguments(toolArguments ?? "{}")
             });
             if (!approvalDecision?.approved) {
-              toolResult = createRejectedToolResult(toolCall.id, toolName, approvalDecision?.reason || `Tool execution rejected: ${toolName}`);
+              toolResult = createRejectedToolResult(
+                toolCall.id,
+                toolName,
+                approvalDecision?.reason || `Tool execution rejected: ${toolName}`
+              );
             }
           }
           const toolContext = {

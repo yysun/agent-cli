@@ -254,10 +254,10 @@ npm run relay-server:prod -- --host 0.0.0.0 --port 8080
 
 The repo now uses package-level ESM via `"type": "module"`, so local modules use `.js` files instead of `.mjs`.
 
-CLI source lives under `./cli/src/` as TypeScript and bundles to `./bin/agent-cli.js`. Shared runtime source lives under `./core/*.ts` and compiles back into `./core/*.js`, and the web app bundles to `./bin/public`, so the shipped runtime artifacts live under `./bin/` instead of split output trees.
+CLI source lives under `./cli/src/` as TypeScript and bundles to `./bin/agent-cli.js`. Shared runtime source lives under `./core/*.ts` and is type-checked without emitting duplicate files next to the source. The web app bundles to `./bin/public`, so shipped runtime artifacts live under `./bin/`.
 
 ```bash
-npm run build:ts
+npm run build
 ```
 
 `npm test` includes the deterministic relay and remote-host e2e suite, so the default path now exercises the real relay binary and `agent-cli --remote` long-running host loop without requiring external model credentials.

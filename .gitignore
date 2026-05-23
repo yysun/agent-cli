@@ -5,6 +5,7 @@ node_modules/
 dist/
 release/
 *.tgz
+core/*.js
 
 # Environment variables
 .env

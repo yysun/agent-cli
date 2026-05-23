@@ -5,13 +5,13 @@ import path4 from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
-// core/agent-world-runtime.js
+// core/agent-world-runtime.ts
 import { EventEmitter } from "node:events";
 
-// core/agent-config.js
+// core/agent-config.ts
 import { promises as fs } from "node:fs";
 
-// core/paths.js
+// core/paths.ts
 import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
@@ -89,7 +89,7 @@ function buildWorldQueuePath(chatId) {
   return path.join(AGENT_WORLD_QUEUES_ROOT, `${chatId}.json`);
 }
 
-// core/agent-config.js
+// core/agent-config.ts
 var REASONING_EFFORTS = /* @__PURE__ */ new Set(["default", "none", "low", "medium", "high"]);
 var TOOL_PERMISSIONS = /* @__PURE__ */ new Set(["auto", "ask", "read"]);
 var WEB_SEARCH_CONTEXT_SIZES = /* @__PURE__ */ new Set(["low", "medium", "high"]);
@@ -168,7 +168,9 @@ function normalizeEnum(value, label, allowedValues) {
   }
   const normalized = String(value).trim().toLowerCase();
   if (!allowedValues.has(normalized)) {
-    throw new Error(`Invalid agent config value for ${label}: expected one of ${[...allowedValues].join(", ")}.`);
+    throw new Error(
+      `Invalid agent config value for ${label}: expected one of ${[...allowedValues].join(", ")}.`
+    );
   }
   return normalized;
 }
@@ -209,7 +211,11 @@ function normalizeWebSearch(value) {
   if (enabled === false) {
     return false;
   }
-  const searchContextSize = normalizeEnum(readAliasedValue(value, ["searchContextSize", "contextSize", "size"]), "webSearch.searchContextSize", WEB_SEARCH_CONTEXT_SIZES);
+  const searchContextSize = normalizeEnum(
+    readAliasedValue(value, ["searchContextSize", "contextSize", "size"]),
+    "webSearch.searchContextSize",
+    WEB_SEARCH_CONTEXT_SIZES
+  );
   if (searchContextSize) {
     return { searchContextSize };
   }
@@ -236,18 +242,36 @@ function normalizeAgentConfig(source) {
     provider: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.provider), "provider"),
     model: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.model), "model"),
     temperature: normalizeNumber(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.temperature), "temperature"),
-    maxTokens: normalizePositiveInteger(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens), "maxTokens"),
-    toolPermission: normalizeToolPermission(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission)),
-    reasoningEffort: normalizeReasoningEffort(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.reasoningEffort)),
-    pastMessages: normalizeNonNegativeInteger(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.pastMessages), "pastMessages"),
-    stream: normalizeBoolean(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.stream), "stream"),
-    streamTrace: normalizeBoolean(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.streamTrace), "streamTrace")
+    maxTokens: normalizePositiveInteger(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens),
+      "maxTokens"
+    ),
+    toolPermission: normalizeToolPermission(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission)
+    ),
+    reasoningEffort: normalizeReasoningEffort(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.reasoningEffort)
+    ),
+    pastMessages: normalizeNonNegativeInteger(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.pastMessages),
+      "pastMessages"
+    ),
+    stream: normalizeBoolean(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.stream),
+      "stream"
+    ),
+    streamTrace: normalizeBoolean(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.streamTrace),
+      "streamTrace"
+    )
   };
   const webSearch = normalizeWebSearch(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.webSearch));
   if (webSearch !== void 0) {
     normalizedConfig.webSearch = webSearch;
   }
-  return Object.fromEntries(Object.entries(normalizedConfig).filter(([, value]) => value !== void 0));
+  return Object.fromEntries(
+    Object.entries(normalizedConfig).filter(([, value]) => value !== void 0)
+  );
 }
 async function readJsonFileIfPresent(filePath, label) {
   let content;
@@ -311,7 +335,9 @@ async function loadPersistedRuntimeConfig(options = {}) {
   if (!defaultAgentId) {
     return rootRuntimeConfig;
   }
-  const agentMetadataConfig = normalizeAgentConfig(await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {});
+  const agentMetadataConfig = normalizeAgentConfig(
+    await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {}
+  );
   const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
   return {
     ...rootRuntimeConfig,
@@ -320,7 +346,7 @@ async function loadPersistedRuntimeConfig(options = {}) {
   };
 }
 
-// core/agent-files.js
+// core/agent-files.ts
 import { promises as fs2 } from "node:fs";
 import path2 from "node:path";
 var DEFAULT_SYSTEM_PROMPT = [
@@ -463,8 +489,13 @@ function buildSkillInventoryMessage(skills) {
   ].join("\n");
 }
 
-// core/runtime-client.js
-import { createRuntime, executeToolCall as executeRuntimeToolCall, executeToolCalls as executeRuntimeToolCalls, runCompletionLoop } from "llm-runtime";
+// core/runtime-client.ts
+import {
+  createRuntime,
+  executeToolCall as executeRuntimeToolCall,
+  executeToolCalls as executeRuntimeToolCalls,
+  runCompletionLoop
+} from "llm-runtime";
 var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
   "openai",
   "anthropic",
@@ -562,7 +593,9 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
   );
   const providerConfig = resolveProviderConfig(provider, environment);
   const providerDefaultModel = provider === "azure" && "deployment" in providerConfig ? providerConfig.deployment : DEFAULT_MODELS[provider];
-  const model = String(agentConfig.model ?? providerDefaultModel ?? "").trim();
+  const model = String(
+    agentConfig.model ?? providerDefaultModel ?? ""
+  ).trim();
   if (!model) {
     throw new Error(`Missing LLM model. Set it in runtime.json or pass --model for provider ${provider}.`);
   }
@@ -651,7 +684,23 @@ function selectContextMessages(messages, historyMessageLimit) {
   }
   return messages.slice(-historyMessageLimit);
 }
-async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, handleToolCall, historyMessageLimit, builtInSystemPrompt, workspaceSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
+async function runChatTurn({
+  chat,
+  userMessage,
+  stream = true,
+  onStreamChunk,
+  onToolCall,
+  onToolResult,
+  handleToolCall,
+  historyMessageLimit,
+  builtInSystemPrompt,
+  workspaceSystemPrompt,
+  projectSystemPrompt,
+  skillInventory,
+  approvalGate,
+  agentConfig = {},
+  abortSignal
+}) {
   const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
   const environmentDefaults = buildEnvironmentDefaults(agentConfig);
   const executionContext = buildExecutionContext({
@@ -697,7 +746,11 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
       ...abortSignal ? { abortSignal } : {},
       buildMessages: async ({ state, transientInstruction }) => {
         const baseMessages = [
-          ...buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt ?? projectSystemPrompt, skillInventory),
+          ...buildBaseSystemMessages(
+            builtInSystemPrompt,
+            workspaceSystemPrompt ?? projectSystemPrompt,
+            skillInventory
+          ),
           ...state.conversationMessages
         ];
         if (!transientInstruction) {
@@ -734,7 +787,11 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
               arguments: parseToolArguments(toolArguments ?? "{}")
             });
             if (!approvalDecision?.approved) {
-              toolResult = createRejectedToolResult(toolCall.id, toolName, approvalDecision?.reason || `Tool execution rejected: ${toolName}`);
+              toolResult = createRejectedToolResult(
+                toolCall.id,
+                toolName,
+                approvalDecision?.reason || `Tool execution rejected: ${toolName}`
+              );
             }
           }
           const toolContext = {
@@ -810,7 +867,7 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
   }
 }
 
-// core/world-store.js
+// core/world-store.ts
 import { randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import path3 from "node:path";
@@ -1185,7 +1242,11 @@ async function ensureAgentSelection(options = {}) {
   return await loadAgentMetadata(agentId);
 }
 async function loadWorldChatMetadata(chatId) {
-  return await readJson(buildWorldChatMetadataPath(chatId), `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`, `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`);
+  return await readJson(
+    buildWorldChatMetadataPath(chatId),
+    `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`,
+    `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`
+  );
 }
 async function loadWorldChatById(chatId) {
   const normalizedChatId = String(chatId ?? "").trim();
@@ -1585,7 +1646,7 @@ async function loadQueueState(chatId) {
   };
 }
 
-// core/agent-world-runtime.js
+// core/agent-world-runtime.ts
 var EVENT_NAME = "world-event";
 function nowIsoString() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -2006,7 +2067,9 @@ var AgentWorldRuntime = class {
     ].filter(Boolean).join("\n");
   }
   async replaceChatMemory(chatId, messages) {
-    const agentIds = dedupe(messages.map((message) => String(message.agentId ?? "").trim()).filter(Boolean));
+    const agentIds = dedupe(
+      messages.map((message) => String(message.agentId ?? "").trim()).filter(Boolean)
+    );
     const snapshot = await this.loadSnapshot();
     const fallbackAgentId = String(snapshot.defaultAgentId ?? "default").trim() || "default";
     const targetAgentIds = agentIds.length > 0 ? agentIds : [fallbackAgentId];
@@ -2333,12 +2396,16 @@ var AgentWorldRuntime = class {
     try {
       const chat = await loadChatById(row.chatId);
       const messages = Array.isArray(chat.messages) ? chat.messages : [];
-      const userMessageIndex = messages.findIndex((message) => String(message?.role ?? "") === "user" && String(message?.content ?? "") === row.content);
+      const userMessageIndex = messages.findIndex(
+        (message) => String(message?.role ?? "") === "user" && String(message?.content ?? "") === row.content
+      );
       if (userMessageIndex < 0) {
         return "retry";
       }
       const afterUser = messages.slice(userMessageIndex + 1);
-      const assistantMessageIndex = afterUser.findIndex((message) => String(message?.role ?? "") === "assistant");
+      const assistantMessageIndex = afterUser.findIndex(
+        (message) => String(message?.role ?? "") === "assistant"
+      );
       if (assistantMessageIndex < 0) {
         return "retry";
       }
@@ -2347,7 +2414,9 @@ var AgentWorldRuntime = class {
       if (toolCallIds.length === 0) {
         return "completed";
       }
-      const answeredToolCallIds = new Set(afterUser.slice(assistantMessageIndex + 1).filter((message) => String(message?.role ?? "") === "tool").map((message) => String(message?.tool_call_id ?? "").trim()).filter(Boolean));
+      const answeredToolCallIds = new Set(
+        afterUser.slice(assistantMessageIndex + 1).filter((message) => String(message?.role ?? "") === "tool").map((message) => String(message?.tool_call_id ?? "").trim()).filter(Boolean)
+      );
       return toolCallIds.every((toolCallId) => answeredToolCallIds.has(toolCallId)) ? "completed" : "blocked";
     } catch {
       return "retry";
