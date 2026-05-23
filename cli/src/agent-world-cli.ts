@@ -7,10 +7,12 @@
  * Key features:
  * - Inspects world, agent, chat, message, and queue state from `.agent-world`.
  * - Mutates agents, chats, selected chat, queued messages, and direct sends through `AgentWorldRuntime`.
+ * - Manages workspace-level world registry state for multi-world workspaces.
  * - Provides an interactive shell that reuses the one-shot command dispatcher.
  * - Keeps queued sends provider-free by enqueueing without dispatching.
  *
  * Recent changes:
+ * - 2026-05-23: Added `--world` and `worlds` commands for multi-world workspaces.
  * - 2026-05-23: Prefixes streamed interactive agent replies with `● agent-name:`.
  * - 2026-05-23: Uses a plain `> ` interactive prompt instead of chat/world identifiers.
  * - 2026-05-23: Aligned workspace flag aliases and `.env` preparation with `agent-cli`.
@@ -33,6 +35,14 @@ import {
   createAgentWorldRuntime,
 } from '../../core/agent-world-runtime.js';
 import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
+import {
+  createWorkspaceWorld,
+  deleteWorkspaceWorld,
+  ensureWorkspaceWorld,
+  listWorkspaceWorlds,
+  renameWorkspaceWorld,
+  selectWorkspaceWorld,
+} from '../../core/workspace-store.js';
 import {
   collectHumanInputAnswer,
   parseHumanInputRequest,
@@ -63,17 +73,22 @@ type AgentWorldRuntimeWithToolHandler = AgentWorldRuntime & {
   setToolCallHandler?: (handler: WorldToolCallHandler | undefined) => void;
 };
 
-const VALUE_FLAGS = new Set(['workspace', 'project', 'name', 'provider', 'model', 'chat', 'agent']);
+const VALUE_FLAGS = new Set(['workspace', 'project', 'world', 'name', 'provider', 'model', 'chat', 'agent']);
 const BOOLEAN_FLAGS = new Set(['default', 'queue', 'help']);
 
 export function usageText(): string {
   return [
     'agent-world-cli commands:',
-    '  agent-world-cli [--workspace <path>] <command>',
+    '  agent-world-cli [--workspace <path>] [--world <id>] <command>',
     '  agent-world-cli [--project <path>] <command>',
     '  help',
     '  interactive',
     '  world',
+    '  worlds list',
+    '  worlds create <worldId> [--name <name>] [--default]',
+    '  worlds use <worldId>',
+    '  worlds rename <worldId> --name <name>',
+    '  worlds delete <worldId>',
     '  agents list',
     '  agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]',
     '  agents delete <agentId>',
@@ -95,6 +110,11 @@ export function interactiveHelpText(): string {
     'agent-world-cli interactive commands:',
     '  /help',
     '  /world',
+    '  /worlds list',
+    '  /worlds create <worldId> [--name <name>] [--default]',
+    '  /worlds use <worldId>',
+    '  /worlds rename <worldId> --name <name>',
+    '  /worlds delete <worldId>',
     '  /agents list',
     '  /agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]',
     '  /agents delete <agentId>',
@@ -378,6 +398,41 @@ async function executeAgentWorldCommand(
     return 0;
   }
 
+  if (area === 'worlds') {
+    if (action === 'list') {
+      writeJson(io, await listWorkspaceWorlds());
+      return 0;
+    }
+
+    if (action === 'create') {
+      const worldId = requireValue(rest[0], 'world ID');
+      writeJson(io, await createWorkspaceWorld({
+        worldId,
+        ...(flagString(parsed.flags, 'name') ? { name: flagString(parsed.flags, 'name') } : {}),
+        select: flagBoolean(parsed.flags, 'default'),
+      }));
+      return 0;
+    }
+
+    if (action === 'use') {
+      writeJson(io, await selectWorkspaceWorld(requireValue(rest[0], 'world ID')));
+      return 0;
+    }
+
+    if (action === 'rename') {
+      writeJson(io, await renameWorkspaceWorld(
+        requireValue(rest[0], 'world ID'),
+        requireValue(flagString(parsed.flags, 'name'), 'world name'),
+      ));
+      return 0;
+    }
+
+    if (action === 'delete') {
+      writeJson(io, await deleteWorkspaceWorld(requireValue(rest[0], 'world ID')));
+      return 0;
+    }
+  }
+
   if (area === 'agents') {
     if (action === 'list') {
       writeJson(io, await runtime.agents.list());
@@ -532,6 +587,8 @@ function toInteractiveArgv(line: string): string[] | null {
       return ['interactive-help'];
     case 'world':
       return ['world', ...rest];
+    case 'worlds':
+      return ['worlds', ...rest];
     case 'agents':
       return ['agents', ...rest];
     case 'chats':
@@ -778,9 +835,12 @@ export async function runAgentWorldCli(argv = process.argv.slice(2), io = defaul
     const workspaceRoot = prepareWorkspaceEnvironment(
       flagString(parsed.flags, 'workspace') ?? flagString(parsed.flags, 'project'),
     );
+    const worldId = flagString(parsed.flags, 'world');
+    await ensureWorkspaceWorld(worldId ? { worldId } : {});
 
     const runtime = createAgentWorldRuntime({
       workspaceRoot,
+      ...(worldId ? { worldId } : {}),
       autoResume: false,
     });
 

@@ -7,10 +7,11 @@
  *
  * Key features:
  * - Reads optional `./AGENTS.md` prompt content without replacing the built-in prompt.
- * - Discovers recursive `SKILL.md` files using deterministic lexical ordering.
+ * - Discovers recursive workspace and selected-world `SKILL.md` files using deterministic lexical ordering.
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
+ * - 2026-05-23: Layered workspace and selected-world skill discovery.
  * - 2026-05-23: Renamed AGENTS.md prompt loading terminology from project to workspace.
  * - 2026-05-07: Added agent prompt and skill inventory helpers for the CLI.
  * - 2026-05-07: Switched prompt and skills loading to AGENTS/.agents conventions.
@@ -20,7 +21,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { SKILLS_ROOT, SYSTEM_PROMPT_PATH } from './paths.js';
+import { SKILLS_ROOT, SYSTEM_PROMPT_PATH, WORLD_SKILLS_ROOT } from './paths.js';
+import { ensureWorkspaceWorld } from './workspace-store.js';
 
 export const DEFAULT_SYSTEM_PROMPT = [
   'You are Agent CLI.',
@@ -171,9 +173,12 @@ export async function loadProjectSystemPrompt() {
   return loadWorkspaceSystemPrompt();
 }
 
-export async function loadSkillInventory() {
+/**
+ * @param {string} skillsRoot
+ */
+async function loadSkillInventoryFromRoot(skillsRoot) {
   try {
-    await assertReadableDirectory(SKILLS_ROOT, 'skills root');
+    await assertReadableDirectory(skillsRoot, 'skills root');
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Missing skills root:')) {
       return [];
@@ -182,7 +187,7 @@ export async function loadSkillInventory() {
     throw error;
   }
 
-  const skillFilePaths = await collectSkillFilePaths(SKILLS_ROOT);
+  const skillFilePaths = await collectSkillFilePaths(skillsRoot);
 
   /** @type {Array<{ skillId: string, description: string, sourcePath: string }>} */
   const skills = [];
@@ -203,6 +208,21 @@ export async function loadSkillInventory() {
   }
 
   return skills;
+}
+
+export async function loadSkillInventory() {
+  await ensureWorkspaceWorld();
+  const skillsById = new Map();
+
+  for (const skill of await loadSkillInventoryFromRoot(SKILLS_ROOT)) {
+    skillsById.set(skill.skillId, skill);
+  }
+
+  for (const skill of await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT)) {
+    skillsById.set(skill.skillId, skill);
+  }
+
+  return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
 }
 
 /**

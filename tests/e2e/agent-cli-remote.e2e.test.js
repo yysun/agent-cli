@@ -269,7 +269,7 @@ async function writeJson(filePath, value) {
  * @param {{ id: string, createdAt: string, updatedAt: string, messages: Array<Record<string, unknown>> }} chat
  */
 async function seedPersistedChat(rootPath, chat) {
-  const chatDirectory = path.join(rootPath, '.agent-world', 'chats', chat.id);
+  const chatDirectory = path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', chat.id);
 
   await writeJson(path.join(chatDirectory, 'chat.json'), {
     id: chat.id,
@@ -292,7 +292,7 @@ async function seedPersistedChat(rootPath, chat) {
  * @param {string} currentChatId
  */
 async function seedWorld(rootPath, currentChatId) {
-  await writeJson(path.join(rootPath, '.agent-world', 'world.json'), {
+  await writeJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), {
     id: 'world-e2e-1',
     name: 'agent-cli-remote-e2e',
     defaultAgentId: 'default',
@@ -480,11 +480,11 @@ describe('agent-cli --remote host', () => {
       chat: expect.objectContaining({ id: archivedChatId, messageCount: 2 }),
     });
 
-    const worldState = JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'world.json'), 'utf8'));
+    const worldState = JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), 'utf8'));
 
     expect(worldState).toMatchObject({ currentChatId: archivedChatId });
 
-    const agentState = JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'agents', 'default', 'state.json'), 'utf8'));
+    const agentState = JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'state.json'), 'utf8'));
 
     expect(agentState).toMatchObject({ currentChatId: archivedChatId });
 

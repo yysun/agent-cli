@@ -285,8 +285,8 @@ describe('agent-cli CLI', () => {
 
     expect(assistantText.length).toBeGreaterThan(0);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const chatFilePath = path.join(rootPath, '.agent-world', 'chats', world.currentChatId, 'messages.jsonl');
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const chatFilePath = path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', world.currentChatId, 'messages.jsonl');
     const chatMessages = await readJsonl(chatFilePath);
     const rawChatFile = await readFile(chatFilePath, 'utf8');
 
@@ -337,8 +337,8 @@ describe('agent-cli CLI', () => {
     expect(assistantText).toContain(systemProbeToken);
     expect(assistantText).toContain(skillProbeToken);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', world.currentChatId, 'messages.jsonl'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', world.currentChatId, 'messages.jsonl'));
     const loadSkillMessage = chatMessages.find(
       /** @param {{ role?: string, tool_calls?: Array<{ function?: { name?: string, arguments?: string } }> }} message */
       (message) => message.role === 'assistant'
@@ -368,13 +368,13 @@ describe('agent-cli CLI', () => {
       ['--new-chat', 'Say hello briefly.'],
       /** @type {import('../../cli/src/turn-executor.js').CliIo} */(createIoCapture()),
     );
-    const firstWorld = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const firstWorld = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
 
     const secondIo = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
     await main(['Now say goodbye briefly.'], secondIo);
 
-    const secondWorld = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', secondWorld.currentChatId, 'messages.jsonl'));
+    const secondWorld = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', secondWorld.currentChatId, 'messages.jsonl'));
     const secondAssistantText = extractAssistantTextFromCliStdout(secondIo.getStdout());
     const userMessages = chatMessages
       .filter(
@@ -406,8 +406,8 @@ describe('agent-cli CLI', () => {
 
     await main(['follow up'], io);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', world.currentChatId, 'messages.jsonl'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', world.currentChatId, 'messages.jsonl'));
     const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);

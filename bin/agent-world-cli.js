@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // cli/src/agent-world-cli.ts
-import path5 from "node:path";
+import path6 from "node:path";
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,12 +10,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { EventEmitter } from "node:events";
 
 // core/agent-config.ts
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 
 // core/paths.ts
 import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
+var WORLD_ID_ENV_KEY = "AGENT_CLI_WORLD";
 function resolveWorkspaceRoot(workspaceRoot) {
   const configuredRoot = [
     workspaceRoot,
@@ -30,11 +31,27 @@ var SYSTEM_PROMPT_PATH = "";
 var ROOT_RUNTIME_CONFIG_PATH = "";
 var SKILLS_ROOT = "";
 var AGENT_WORLD_ROOT = "";
+var WORKSPACE_REGISTRY_PATH = "";
+var AGENT_WORLD_WORLDS_ROOT = "";
+var ACTIVE_WORLD_ID = "";
+var ACTIVE_WORLD_ROOT = "";
 var WORLD_STATE_PATH = "";
 var AGENT_WORLD_CHATS_ROOT = "";
 var AGENT_WORLD_AGENTS_ROOT = "";
 var AGENT_WORLD_QUEUES_ROOT = "";
+var WORLD_SKILLS_ROOT = "";
 var REMOTE_HOST_LOCK_PATH = "";
+function configureActiveWorldPaths(worldId = "default") {
+  ACTIVE_WORLD_ID = String(worldId || "default").trim() || "default";
+  ACTIVE_WORLD_ROOT = path.join(AGENT_WORLD_WORLDS_ROOT, ACTIVE_WORLD_ID);
+  WORLD_STATE_PATH = path.join(ACTIVE_WORLD_ROOT, "world.json");
+  AGENT_WORLD_CHATS_ROOT = path.join(ACTIVE_WORLD_ROOT, "chats");
+  AGENT_WORLD_AGENTS_ROOT = path.join(ACTIVE_WORLD_ROOT, "agents");
+  AGENT_WORLD_QUEUES_ROOT = path.join(ACTIVE_WORLD_ROOT, "queues");
+  WORLD_SKILLS_ROOT = path.join(ACTIVE_WORLD_ROOT, "skills");
+  REMOTE_HOST_LOCK_PATH = path.join(ACTIVE_WORLD_ROOT, "remote-host.lock.json");
+  return ACTIVE_WORLD_ROOT;
+}
 function configureWorkspaceRoot(workspaceRoot) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
   REPO_ROOT = WORKSPACE_ROOT;
@@ -42,12 +59,13 @@ function configureWorkspaceRoot(workspaceRoot) {
   ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, "runtime.json");
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
-  WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
-  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
-  AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
-  AGENT_WORLD_QUEUES_ROOT = path.join(AGENT_WORLD_ROOT, "queues");
-  REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+  WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, "registry.json");
+  AGENT_WORLD_WORLDS_ROOT = path.join(AGENT_WORLD_ROOT, "worlds");
+  configureActiveWorldPaths(ACTIVE_WORLD_ID || "default");
   return WORKSPACE_ROOT;
+}
+function configureActiveWorld(worldId) {
+  return configureActiveWorldPaths(worldId);
 }
 configureWorkspaceRoot();
 function buildWorldChatDirectoryPath(chatId) {
@@ -88,6 +106,236 @@ function buildAgentRuntimeConfigPath(agentId) {
 }
 function buildWorldQueuePath(chatId) {
   return path.join(AGENT_WORLD_QUEUES_ROOT, `${chatId}.json`);
+}
+
+// core/workspace-store.ts
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path2 from "node:path";
+var DEFAULT_WORLD_ID = "default";
+var REGISTRY_SCHEMA_VERSION = 1;
+var pinnedWorldId = "";
+function normalizeWorldId(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const slug = normalized.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || DEFAULT_WORLD_ID;
+}
+function pinWorkspaceWorld(worldId) {
+  pinnedWorldId = normalizeWorldId(worldId);
+  configureActiveWorld(pinnedWorldId);
+  return pinnedWorldId;
+}
+function defaultWorldName() {
+  return path2.basename(WORKSPACE_ROOT) || "Default";
+}
+async function writeJsonAtomic(filePath, value) {
+  const directoryPath = path2.dirname(filePath);
+  const fileName = path2.basename(filePath);
+  const temporaryPath = path2.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  await fs.mkdir(directoryPath, { recursive: true });
+  await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+`, "utf8");
+  await fs.rename(temporaryPath, filePath);
+}
+async function readJsonIfPresent(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+function normalizeRegistry(value) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const registry = value && typeof value === "object" ? value : {};
+  const rawWorlds = Array.isArray(registry.worlds) ? registry.worlds : [];
+  const worlds = rawWorlds.map((world) => {
+    if (!world || typeof world !== "object") {
+      return null;
+    }
+    const id = normalizeWorldId(world.id);
+    return {
+      id,
+      name: String(world.name ?? id).trim() || id,
+      createdAt: String(world.createdAt ?? now),
+      updatedAt: String(world.updatedAt ?? world.createdAt ?? now)
+    };
+  }).filter(Boolean);
+  if (!worlds.some((world) => world?.id === DEFAULT_WORLD_ID)) {
+    worlds.unshift({
+      id: DEFAULT_WORLD_ID,
+      name: defaultWorldName(),
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  const currentWorldId = normalizeWorldId(registry.currentWorldId);
+  const selectedWorldId = worlds.some((world) => world?.id === currentWorldId) ? currentWorldId : DEFAULT_WORLD_ID;
+  return {
+    schemaVersion: REGISTRY_SCHEMA_VERSION,
+    currentWorldId: selectedWorldId,
+    worlds,
+    createdAt: String(registry.createdAt ?? now),
+    updatedAt: String(registry.updatedAt ?? now)
+  };
+}
+async function readWorkspaceRegistry() {
+  const registry = await readJsonIfPresent(WORKSPACE_REGISTRY_PATH);
+  return normalizeRegistry(registry);
+}
+async function writeWorkspaceRegistry(registry) {
+  const nextRegistry = {
+    ...registry,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await writeJsonAtomic(WORKSPACE_REGISTRY_PATH, nextRegistry);
+  return nextRegistry;
+}
+async function ensureWorldDirectories(worldId) {
+  const worldRoot = path2.join(AGENT_WORLD_WORLDS_ROOT, normalizeWorldId(worldId));
+  await Promise.all([
+    fs.mkdir(worldRoot, { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "agents"), { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "chats"), { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "queues"), { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "skills"), { recursive: true })
+  ]);
+  return worldRoot;
+}
+async function ensureWorkspaceWorld(options = {}) {
+  await fs.mkdir(AGENT_WORLD_ROOT, { recursive: true });
+  await fs.mkdir(path2.join(AGENT_WORLD_ROOT, "skills"), { recursive: true });
+  await fs.mkdir(AGENT_WORLD_WORLDS_ROOT, { recursive: true });
+  let registry = await readWorkspaceRegistry();
+  const envWorldId = String(process.env[WORLD_ID_ENV_KEY] ?? "").trim();
+  const requestedWorldId = options.worldId ? pinWorkspaceWorld(options.worldId) : envWorldId ? pinWorkspaceWorld(envWorldId) : pinnedWorldId;
+  if (requestedWorldId && !registry.worlds.some((world) => world.id === requestedWorldId)) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    registry.worlds.push({
+      id: requestedWorldId,
+      name: String(options.name ?? requestedWorldId).trim() || requestedWorldId,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  const selectedWorldId = requestedWorldId || normalizeWorldId(registry.currentWorldId);
+  const nextCurrentWorldId = options.select || !registry.currentWorldId ? selectedWorldId : normalizeWorldId(registry.currentWorldId);
+  registry = {
+    ...registry,
+    currentWorldId: nextCurrentWorldId
+  };
+  registry = await writeWorkspaceRegistry(registry);
+  const activeWorldId = selectedWorldId || registry.currentWorldId || DEFAULT_WORLD_ID;
+  await ensureWorldDirectories(activeWorldId);
+  configureActiveWorld(activeWorldId);
+  return {
+    workspaceRoot: WORKSPACE_ROOT,
+    worldId: ACTIVE_WORLD_ID,
+    worldRoot: ACTIVE_WORLD_ROOT,
+    registry
+  };
+}
+async function listWorkspaceWorlds() {
+  const { registry } = await ensureWorkspaceWorld();
+  return registry.worlds.map((world) => ({
+    ...world,
+    isCurrent: world.id === registry.currentWorldId
+  }));
+}
+async function createWorkspaceWorld(input) {
+  const worldId = normalizeWorldId(input.worldId);
+  let { registry } = await ensureWorkspaceWorld();
+  if (!registry.worlds.some((world) => world.id === worldId)) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    registry = await writeWorkspaceRegistry({
+      ...registry,
+      worlds: [
+        ...registry.worlds,
+        {
+          id: worldId,
+          name: String(input.name ?? worldId).trim() || worldId,
+          createdAt: now,
+          updatedAt: now
+        }
+      ]
+    });
+  }
+  await ensureWorldDirectories(worldId);
+  if (input.select === true) {
+    registry = await writeWorkspaceRegistry({
+      ...registry,
+      currentWorldId: worldId
+    });
+    pinWorkspaceWorld(worldId);
+  }
+  return registry.worlds.find((world) => world.id === worldId) ?? null;
+}
+async function selectWorkspaceWorld(worldId) {
+  const normalizedWorldId = normalizeWorldId(worldId);
+  let { registry } = await ensureWorkspaceWorld();
+  if (!registry.worlds.some((world) => world.id === normalizedWorldId)) {
+    throw new Error(`Missing world: ${normalizedWorldId}`);
+  }
+  registry = await writeWorkspaceRegistry({
+    ...registry,
+    currentWorldId: normalizedWorldId
+  });
+  await ensureWorkspaceWorld({ worldId: normalizedWorldId });
+  return registry.worlds.find((world) => world.id === normalizedWorldId) ?? null;
+}
+async function renameWorkspaceWorld(worldId, name) {
+  const normalizedWorldId = normalizeWorldId(worldId);
+  const normalizedName = String(name ?? "").trim();
+  if (!normalizedName) {
+    throw new Error("Missing world name.");
+  }
+  let { registry } = await ensureWorkspaceWorld();
+  let found = false;
+  registry = {
+    ...registry,
+    worlds: registry.worlds.map((world) => {
+      if (world.id !== normalizedWorldId) {
+        return world;
+      }
+      found = true;
+      return {
+        ...world,
+        name: normalizedName,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+    })
+  };
+  if (!found) {
+    throw new Error(`Missing world: ${normalizedWorldId}`);
+  }
+  await writeWorkspaceRegistry(registry);
+  return registry.worlds.find((world) => world.id === normalizedWorldId) ?? null;
+}
+async function deleteWorkspaceWorld(worldId) {
+  const normalizedWorldId = normalizeWorldId(worldId);
+  let { registry } = await ensureWorkspaceWorld();
+  if (normalizedWorldId === DEFAULT_WORLD_ID) {
+    throw new Error("Cannot delete the default world.");
+  }
+  if (registry.currentWorldId === normalizedWorldId) {
+    throw new Error("Cannot delete the current world.");
+  }
+  const nextWorlds = registry.worlds.filter((world) => world.id !== normalizedWorldId);
+  if (nextWorlds.length === registry.worlds.length) {
+    throw new Error(`Missing world: ${normalizedWorldId}`);
+  }
+  registry = await writeWorkspaceRegistry({
+    ...registry,
+    worlds: nextWorlds
+  });
+  await fs.rm(path2.join(AGENT_WORLD_WORLDS_ROOT, normalizedWorldId), { recursive: true, force: true });
+  return {
+    worldId: normalizedWorldId,
+    deleted: true,
+    registry
+  };
 }
 
 // core/agent-config.ts
@@ -277,7 +525,7 @@ function normalizeAgentConfig(source) {
 async function readJsonFileIfPresent(filePath, label) {
   let content;
   try {
-    content = await fs.readFile(filePath, "utf8");
+    content = await fs2.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -323,6 +571,7 @@ function normalizeAgentId(agentId) {
   return normalizedAgentId;
 }
 async function loadDefaultAgentIdFromWorld() {
+  await ensureWorkspaceWorld();
   const world = await readJsonFileIfPresent(WORLD_STATE_PATH, "world metadata");
   if (!world) {
     return "";
@@ -330,6 +579,7 @@ async function loadDefaultAgentIdFromWorld() {
   return normalizeAgentId(world.defaultAgentId);
 }
 async function loadPersistedRuntimeConfig(options = {}) {
+  await ensureWorkspaceWorld();
   const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
   const configuredAgentId = normalizeAgentId(options.agentId);
   const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
@@ -348,8 +598,8 @@ async function loadPersistedRuntimeConfig(options = {}) {
 }
 
 // core/agent-files.ts
-import { promises as fs2 } from "node:fs";
-import path2 from "node:path";
+import { promises as fs3 } from "node:fs";
+import path3 from "node:path";
 var DEFAULT_SYSTEM_PROMPT = [
   "You are Agent CLI.",
   "Be concise, factual, and action-oriented.",
@@ -365,7 +615,7 @@ function getBuiltInSystemPrompt() {
 async function assertReadableFile(filePath, label) {
   let stats;
   try {
-    stats = await fs2.stat(filePath);
+    stats = await fs3.stat(filePath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -379,7 +629,7 @@ async function assertReadableFile(filePath, label) {
 async function assertReadableDirectory(directoryPath, label) {
   let stats;
   try {
-    stats = await fs2.stat(directoryPath);
+    stats = await fs3.stat(directoryPath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -422,10 +672,10 @@ async function collectSkillFilePaths(rootPath) {
     if (!currentPath) {
       continue;
     }
-    const entries = await fs2.readdir(currentPath, { withFileTypes: true });
+    const entries = await fs3.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const entryPath = path2.join(currentPath, entry.name);
+      const entryPath = path3.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         queue.push(entryPath);
         continue;
@@ -446,22 +696,22 @@ async function loadWorkspaceSystemPrompt() {
     }
     throw error;
   }
-  const content = (await fs2.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+  const content = (await fs3.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
   return content;
 }
-async function loadSkillInventory() {
+async function loadSkillInventoryFromRoot(skillsRoot) {
   try {
-    await assertReadableDirectory(SKILLS_ROOT, "skills root");
+    await assertReadableDirectory(skillsRoot, "skills root");
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Missing skills root:")) {
       return [];
     }
     throw error;
   }
-  const skillFilePaths = await collectSkillFilePaths(SKILLS_ROOT);
+  const skillFilePaths = await collectSkillFilePaths(skillsRoot);
   const skills = [];
   for (const skillFilePath of skillFilePaths) {
-    const content = await fs2.readFile(skillFilePath, "utf8");
+    const content = await fs3.readFile(skillFilePath, "utf8");
     const metadata = parseSkillFrontMatter(content);
     if (!metadata.skillId) {
       continue;
@@ -473,6 +723,17 @@ async function loadSkillInventory() {
     });
   }
   return skills;
+}
+async function loadSkillInventory() {
+  await ensureWorkspaceWorld();
+  const skillsById = /* @__PURE__ */ new Map();
+  for (const skill of await loadSkillInventoryFromRoot(SKILLS_ROOT)) {
+    skillsById.set(skill.skillId, skill);
+  }
+  for (const skill of await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT)) {
+    skillsById.set(skill.skillId, skill);
+  }
+  return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
 }
 function buildSkillInventoryMessage(skills) {
   if (skills.length === 0) {
@@ -869,12 +1130,12 @@ async function runChatTurn({
 }
 
 // core/world-store.ts
-import { randomUUID } from "node:crypto";
-import { promises as fs3 } from "node:fs";
-import path3 from "node:path";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { promises as fs4 } from "node:fs";
+import path4 from "node:path";
 var DEFAULT_AGENT_ID = "default";
-function defaultWorldName() {
-  return path3.basename(WORKSPACE_ROOT) || "agent-world";
+function defaultWorldName2() {
+  return path4.basename(WORKSPACE_ROOT) || "agent-world";
 }
 function normalizeAgentId2(agentId) {
   const normalizedAgentId = String(agentId ?? "").trim();
@@ -885,10 +1146,10 @@ function normalizeAgentId2(agentId) {
 }
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  return `${timestamp}-${randomUUID().slice(0, 8)}`;
+  return `${timestamp}-${randomUUID2().slice(0, 8)}`;
 }
 function createWorldId() {
-  return randomUUID();
+  return randomUUID2();
 }
 function normalizeTimestamp(value, fallbackTimestamp) {
   if (typeof value === "string" && value.trim()) {
@@ -939,22 +1200,22 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
     ...toolCalls ? { tool_calls: toolCalls } : {}
   };
 }
-async function writeJsonAtomic(filePath, value) {
-  const directoryPath = path3.dirname(filePath);
-  const fileName = path3.basename(filePath);
-  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs3.mkdir(directoryPath, { recursive: true });
-  await fs3.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+async function writeJsonAtomic2(filePath, value) {
+  const directoryPath = path4.dirname(filePath);
+  const fileName = path4.basename(filePath);
+  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  await fs4.mkdir(directoryPath, { recursive: true });
+  await fs4.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
-  await fs3.rename(temporaryPath, filePath);
+  await fs4.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
-  const directoryPath = path3.dirname(filePath);
-  const fileName = path3.basename(filePath);
-  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs3.mkdir(directoryPath, { recursive: true });
-  await fs3.writeFile(temporaryPath, text, "utf8");
-  await fs3.rename(temporaryPath, filePath);
+  const directoryPath = path4.dirname(filePath);
+  const fileName = path4.basename(filePath);
+  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  await fs4.mkdir(directoryPath, { recursive: true });
+  await fs4.writeFile(temporaryPath, text, "utf8");
+  await fs4.rename(temporaryPath, filePath);
 }
 async function writeJsonlAtomic(filePath, values) {
   const serialized = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}
@@ -965,15 +1226,15 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs3.mkdir(path3.dirname(filePath), { recursive: true });
+  await fs4.mkdir(path4.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
-  await fs3.appendFile(filePath, serialized, "utf8");
+  await fs4.appendFile(filePath, serialized, "utf8");
 }
 async function readJson(filePath, missingMessage, invalidMessage) {
   let rawContent;
   try {
-    rawContent = await fs3.readFile(filePath, "utf8");
+    rawContent = await fs4.readFile(filePath, "utf8");
   } catch {
     throw new Error(missingMessage);
   }
@@ -983,9 +1244,9 @@ async function readJson(filePath, missingMessage, invalidMessage) {
     throw new Error(invalidMessage);
   }
 }
-async function readJsonIfPresent(filePath) {
+async function readJsonIfPresent2(filePath) {
   try {
-    return JSON.parse(await fs3.readFile(filePath, "utf8"));
+    return JSON.parse(await fs4.readFile(filePath, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -995,7 +1256,7 @@ async function readJsonIfPresent(filePath) {
 }
 async function pathExists(filePath) {
   try {
-    await fs3.access(filePath);
+    await fs4.access(filePath);
     return true;
   } catch {
     return false;
@@ -1010,7 +1271,7 @@ async function ensureTextFile(filePath, defaultText = "") {
 async function readJsonl(filePath) {
   let rawContent;
   try {
-    rawContent = await fs3.readFile(filePath, "utf8");
+    rawContent = await fs4.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(`Missing chat session file: ${filePath}`);
@@ -1025,11 +1286,12 @@ async function readJsonl(filePath) {
   }
 }
 async function ensureAgentWorldDirectories() {
+  await ensureWorkspaceWorld();
   await Promise.all([
-    fs3.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
+    fs4.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs4.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs4.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
+    fs4.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
   ]);
 }
 function createEmptyChat() {
@@ -1042,7 +1304,7 @@ function createEmptyChat() {
   };
 }
 function createMessageId() {
-  return `msg-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  return `msg-${Date.now()}-${randomUUID2().slice(0, 8)}`;
 }
 async function inferDefaultAgentRuntime(agentId) {
   const runtimeConfig = await loadPersistedRuntimeConfig({ agentId });
@@ -1055,12 +1317,12 @@ async function inferDefaultAgentRuntime(agentId) {
 }
 async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(agentId));
+  const existingAgentMetadata = await readJsonIfPresent2(buildAgentMetadataPath(agentId));
   const inferredRuntime = await inferDefaultAgentRuntime(agentId);
-  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`;
+  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName2()} agent`).trim() || `${defaultWorldName2()} agent`;
   const provider = String(metadata.provider ?? existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider;
   const model = String(metadata.model ?? existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model;
-  await writeJsonAtomic(buildAgentMetadataPath(agentId), {
+  await writeJsonAtomic2(buildAgentMetadataPath(agentId), {
     id: agentId,
     name,
     provider,
@@ -1069,14 +1331,14 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
     updatedAt: now
   });
   if (metadata.provider || metadata.model || !await pathExists(buildAgentRuntimeConfigPath(agentId))) {
-    await writeJsonAtomic(buildAgentRuntimeConfigPath(agentId), {
+    await writeJsonAtomic2(buildAgentRuntimeConfigPath(agentId), {
       schemaVersion: 1,
       provider,
       model
     });
   }
   if (!await pathExists(buildAgentStatePath(agentId))) {
-    await writeJsonAtomic(buildAgentStatePath(agentId), {
+    await writeJsonAtomic2(buildAgentStatePath(agentId), {
       id: agentId,
       updatedAt: now
     });
@@ -1087,7 +1349,7 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   await ensureTextFile(buildAgentMemoryLogPath(agentId));
 }
 async function readWorldState() {
-  const world = await readJsonIfPresent(WORLD_STATE_PATH);
+  const world = await readJsonIfPresent2(WORLD_STATE_PATH);
   if (!world || typeof world !== "object") {
     return null;
   }
@@ -1099,7 +1361,7 @@ async function writeWorldState({ world, updates }) {
     ...updates,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await writeJsonAtomic(WORLD_STATE_PATH, nextWorld);
+  await writeJsonAtomic2(WORLD_STATE_PATH, nextWorld);
   return nextWorld;
 }
 async function persistWorldChat(chat, agentId) {
@@ -1118,7 +1380,7 @@ async function persistWorldChat(chat, agentId) {
     updatedAt,
     messageCount: messages.length
   };
-  await writeJsonAtomic(buildWorldChatMetadataPath(chat.id), metadata);
+  await writeJsonAtomic2(buildWorldChatMetadataPath(chat.id), metadata);
   await writeJsonlAtomic(buildWorldChatMessagesPath(chat.id), messages);
   await ensureTextFile(buildWorldChatSummaryPath(chat.id));
   return {
@@ -1134,7 +1396,7 @@ async function ensureWorldBootstrap() {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     world = {
       id: createWorldId(),
-      name: defaultWorldName(),
+      name: defaultWorldName2(),
       defaultAgentId: DEFAULT_AGENT_ID,
       currentChatId: "",
       createdAt: now,
@@ -1157,7 +1419,7 @@ async function ensureWorldBootstrap() {
 }
 async function loadAgentMetadata(agentId) {
   const normalizedAgentId = normalizeAgentId2(agentId);
-  const metadata = await readJsonIfPresent(buildAgentMetadataPath(normalizedAgentId));
+  const metadata = await readJsonIfPresent2(buildAgentMetadataPath(normalizedAgentId));
   return metadata && typeof metadata === "object" ? metadata : null;
 }
 async function loadWorldSnapshot() {
@@ -1174,13 +1436,13 @@ async function updateWorldMetadata(updates) {
 }
 async function listAgentMetadata() {
   await ensureWorldBootstrap();
-  const entries = await fs3.readdir(AGENT_WORLD_AGENTS_ROOT, { withFileTypes: true });
+  const entries = await fs4.readdir(AGENT_WORLD_AGENTS_ROOT, { withFileTypes: true });
   const agents = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
     }
-    const metadata = await readJsonIfPresent(buildAgentMetadataPath(entry.name));
+    const metadata = await readJsonIfPresent2(buildAgentMetadataPath(entry.name));
     if (metadata && typeof metadata === "object") {
       agents.push(metadata);
     }
@@ -1193,7 +1455,7 @@ async function createAgentMetadata(options = {}) {
 async function updateAgentMetadata(agentId, updates) {
   const normalizedAgentId = normalizeAgentId2(agentId);
   await ensureWorldBootstrap();
-  const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(normalizedAgentId));
+  const existingAgentMetadata = await readJsonIfPresent2(buildAgentMetadataPath(normalizedAgentId));
   if (!existingAgentMetadata || typeof existingAgentMetadata !== "object") {
     throw new Error(`Missing agent: ${normalizedAgentId}`);
   }
@@ -1203,10 +1465,10 @@ async function updateAgentMetadata(agentId, updates) {
     id: normalizedAgentId,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await writeJsonAtomic(buildAgentMetadataPath(normalizedAgentId), nextMetadata);
+  await writeJsonAtomic2(buildAgentMetadataPath(normalizedAgentId), nextMetadata);
   if (updates.provider || updates.model) {
-    const existingRuntime = await readJsonIfPresent(buildAgentRuntimeConfigPath(normalizedAgentId));
-    await writeJsonAtomic(buildAgentRuntimeConfigPath(normalizedAgentId), {
+    const existingRuntime = await readJsonIfPresent2(buildAgentRuntimeConfigPath(normalizedAgentId));
+    await writeJsonAtomic2(buildAgentRuntimeConfigPath(normalizedAgentId), {
       ...existingRuntime && typeof existingRuntime === "object" ? existingRuntime : { schemaVersion: 1 },
       ...updates.provider ? { provider: updates.provider } : {},
       ...updates.model ? { model: updates.model } : {}
@@ -1220,7 +1482,7 @@ async function deleteAgentMetadata(agentId) {
   if (String(world.defaultAgentId ?? "") === normalizedAgentId) {
     throw new Error("Cannot delete the default agent.");
   }
-  await fs3.rm(path3.join(AGENT_WORLD_AGENTS_ROOT, normalizedAgentId), { recursive: true, force: true });
+  await fs4.rm(path4.join(AGENT_WORLD_AGENTS_ROOT, normalizedAgentId), { recursive: true, force: true });
   return true;
 }
 async function ensureAgentSelection(options = {}) {
@@ -1361,7 +1623,7 @@ async function loadChatById(chatId) {
 async function listPersistedChats() {
   const world = await ensureWorldBootstrap();
   const currentChatId = String(world.currentChatId ?? "").trim();
-  const entries = await fs3.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
+  const entries = await fs4.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
   const chats = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -1371,7 +1633,7 @@ async function listPersistedChats() {
     if (!chatId) {
       continue;
     }
-    const metadata = await readJsonIfPresent(buildWorldChatMetadataPath(chatId));
+    const metadata = await readJsonIfPresent2(buildWorldChatMetadataPath(chatId));
     if (!metadata || typeof metadata !== "object") {
       continue;
     }
@@ -1407,8 +1669,8 @@ async function deletePersistedChat(chatId) {
     throw new Error("Missing chat ID.");
   }
   const world = await ensureWorldBootstrap();
-  await fs3.rm(path3.join(AGENT_WORLD_CHATS_ROOT, normalizedChatId), { recursive: true, force: true });
-  await fs3.rm(buildWorldQueuePath(normalizedChatId), { force: true });
+  await fs4.rm(path4.join(AGENT_WORLD_CHATS_ROOT, normalizedChatId), { recursive: true, force: true });
+  await fs4.rm(buildWorldQueuePath(normalizedChatId), { force: true });
   if (String(world.currentChatId ?? "") === normalizedChatId) {
     await writeWorldState({
       world,
@@ -1470,7 +1732,7 @@ function normalizeQueueState(value) {
   };
 }
 async function readQueueState(chatId) {
-  const existingState = await readJsonIfPresent(buildWorldQueuePath(chatId));
+  const existingState = await readJsonIfPresent2(buildWorldQueuePath(chatId));
   return normalizeQueueState(existingState);
 }
 async function writeQueueState(chatId, state) {
@@ -1479,7 +1741,7 @@ async function writeQueueState(chatId, state) {
     rows: state.rows,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await writeJsonAtomic(buildWorldQueuePath(chatId), nextState);
+  await writeJsonAtomic2(buildWorldQueuePath(chatId), nextState);
   return nextState;
 }
 async function listQueueChatIds(chatId) {
@@ -1488,7 +1750,7 @@ async function listQueueChatIds(chatId) {
     return [normalizedChatId];
   }
   try {
-    const entries = await fs3.readdir(AGENT_WORLD_QUEUES_ROOT, { withFileTypes: true });
+    const entries = await fs4.readdir(AGENT_WORLD_QUEUES_ROOT, { withFileTypes: true });
     return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json")).map((entry) => entry.name.replace(/\.json$/u, "")).sort((left, right) => left.localeCompare(right));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
@@ -1718,6 +1980,7 @@ var AgentWorldRuntime = class {
   queueProcessingChats = /* @__PURE__ */ new Set();
   blockedQueueChats = /* @__PURE__ */ new Set();
   workspaceRoot;
+  worldId;
   handleToolCall;
   workspace;
   world;
@@ -1730,12 +1993,30 @@ var AgentWorldRuntime = class {
   events;
   constructor(options = {}) {
     this.workspaceRoot = configureWorkspaceRoot(options.workspaceRoot);
+    this.worldId = String(options.worldId ?? "").trim();
+    if (this.worldId) {
+      pinWorkspaceWorld(this.worldId);
+    }
     this.handleToolCall = options.handleToolCall;
     this.workspace = {
-      get: async () => ({ workspaceRoot: this.workspaceRoot, worldLoaded: true }),
+      get: async () => {
+        const worldRef = await ensureWorkspaceWorld(this.worldId ? { worldId: this.worldId } : {});
+        return {
+          workspaceRoot: this.workspaceRoot,
+          worldId: worldRef.worldId,
+          worldRoot: worldRef.worldRoot,
+          worldLoaded: true
+        };
+      },
       open: async (nextPath) => {
         this.workspaceRoot = configureWorkspaceRoot(nextPath);
-        return { workspaceRoot: this.workspaceRoot, worldLoaded: true };
+        const worldRef = await ensureWorkspaceWorld(this.worldId ? { worldId: this.worldId } : {});
+        return {
+          workspaceRoot: this.workspaceRoot,
+          worldId: worldRef.worldId,
+          worldRoot: worldRef.worldRoot,
+          worldLoaded: true
+        };
       },
       close: async () => {
         this.processingChats.clear();
@@ -2444,7 +2725,7 @@ function createAgentWorldRuntime(options = {}) {
 }
 
 // core/workspace-environment.ts
-import path4 from "node:path";
+import path5 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
@@ -2468,7 +2749,7 @@ function loadAllowedDotEnvEnvironment() {
   loadedDotEnvRoots.add(WORKSPACE_ROOT);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(WORKSPACE_ROOT, ".env"),
+    path: path5.join(WORKSPACE_ROOT, ".env"),
     quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -2487,7 +2768,7 @@ function readWorkspaceRootDotEnvFallback() {
   }
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(process.cwd(), ".env"),
+    path: path5.join(process.cwd(), ".env"),
     quiet: true
   }).parsed ?? {};
   const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
@@ -3083,10 +3364,10 @@ function summarizePathExistsResult(result, forcedDurationMs) {
   const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const exists = readFirstBoolean(record, "exists");
-  const path6 = readFirstString(record, "path", "filePath");
+  const path7 = readFirstString(record, "path", "filePath");
   const type = readFirstString(record, "type", "kind");
   const preview = [
-    path6 ? truncateOneLine(`path: ${path6}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    path7 ? truncateOneLine(`path: ${path7}`, MAX_PREVIEW_LINE_WIDTH) : null,
     type ? `type: ${type}` : null
   ].filter((line) => line !== null);
   return {
@@ -3241,7 +3522,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
   const data = parseJsonRecord2(readDataField(result));
   const contentType = readFirstString(data, "contentType") ?? "content";
   const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
-  const path6 = readFirstString(data, "path");
+  const path7 = readFirstString(data, "path");
   const content = readFirstString(data, "content");
   const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
   const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
@@ -3250,7 +3531,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
     ok: true,
     durationMs,
     summary,
-    preview: path6 ? [`path: ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    preview: path7 ? [`path: ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
     raw: result
   };
 }
@@ -3262,13 +3543,13 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
   const data = isRecord2(record?.data) ? record.data : null;
-  const path6 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const path7 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
     name: toolName,
     ok: true,
     durationMs,
-    summary: path6 ? `${summary} \xB7 ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    summary: path7 ? `${summary} \xB7 ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH)}` : summary,
     raw: result
   };
 }
@@ -3469,16 +3750,21 @@ function formatToolResultDiagnostic(toolResult, mode = "default") {
 }
 
 // cli/src/agent-world-cli.ts
-var VALUE_FLAGS = /* @__PURE__ */ new Set(["workspace", "project", "name", "provider", "model", "chat", "agent"]);
+var VALUE_FLAGS = /* @__PURE__ */ new Set(["workspace", "project", "world", "name", "provider", "model", "chat", "agent"]);
 var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["default", "queue", "help"]);
 function usageText() {
   return [
     "agent-world-cli commands:",
-    "  agent-world-cli [--workspace <path>] <command>",
+    "  agent-world-cli [--workspace <path>] [--world <id>] <command>",
     "  agent-world-cli [--project <path>] <command>",
     "  help",
     "  interactive",
     "  world",
+    "  worlds list",
+    "  worlds create <worldId> [--name <name>] [--default]",
+    "  worlds use <worldId>",
+    "  worlds rename <worldId> --name <name>",
+    "  worlds delete <worldId>",
     "  agents list",
     "  agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]",
     "  agents delete <agentId>",
@@ -3499,6 +3785,11 @@ function interactiveHelpText() {
     "agent-world-cli interactive commands:",
     "  /help",
     "  /world",
+    "  /worlds list",
+    "  /worlds create <worldId> [--name <name>] [--default]",
+    "  /worlds use <worldId>",
+    "  /worlds rename <worldId> --name <name>",
+    "  /worlds delete <worldId>",
     "  /agents list",
     "  /agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]",
     "  /agents delete <agentId>",
@@ -3729,6 +4020,36 @@ async function executeAgentWorldCommand(parsed, io, runtime, options = {}) {
     writeJson(io, await runtime.world.get());
     return 0;
   }
+  if (area === "worlds") {
+    if (action === "list") {
+      writeJson(io, await listWorkspaceWorlds());
+      return 0;
+    }
+    if (action === "create") {
+      const worldId = requireValue(rest[0], "world ID");
+      writeJson(io, await createWorkspaceWorld({
+        worldId,
+        ...flagString(parsed.flags, "name") ? { name: flagString(parsed.flags, "name") } : {},
+        select: flagBoolean(parsed.flags, "default")
+      }));
+      return 0;
+    }
+    if (action === "use") {
+      writeJson(io, await selectWorkspaceWorld(requireValue(rest[0], "world ID")));
+      return 0;
+    }
+    if (action === "rename") {
+      writeJson(io, await renameWorkspaceWorld(
+        requireValue(rest[0], "world ID"),
+        requireValue(flagString(parsed.flags, "name"), "world name")
+      ));
+      return 0;
+    }
+    if (action === "delete") {
+      writeJson(io, await deleteWorkspaceWorld(requireValue(rest[0], "world ID")));
+      return 0;
+    }
+  }
   if (area === "agents") {
     if (action === "list") {
       writeJson(io, await runtime.agents.list());
@@ -3858,6 +4179,8 @@ function toInteractiveArgv(line) {
       return ["interactive-help"];
     case "world":
       return ["world", ...rest];
+    case "worlds":
+      return ["worlds", ...rest];
     case "agents":
       return ["agents", ...rest];
     case "chats":
@@ -4059,8 +4382,11 @@ async function runAgentWorldCli(argv = process.argv.slice(2), io = defaultIo()) 
     const workspaceRoot = prepareWorkspaceEnvironment(
       flagString(parsed.flags, "workspace") ?? flagString(parsed.flags, "project")
     );
+    const worldId = flagString(parsed.flags, "world");
+    await ensureWorkspaceWorld(worldId ? { worldId } : {});
     const runtime = createAgentWorldRuntime({
       workspaceRoot,
+      ...worldId ? { worldId } : {},
       autoResume: false
     });
     if (!area || area === "interactive") {
@@ -4081,7 +4407,7 @@ function isAgentWorldCliEntrypoint(argvPath = process.argv[1], moduleUrl = impor
   try {
     return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
   } catch {
-    return pathToFileURL(path5.resolve(argvPath)).href === moduleUrl;
+    return pathToFileURL(path6.resolve(argvPath)).href === moduleUrl;
   }
 }
 async function main() {

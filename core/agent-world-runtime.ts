@@ -8,8 +8,10 @@
  * - Owns typed world, agent, chat, event, queue, and message API surfaces.
  * - Routes user messages with Agent World paragraph-beginning @mention semantics.
  * - Persists per-agent memory and durable per-chat queue rows without replacing agent-runtime.
+ * - Resolves world state through a workspace-level selected-world registry.
  *
  * Recent changes:
+ * - 2026-05-23: Added selected-world runtime option for multi-world workspaces.
  * - 2026-05-23: Included agent id in per-send stream/tool callbacks for CLI speaker labels.
  * - 2026-05-23: Added per-send stream/tool callbacks for terminal renderers without relying on global events.
  * - 2026-05-23: Moved from CLI source into core while keeping HITL UI in shell layers.
@@ -51,9 +53,12 @@ import {
   updateQueuedMessage,
   updateWorldMetadata,
 } from './world-store.js';
+import { ensureWorkspaceWorld, pinWorkspaceWorld } from './workspace-store.js';
 
 export interface WorkspaceState {
   workspaceRoot: string;
+  worldId?: string;
+  worldRoot?: string;
   worldLoaded: boolean;
 }
 
@@ -306,6 +311,7 @@ export interface AgentWorldApi {
 
 export interface AgentWorldRuntimeOptions {
   workspaceRoot?: string;
+  worldId?: string;
   autoResume?: boolean;
   handleToolCall?: WorldToolCallHandler;
 }
@@ -419,6 +425,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
   private queueProcessingChats = new Set<string>();
   private blockedQueueChats = new Set<string>();
   private workspaceRoot: string;
+  private worldId: string;
   private handleToolCall?: WorldToolCallHandler;
 
   workspace: AgentWorldApi['workspace'];
@@ -433,13 +440,31 @@ export class AgentWorldRuntime implements AgentWorldApi {
 
   constructor(options: AgentWorldRuntimeOptions = {}) {
     this.workspaceRoot = configureWorkspaceRoot(options.workspaceRoot);
+    this.worldId = String(options.worldId ?? '').trim();
+    if (this.worldId) {
+      pinWorkspaceWorld(this.worldId);
+    }
     this.handleToolCall = options.handleToolCall;
 
     this.workspace = {
-      get: async () => ({ workspaceRoot: this.workspaceRoot, worldLoaded: true }),
+      get: async () => {
+        const worldRef = await ensureWorkspaceWorld(this.worldId ? { worldId: this.worldId } : {});
+        return {
+          workspaceRoot: this.workspaceRoot,
+          worldId: worldRef.worldId,
+          worldRoot: worldRef.worldRoot,
+          worldLoaded: true,
+        };
+      },
       open: async (nextPath: string) => {
         this.workspaceRoot = configureWorkspaceRoot(nextPath);
-        return { workspaceRoot: this.workspaceRoot, worldLoaded: true };
+        const worldRef = await ensureWorkspaceWorld(this.worldId ? { worldId: this.worldId } : {});
+        return {
+          workspaceRoot: this.workspaceRoot,
+          worldId: worldRef.worldId,
+          worldRoot: worldRef.worldRoot,
+          worldLoaded: true,
+        };
       },
       close: async () => {
         this.processingChats.clear();

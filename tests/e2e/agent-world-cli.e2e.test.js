@@ -160,7 +160,7 @@ describe('agent-world-cli binary', () => {
     const selected = parseJsonOutput((await runAgentWorldCli(rootPath, ['chats', 'use', created.chatId])).stdout);
     expect(selected.chatId).toBe(created.chatId);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(world.currentChatId).toBe(created.chatId);
   });
 
@@ -230,8 +230,8 @@ describe('agent-world-cli binary', () => {
     expect(result.stdout).toContain('"content": "@reviewer interactive token"');
     expect(result.stdout).toContain('"cleared": true');
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const queue = await readJson(path.join(rootPath, '.agent-world', 'queues', `${world.currentChatId}.json`));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const queue = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'queues', `${world.currentChatId}.json`));
     expect(queue.rows).toEqual([]);
   });
 });

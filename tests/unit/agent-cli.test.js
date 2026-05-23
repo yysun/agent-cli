@@ -93,14 +93,14 @@ async function writeRootRuntimeConfig(rootPath, runtimeConfig) {
  * @param {Record<string, unknown>} runtimeConfig
  */
 async function writeAgentRuntimeConfig(rootPath, agentId, runtimeConfig) {
-  await mkdir(path.join(rootPath, '.agent-world', 'agents', agentId), { recursive: true });
-  await writeFile(path.join(rootPath, '.agent-world', 'world.json'), `${JSON.stringify({
+  await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', agentId), { recursive: true });
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
     id: 'world-1',
     name: 'Test World',
     defaultAgentId: agentId,
     currentChatId: 'chat-1',
   }, null, 2)}\n`, 'utf8');
-  await writeFile(path.join(rootPath, '.agent-world', 'agents', agentId, 'runtime.json'), `${JSON.stringify({ schemaVersion: 1, ...runtimeConfig }, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', agentId, 'runtime.json'), `${JSON.stringify({ schemaVersion: 1, ...runtimeConfig }, null, 2)}\n`, 'utf8');
 }
 
 /**
@@ -346,8 +346,8 @@ describe('agent-cli entrypoint', () => {
       initialMessage: undefined,
     }));
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const remoteState = await readJson(path.join(rootPath, '.agent-world', 'agents', 'default', 'state.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const remoteState = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'state.json'));
 
     expect(world.currentChatId).toBeTruthy();
     expect(remoteState.currentChatId).toBe(world.currentChatId);
@@ -382,9 +382,9 @@ describe('agent-cli entrypoint', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
     await writeFile(
-      path.join(rootPath, '.agent-world', 'remote-host.lock.json'),
+      path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'),
       `${JSON.stringify({ chatId: 'chat-remote-1', pid: process.pid }, null, 2)}\n`,
       'utf8',
     );
@@ -850,7 +850,10 @@ describe('agent-cli entrypoint', () => {
 
     await main(['--workspace', rootPath, '--new-chat', 'hello'], createIoCapture());
 
-    expect(await readdir(path.join(rootPath, '.agent-world'))).toContain('world.json');
+    expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
+      expect.arrayContaining(['registry.json', 'worlds']),
+    );
+    expect(await readdir(path.join(rootPath, '.agent-world', 'worlds'))).toContain('default');
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
   });
 
@@ -882,9 +885,9 @@ describe('agent-cli entrypoint', () => {
       'hello',
     ], createIoCapture());
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'agent.json'));
-    const runtime = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'runtime.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'agent.json'));
+    const runtime = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'runtime.json'));
 
     expect(world.defaultAgentId).toBe('research');
     expect(agent).toMatchObject({
@@ -914,8 +917,8 @@ describe('agent-cli entrypoint', () => {
 
     await main(['--new-agent', 'draft', '--help'], createIoCapture(), { interactivePrompt });
 
-    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'draft', 'agent.json'));
-    const runtime = await readJson(path.join(rootPath, '.agent-world', 'agents', 'draft', 'runtime.json'));
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'draft', 'agent.json'));
+    const runtime = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'draft', 'runtime.json'));
 
     expect(interactivePrompt.question).toHaveBeenCalledWith('Agent name (draft agent): ');
     expect(interactivePrompt.question).toHaveBeenCalledWith('Provider (openai): ');
@@ -1254,8 +1257,8 @@ describe('agent-cli entrypoint', () => {
 
     await main(['--new-chat', '--stream-trace', 'hello'], createIoCapture());
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const events = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'default', 'events.jsonl'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const events = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'events.jsonl'));
 
     expect(events.every((event) => event.chatId === world.currentChatId)).toBe(true);
     expect(events.some((event) => event.type === 'warning')).toBe(true);
@@ -1281,7 +1284,7 @@ describe('agent-cli entrypoint', () => {
 
     await expect(main(['--new-chat', '--stream-trace', 'hello'], createIoCapture())).rejects.toThrow('Synthetic turn failure');
 
-    const events = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'default', 'events.jsonl'));
+    const events = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'events.jsonl'));
 
     expect(events.some((event) => event.type === 'error')).toBe(true);
     expect(events.some((event) => String(event.text).includes('Synthetic turn failure'))).toBe(true);
@@ -1365,7 +1368,7 @@ describe('agent-cli entrypoint', () => {
       'Unsupported LLM provider: unsupported-provider',
     );
     await expect(
-      readFile(path.join(rootPath, '.agent-world', 'chats'), 'utf8'),
+      readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats'), 'utf8'),
     ).rejects.toThrow();
   });
 

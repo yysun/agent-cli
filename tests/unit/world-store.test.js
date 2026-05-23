@@ -9,8 +9,10 @@
  * - Covers world bootstrap, current-chat selection, and agent-scoped trace/state files.
  * - Covers named-agent creation and selection.
  * - Verifies tool metadata survives JSONL serialization.
+ * - Verifies default-world storage under `.agent-world/worlds/default`.
  *
  * Recent changes:
+ * - 2026-05-23: Updated fixtures for multi-world storage paths.
  * - 2026-05-20: Added named-agent selection coverage.
  * - 2026-05-14: Reworked coverage for `.agent-world` storage.
  */
@@ -90,31 +92,31 @@ describe('world-store', () => {
       ],
     });
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(world.defaultAgentId).toBe('default');
     expect(world.currentChatId).toBe(chat.id);
 
-    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'default', 'agent.json'));
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'agent.json'));
     expect(agent).toMatchObject({
       id: 'default',
       provider: 'openai',
       model: 'gpt-5',
     });
 
-    const storedChat = await readJson(path.join(rootPath, '.agent-world', 'chats', chat.id, 'chat.json'));
+    const storedChat = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', chat.id, 'chat.json'));
     expect(storedChat).toMatchObject({
       id: chat.id,
       agentId: 'default',
       messageCount: 2,
     });
 
-    const storedMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', chat.id, 'messages.jsonl'));
+    const storedMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', chat.id, 'messages.jsonl'));
     expect(storedMessages).toHaveLength(2);
     expect(storedMessages[0]).toMatchObject({ role: 'user', content: 'Hello' });
     expect(storedMessages[1]).toMatchObject({ role: 'assistant', content: 'Hi' });
     expect(storedMessages[1].tool_calls).toHaveLength(1);
 
-    await expect(readFile(path.join(rootPath, '.agent-world', 'chats', chat.id, 'summary.md'), 'utf8')).resolves.toBe('');
+    await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', chat.id, 'summary.md'), 'utf8')).resolves.toBe('');
   });
 
   it('creates and selects a named agent with metadata and runtime config', async () => {
@@ -130,9 +132,9 @@ describe('world-store', () => {
       model: 'gemma4:e4b',
     });
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
-    const agent = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'agent.json'));
-    const runtime = await readJson(path.join(rootPath, '.agent-world', 'agents', 'research', 'runtime.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'agent.json'));
+    const runtime = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'runtime.json'));
 
     expect(world.defaultAgentId).toBe('research');
     expect(world.currentChatId).toBe('');
@@ -187,9 +189,9 @@ describe('world-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
     await writeFile(
-      path.join(rootPath, '.agent-world', 'world.json'),
+      path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'),
       `${JSON.stringify({
         id: 'world-1',
         name: 'Test World',
@@ -229,7 +231,7 @@ describe('world-store', () => {
       ],
     });
 
-    const events = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'default', 'events.jsonl'));
+    const events = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'events.jsonl'));
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({ kind: 'stream_trace', chatId: chat.id, type: 'warning' });
     expect(events[1]).toMatchObject({ kind: 'stream_trace', chatId: chat.id, type: 'text', text: 'Hi' });
@@ -273,7 +275,7 @@ describe('world-store', () => {
       },
     });
 
-    const state = await readJson(path.join(rootPath, '.agent-world', 'agents', 'default', 'state.json'));
+    const state = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'state.json'));
     expect(state.currentChatId).toBe(secondChat.id);
     expect(state.remoteSession).toMatchObject({
       sessionId: 'relay-session-1',
@@ -361,7 +363,7 @@ describe('world-store', () => {
 
     await setCurrentChat(secondChat.id);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(world.currentChatId).toBe(secondChat.id);
 
     const current = await loadRequestedChat({ newChat: false });
@@ -409,14 +411,14 @@ describe('world-store', () => {
 
     await acquireRemoteHostLock({ chat });
 
-    const remoteLock = await readJson(path.join(rootPath, '.agent-world', 'remote-host.lock.json'));
+    const remoteLock = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'));
     expect(remoteLock).toMatchObject({
       chatId: chat.id,
       pid: process.pid,
     });
 
     await expect(releaseRemoteHostLock()).resolves.toBe(true);
-    await expect(readFile(path.join(rootPath, '.agent-world', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+    await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
   });
 
   it('updates the remote host lock when the active chat changes', async () => {
@@ -434,7 +436,7 @@ describe('world-store', () => {
     await acquireRemoteHostLock({ chat });
     await expect(updateRemoteHostLock({ chatId: 'chat-switched-1' })).resolves.toBe(true);
 
-    const remoteLock = await readJson(path.join(rootPath, '.agent-world', 'remote-host.lock.json'));
+    const remoteLock = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'));
     expect(remoteLock).toMatchObject({
       chatId: 'chat-switched-1',
       pid: process.pid,
@@ -448,9 +450,9 @@ describe('world-store', () => {
     rootsToClean.push(rootPath);
 
     const { assertNoActiveRemoteHost } = await loadWorldStore(rootPath);
-    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
     await writeFile(
-      path.join(rootPath, '.agent-world', 'remote-host.lock.json'),
+      path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'),
       JSON.stringify({ chatId: 'chat-remote-1', pid: process.pid }, null, 2),
       'utf8',
     );
@@ -465,7 +467,7 @@ describe('world-store', () => {
     rootsToClean.push(rootPath);
 
     const { assertNoActiveRemoteHost } = await loadWorldStore(rootPath);
-    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
     const processKillSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const error = new Error('ESRCH');
       // @ts-expect-error test-only process error shape
@@ -474,13 +476,13 @@ describe('world-store', () => {
     });
 
     await writeFile(
-      path.join(rootPath, '.agent-world', 'remote-host.lock.json'),
+      path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'),
       JSON.stringify({ chatId: 'chat-stale-1', pid: 999999 }, null, 2),
       'utf8',
     );
 
     await expect(assertNoActiveRemoteHost()).resolves.toBeNull();
-    await expect(readFile(path.join(rootPath, '.agent-world', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
+    await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'), 'utf8')).rejects.toBeTruthy();
 
     processKillSpy.mockRestore();
   });

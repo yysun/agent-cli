@@ -126,37 +126,40 @@ The deterministic relay and remote-host e2e coverage confirms that a real `agent
 
 - System prompt: `./AGENTS.md`
 - Repo runtime defaults: `./runtime.json`
-- Skills root: `./.agent-world/skills/`
-- Durable world root: `./.agent-world/`
+- Workspace skills root: `./.agent-world/skills/`
+- Durable workspace state root: `./.agent-world/`
 
 Durable local state lives under `./.agent-world/`:
-- `world.json` stores world identity plus `defaultAgentId` and `currentChatId`
-- `chats/{chatId}/chat.json`, `messages.jsonl`, and `summary.md` store chat metadata, ordered message history, and summary text
-- `agents/{agentId}/agent.json`, `inbox.jsonl`, `state.json`, `events.jsonl`, and `memory.md` store agent-scoped metadata, inbox, mutable state, event traces, and memory
+- `registry.json` stores the workspace world registry plus `currentWorldId`
+- `skills/` stores workspace-shared skills
+- `worlds/{worldId}/world.json` stores world identity plus `defaultAgentId` and `currentChatId`
+- `worlds/{worldId}/skills/` stores skills that apply only to that world
+- `worlds/{worldId}/chats/{chatId}/chat.json`, `messages.jsonl`, and `summary.md` store chat metadata, ordered message history, and summary text
+- `worlds/{worldId}/agents/{agentId}/agent.json`, `inbox.jsonl`, `state.json`, `events.jsonl`, and `memory.md` store agent-scoped metadata, inbox, mutable state, event traces, and memory
 
-Agent runtime config can live in `./.agent-world/agents/{agentId}/agent.json` and `./.agent-world/agents/{agentId}/runtime.json`. `agent.json` provides the agent identity plus provider/model fallback; `runtime.json` stores runtime overrides and wins over matching `agent.json` fields.
+Agent runtime config can live in `./.agent-world/worlds/{worldId}/agents/{agentId}/agent.json` and `./.agent-world/worlds/{worldId}/agents/{agentId}/runtime.json`. `agent.json` provides the agent identity plus provider/model fallback; `runtime.json` stores runtime overrides and wins over matching `agent.json` fields.
 
-Remote host coordination also lives under `./.agent-world/remote-host.lock.json` while a `--remote` host session is active. Agent CLI now treats `./.agent-world/` as the only supported local storage contract for world, chat, agent, and remote-host state.
+Remote host coordination lives under `./.agent-world/worlds/{worldId}/remote-host.lock.json` while a `--remote` host session is active. Remote locks are scoped to the selected world.
 
-While a CLI process is running in `--remote` mode for a workspace root, other CLI invocations from that same root are rejected until the remote host exits. A stale lock from a dead process is cleared automatically on the next start.
+While a CLI process is running in `--remote` mode for a world, other CLI invocations for that same world are rejected until the remote host exits. A stale lock from a dead process is cleared automatically on the next start.
 
 The CLI always includes a built-in default system prompt.
 If `./AGENTS.md` is present and non-empty, its content is added after the built-in prompt and before tools/skills guidance.
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
-If `./.agent-world/skills/` is missing, the CLI continues with an empty skill inventory.
+If `./.agent-world/skills/` and the selected world's `skills/` directory are missing, the CLI continues with an empty skill inventory.
 
-The CLI uses `--workspace <path>` as the workspace root when provided, otherwise legacy `--project <path>`, otherwise `AGENT_CLI_WORKSPACE`, otherwise legacy `AGENT_CLI_ROOT`, otherwise either value from the current working directory's `.env`, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that workspace root.
+The CLI uses `--workspace <path>` as the workspace root when provided, otherwise legacy `--project <path>`, otherwise `AGENT_CLI_WORKSPACE`, otherwise legacy `AGENT_CLI_ROOT`, otherwise either value from the current working directory's `.env`, otherwise the current working directory. `AGENTS.md`, workspace skills, runtime files, `.agent-world/` workspace storage, the agent tool working directory, and the local `.env` lookup all resolve from that workspace root. `--world <id>` or `AGENT_CLI_WORLD` selects a world inside the workspace; otherwise the workspace registry's current world is used.
 
-Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agent-world/skills/`.
+Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agent-world/skills/` and `./.agent-world/worlds/{worldId}/skills/`. World-level skills override workspace-level skills with the same `skillId`.
 
 ### Runtime Configuration
 
 Runtime defaults can come from three file layers:
 - `./runtime.json`
-- `./.agent-world/agents/{agentId}/agent.json`
-- `./.agent-world/agents/{agentId}/runtime.json`
+- `./.agent-world/worlds/{worldId}/agents/{agentId}/agent.json`
+- `./.agent-world/worlds/{worldId}/agents/{agentId}/runtime.json`
 
-Precedence is: CLI flags, then agent-level `runtime.json`, then agent-level `agent.json`, then repo-root `runtime.json`. `--agent-id <id>` selects the agent for the invocation. `--new-agent <id>` creates the folder under `./.agent-world/agents/{id}`, prompts for missing name/provider/model when running interactively, writes `agent.json` and `runtime.json`, and sets `world.json.defaultAgentId`.
+Precedence is: CLI flags, then selected-world agent-level `runtime.json`, then selected-world agent-level `agent.json`, then repo-root `runtime.json`. `--agent-id <id>` selects the agent for the invocation. `--new-agent <id>` creates the folder under `./.agent-world/worlds/{worldId}/agents/{id}`, prompts for missing name/provider/model when running interactively, writes `agent.json` and `runtime.json`, and sets the selected world's `world.json.defaultAgentId`.
 
 The runtime file schema currently supports:
 

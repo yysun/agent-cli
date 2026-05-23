@@ -7,9 +7,11 @@
  *
  * Key features:
  * - Creates temporary Agent CLI roots with AGENTS/.agent-world fixtures on demand.
+ * - Provides helpers for selected-world fixture paths.
  * - Provides JSON and stdout helpers used by both unit and e2e suites.
  *
  * Recent changes:
+ * - 2026-05-23: Added default-world path helper for multi-world storage tests.
  * - 2026-05-07: Added shared test-fixture helpers for unit and e2e coverage.
  * - 2026-05-23: Added optional TTY flags to output capture helpers.
  */
@@ -38,6 +40,14 @@ export async function writeSystemPrompt(rootPath, content = 'System prompt') {
 /** @param {string} rootPath */
 export async function ensureSkillsRoot(rootPath) {
   await mkdir(path.join(rootPath, '.agent-world', 'skills'), { recursive: true });
+}
+
+/**
+ * @param {string} rootPath
+ * @param {string} [worldId]
+ */
+export function buildWorldRoot(rootPath, worldId = 'default') {
+  return path.join(rootPath, '.agent-world', 'worlds', worldId);
 }
 
 /**

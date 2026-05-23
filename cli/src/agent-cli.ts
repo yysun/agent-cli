@@ -6,11 +6,13 @@
  *
  * Key features:
  * - Applies workspace-root and runtime overrides before loading workspace-local resources.
+ * - Selects the active world before resolving world-owned chats, agents, queues, or remote locks.
  * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
  * - Selects and initializes named agents before resolving runtime config.
  * - Prints startup diagnostics for workspace root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-23: Added --world selection for multi-world workspaces.
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
  * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
  * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
@@ -31,6 +33,7 @@ import {
   WORKSPACE_ROOT_ENV_KEY,
 } from '../../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
+import { ensureWorkspaceWorld } from '../../core/workspace-store.js';
 import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
@@ -68,6 +71,7 @@ export interface ParsedArguments {
   runtimeOverrides: Record<string, unknown>;
   workspaceRoot?: string;
   projectRoot?: string;
+  worldId?: string;
   streamOff: boolean;
   verbose: boolean;
   message: string;
@@ -97,7 +101,7 @@ export function usageText(): string {
     '  --past-messages <count>           --stream-trace <true|false>',
     '  --web-search <true|false|low|medium|high>',
     '  --agent-id <id>                  --new-agent <id>',
-    '  --workspace <path>',
+    '  --workspace <path>               --world <id>',
     '  --remote',
     '',
     `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
@@ -179,6 +183,7 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let newAgentId: string | undefined;
   let workspaceRoot: string | undefined;
   let projectRoot: string | undefined;
+  let worldId: string | undefined;
   const messageParts: string[] = [];
   const runtimeOverrides: Record<string, unknown> = {};
 
@@ -319,6 +324,13 @@ export function parseArguments(argv: string[]): ParsedArguments {
         continue;
       }
 
+      if (flagName === 'world') {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        worldId = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
+
       if (flagName === 'model') {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         runtimeOverrides.model = result.value;
@@ -398,6 +410,7 @@ export function parseArguments(argv: string[]): ParsedArguments {
     ...(newAgentId !== undefined ? { newAgentId } : {}),
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
+    ...(worldId !== undefined ? { worldId } : {}),
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
@@ -631,6 +644,7 @@ export async function main(
     newAgentId,
     workspaceRoot,
     projectRoot,
+    worldId,
     remoteControl,
     runtimeOverrides,
     streamOff,
@@ -638,6 +652,7 @@ export async function main(
     message,
   } = parseArguments(argv);
   prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
+  await ensureWorkspaceWorld(worldId ? { worldId } : {});
   const parsedArguments = {
     help,
     ...(agentId !== undefined ? { agentId } : {}),
@@ -645,6 +660,7 @@ export async function main(
     ...(newAgentId !== undefined ? { newAgentId } : {}),
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
+    ...(worldId !== undefined ? { worldId } : {}),
     remoteControl,
     runtimeOverrides,
     streamOff,
@@ -804,6 +820,7 @@ export async function runCli(
   try {
     const parsed = parseArguments(argv);
     prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
+    await ensureWorkspaceWorld(parsed.worldId ? { worldId: parsed.worldId } : {});
 
     await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {

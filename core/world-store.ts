@@ -7,12 +7,13 @@
  *
  * Key features:
  * - Bootstraps `world.json`, default-agent records, and chat directories on demand.
- * - Creates and selects named agents under `.agent-world/agents/{agentId}`.
+ * - Creates and selects named agents under the selected world's `agents/{agentId}`.
  * - Keeps the exported world/chat store API stable for the CLI and remote host.
  * - Provides structured agent memory and per-chat queue helpers for the world runtime API.
+ * - Resolves world-owned state through the workspace registry before touching disk.
  *
  * Recent changes:
- * - 2026-05-23: Renamed from session-store to world-store to match module ownership.
+ * - 2026-05-23: Routed world state through selected `.agent-world/worlds/{worldId}` roots.
  * - 2026-05-23: Added agent-level memory JSONL and durable per-chat queue persistence.
  * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
  * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.
@@ -45,6 +46,7 @@ import {
   WORKSPACE_ROOT,
   WORLD_STATE_PATH,
 } from './paths.js';
+import { ensureWorkspaceWorld } from './workspace-store.js';
 
 const DEFAULT_AGENT_ID = 'default';
 
@@ -291,6 +293,7 @@ async function ensureRemoteHostLockDirectory() {
 }
 
 async function ensureAgentWorldDirectories() {
+  await ensureWorkspaceWorld();
   await Promise.all([
     fs.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
     fs.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
@@ -821,6 +824,7 @@ export async function loadAgentMemory(options = {}) {
 }
 
 export async function assertNoActiveRemoteHost() {
+  await ensureWorkspaceWorld();
   const remoteLock = await readRemoteHostLock();
 
   if (!remoteLock) {
@@ -839,6 +843,7 @@ export async function assertNoActiveRemoteHost() {
  * @param {{ chat: { id: string } }} params
  */
 export async function acquireRemoteHostLock({ chat }) {
+  await ensureWorkspaceWorld();
   await ensureRemoteHostLockDirectory();
   const now = new Date().toISOString();
 
@@ -876,6 +881,7 @@ export async function acquireRemoteHostLock({ chat }) {
 }
 
 export async function releaseRemoteHostLock() {
+  await ensureWorkspaceWorld();
   const remoteLock = await readRemoteHostLock();
 
   if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
@@ -890,6 +896,7 @@ export async function releaseRemoteHostLock() {
  * @param {{ chatId: string }} params
  */
 export async function updateRemoteHostLock({ chatId }) {
+  await ensureWorkspaceWorld();
   const remoteLock = await readRemoteHostLock();
 
   if (!remoteLock || Number(remoteLock.pid) !== process.pid) {

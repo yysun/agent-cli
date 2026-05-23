@@ -8,11 +8,12 @@
  * Key features:
  * - Normalizes common aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
  * - Loads repo-root runtime defaults from `./runtime.json` when present.
- * - Applies agent metadata and runtime overrides from `./.agent-world/agents/{agentId}`.
+ * - Applies selected-world agent metadata and runtime overrides.
  * - Validates supported enum values before runtime calls.
  * - Keeps runtime override parsing separate from provider credential environment variables.
  *
  * Recent changes:
+ * - 2026-05-23: Resolve selected-world state before reading agent runtime defaults.
  * - 2026-05-20: Load provider/model fallback from agent.json before agent runtime.json.
  * - 2026-05-07: Retired JSON config-file loading in favor of CLI/runtime-file config.
  * - 2026-05-14: Restored optional runtime.json defaults at the repo root and default-agent scope.
@@ -26,6 +27,7 @@ import {
   ROOT_RUNTIME_CONFIG_PATH,
   WORLD_STATE_PATH,
 } from './paths.js';
+import { ensureWorkspaceWorld } from './workspace-store.js';
 
 const REASONING_EFFORTS = new Set(['default', 'none', 'low', 'medium', 'high']);
 const TOOL_PERMISSIONS = new Set(['auto', 'ask', 'read']);
@@ -395,6 +397,7 @@ function normalizeAgentId(agentId) {
 }
 
 async function loadDefaultAgentIdFromWorld() {
+  await ensureWorkspaceWorld();
   const world = await readJsonFileIfPresent(WORLD_STATE_PATH, 'world metadata');
 
   if (!world) {
@@ -408,6 +411,7 @@ async function loadDefaultAgentIdFromWorld() {
  * @param {{ agentId?: string }} [options]
  */
 export async function loadPersistedRuntimeConfig(options = {}) {
+  await ensureWorkspaceWorld();
   const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
   const configuredAgentId = normalizeAgentId(options.agentId);
   const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();

@@ -5,6 +5,8 @@
  */
 export * as agentRuntime from './agent-runtime.js';
 export * as agentWorldRuntime from './agent-world-runtime.js';
+export * as workspaceStore from './workspace-store.js';
 
 export * from './agent-runtime.js';
 export * from './agent-world-runtime.js';
+export * from './workspace-store.js';

@@ -384,7 +384,7 @@ async function readJsonl(filePath) {
  * @param {string} chatId
  */
 async function readDefaultMemory(rootPath, chatId) {
-  const rows = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'default', 'memory.jsonl'));
+  const rows = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'memory.jsonl'));
   return rows.filter((row) => String(row.chatId ?? '') === chatId);
 }
 

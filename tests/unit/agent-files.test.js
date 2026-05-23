@@ -7,9 +7,11 @@
  *
  * Key features:
  * - Exercises recursive skill discovery and front matter parsing.
+ * - Verifies workspace and selected-world skill inventory layering.
  * - Verifies the helper text exposed to the runtime.
  *
  * Recent changes:
+ * - 2026-05-23: Added selected-world skill override coverage.
  * - 2026-05-23: Renamed AGENTS.md prompt tests from project to workspace terminology.
  * - 2026-05-07: Added targeted Vitest coverage for agent file loading.
  * - 2026-05-11: Added coverage for separate built-in and workspace prompt sources.
@@ -34,6 +36,7 @@ async function loadAgentFiles(rootPath) {
 
 afterEach(async () => {
   process.chdir(originalCwd);
+  delete process.env.AGENT_CLI_WORLD;
   vi.doUnmock('node:fs');
 
   while (rootsToClean.length > 0) {
@@ -74,6 +77,49 @@ describe('agent-files', () => {
         skillId: 'zeta-skill',
         description: 'Loaded last.',
       }),
+    ]);
+  });
+
+  it('layers selected-world skills over workspace skills while keeping AGENTS.md workspace-only', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await writeSystemPrompt(rootPath, 'Workspace-only prompt');
+    await writeSkill(rootPath, 'shared', {
+      name: 'shared-skill',
+      description: 'Workspace shared.',
+    });
+    await writeSkill(rootPath, 'duplicate', {
+      name: 'duplicate-skill',
+      description: 'Workspace duplicate.',
+    });
+    const worldSkillsRoot = path.join(rootPath, '.agent-world', 'worlds', 'research', 'skills');
+    await mkdir(path.join(worldSkillsRoot, 'world-only'), { recursive: true });
+    await writeFile(
+      path.join(worldSkillsRoot, 'world-only', 'SKILL.md'),
+      ['---', 'name: world-skill', 'description: World only.', '---', '', '# World', ''].join('\n'),
+      'utf8',
+    );
+    await mkdir(path.join(worldSkillsRoot, 'duplicate'), { recursive: true });
+    await writeFile(
+      path.join(worldSkillsRoot, 'duplicate', 'SKILL.md'),
+      ['---', 'name: duplicate-skill', 'description: World duplicate.', '---', '', '# Override', ''].join('\n'),
+      'utf8',
+    );
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'research', 'AGENTS.md'), 'Wrong prompt\n', 'utf8');
+    process.env.AGENT_CLI_WORLD = 'research';
+
+    const { loadSkillInventory, loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
+
+    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('Workspace-only prompt');
+    await expect(loadSkillInventory()).resolves.toEqual([
+      expect.objectContaining({
+        skillId: 'duplicate-skill',
+        description: 'World duplicate.',
+        sourcePath: expect.stringContaining(path.join('worlds', 'research', 'skills')),
+      }),
+      expect.objectContaining({ skillId: 'shared-skill', description: 'Workspace shared.' }),
+      expect.objectContaining({ skillId: 'world-skill', description: 'World only.' }),
     ]);
   });
 

@@ -103,7 +103,7 @@ describe('agent-world-runtime', () => {
     expect(runChatTurn.mock.calls[0][0].historyMessageLimit).toBe(0);
     expect(runChatTurn.mock.calls[0][0].workspaceSystemPrompt).toContain('World runtime context:');
     expect(observed.map((event) => event.type)).toContain('assistant_chunk');
-    const memory = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'default', 'memory.jsonl'));
+    const memory = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'memory.jsonl'));
     expect(memory).toEqual([
       expect.objectContaining({ role: 'user', content: 'hi', agentId: 'default', chatId: result.chatId }),
       expect.objectContaining({ role: 'assistant', content: 'hello', agentId: 'default', chatId: result.chatId }),
@@ -134,9 +134,9 @@ describe('agent-world-runtime', () => {
     const result = await runtime.messages.send({ content: '@second-agent summarize this' });
 
     expect(result.agentIds).toEqual(['second-agent']);
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(world.defaultAgentId).toBe('default');
-    const routedMemory = await readJsonl(path.join(rootPath, '.agent-world', 'agents', 'second-agent', 'memory.jsonl'));
+    const routedMemory = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'second-agent', 'memory.jsonl'));
     expect(routedMemory).toEqual([
       expect.objectContaining({ content: '@second-agent summarize this', agentId: 'second-agent' }),
       expect.objectContaining({ content: 'routed', agentId: 'second-agent' }),
@@ -168,7 +168,7 @@ describe('agent-world-runtime', () => {
     const result = await runtime.messages.send({ content: 'handle this' });
 
     expect(result.agentIds).toEqual(['main-agent']);
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(world.defaultAgentId).toBe('default');
   });
 
@@ -314,7 +314,7 @@ describe('agent-world-runtime', () => {
       status: 'sending',
     });
     createAgentWorldRuntime({ autoResume: true });
-    await waitFor(async () => (await setupRuntime.queue.list(chatId)).length === 0);
+    await waitFor(async () => (await setupRuntime.queue.list(chatId)).length === 0, 3000);
     expect(runChatTurn).toHaveBeenCalledTimes(1);
 
     await addQueuedMessage({

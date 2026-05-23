@@ -6,18 +6,19 @@ var __export = (target, all) => {
 };
 
 // cli/src/agent-cli.ts
-import path5 from "node:path";
+import path6 from "node:path";
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // core/agent-config.ts
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 
 // core/paths.ts
 import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
+var WORLD_ID_ENV_KEY = "AGENT_CLI_WORLD";
 function resolveWorkspaceRoot(workspaceRoot) {
   const configuredRoot = [
     workspaceRoot,
@@ -32,11 +33,27 @@ var SYSTEM_PROMPT_PATH = "";
 var ROOT_RUNTIME_CONFIG_PATH = "";
 var SKILLS_ROOT = "";
 var AGENT_WORLD_ROOT = "";
+var WORKSPACE_REGISTRY_PATH = "";
+var AGENT_WORLD_WORLDS_ROOT = "";
+var ACTIVE_WORLD_ID = "";
+var ACTIVE_WORLD_ROOT = "";
 var WORLD_STATE_PATH = "";
 var AGENT_WORLD_CHATS_ROOT = "";
 var AGENT_WORLD_AGENTS_ROOT = "";
 var AGENT_WORLD_QUEUES_ROOT = "";
+var WORLD_SKILLS_ROOT = "";
 var REMOTE_HOST_LOCK_PATH = "";
+function configureActiveWorldPaths(worldId = "default") {
+  ACTIVE_WORLD_ID = String(worldId || "default").trim() || "default";
+  ACTIVE_WORLD_ROOT = path.join(AGENT_WORLD_WORLDS_ROOT, ACTIVE_WORLD_ID);
+  WORLD_STATE_PATH = path.join(ACTIVE_WORLD_ROOT, "world.json");
+  AGENT_WORLD_CHATS_ROOT = path.join(ACTIVE_WORLD_ROOT, "chats");
+  AGENT_WORLD_AGENTS_ROOT = path.join(ACTIVE_WORLD_ROOT, "agents");
+  AGENT_WORLD_QUEUES_ROOT = path.join(ACTIVE_WORLD_ROOT, "queues");
+  WORLD_SKILLS_ROOT = path.join(ACTIVE_WORLD_ROOT, "skills");
+  REMOTE_HOST_LOCK_PATH = path.join(ACTIVE_WORLD_ROOT, "remote-host.lock.json");
+  return ACTIVE_WORLD_ROOT;
+}
 function configureWorkspaceRoot(workspaceRoot) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
   REPO_ROOT = WORKSPACE_ROOT;
@@ -44,12 +61,13 @@ function configureWorkspaceRoot(workspaceRoot) {
   ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, "runtime.json");
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
-  WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
-  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
-  AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
-  AGENT_WORLD_QUEUES_ROOT = path.join(AGENT_WORLD_ROOT, "queues");
-  REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+  WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, "registry.json");
+  AGENT_WORLD_WORLDS_ROOT = path.join(AGENT_WORLD_ROOT, "worlds");
+  configureActiveWorldPaths(ACTIVE_WORLD_ID || "default");
   return WORKSPACE_ROOT;
+}
+function configureActiveWorld(worldId) {
+  return configureActiveWorldPaths(worldId);
 }
 configureWorkspaceRoot();
 function buildWorldChatDirectoryPath(chatId) {
@@ -87,6 +105,136 @@ function buildAgentMemoryLogPath(agentId) {
 }
 function buildAgentRuntimeConfigPath(agentId) {
   return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
+}
+
+// core/workspace-store.ts
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path2 from "node:path";
+var DEFAULT_WORLD_ID = "default";
+var REGISTRY_SCHEMA_VERSION = 1;
+var pinnedWorldId = "";
+function normalizeWorldId(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const slug = normalized.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || DEFAULT_WORLD_ID;
+}
+function pinWorkspaceWorld(worldId) {
+  pinnedWorldId = normalizeWorldId(worldId);
+  configureActiveWorld(pinnedWorldId);
+  return pinnedWorldId;
+}
+function defaultWorldName() {
+  return path2.basename(WORKSPACE_ROOT) || "Default";
+}
+async function writeJsonAtomic(filePath, value) {
+  const directoryPath = path2.dirname(filePath);
+  const fileName = path2.basename(filePath);
+  const temporaryPath = path2.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  await fs.mkdir(directoryPath, { recursive: true });
+  await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+`, "utf8");
+  await fs.rename(temporaryPath, filePath);
+}
+async function readJsonIfPresent(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+function normalizeRegistry(value) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const registry = value && typeof value === "object" ? value : {};
+  const rawWorlds = Array.isArray(registry.worlds) ? registry.worlds : [];
+  const worlds = rawWorlds.map((world) => {
+    if (!world || typeof world !== "object") {
+      return null;
+    }
+    const id = normalizeWorldId(world.id);
+    return {
+      id,
+      name: String(world.name ?? id).trim() || id,
+      createdAt: String(world.createdAt ?? now),
+      updatedAt: String(world.updatedAt ?? world.createdAt ?? now)
+    };
+  }).filter(Boolean);
+  if (!worlds.some((world) => world?.id === DEFAULT_WORLD_ID)) {
+    worlds.unshift({
+      id: DEFAULT_WORLD_ID,
+      name: defaultWorldName(),
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  const currentWorldId = normalizeWorldId(registry.currentWorldId);
+  const selectedWorldId = worlds.some((world) => world?.id === currentWorldId) ? currentWorldId : DEFAULT_WORLD_ID;
+  return {
+    schemaVersion: REGISTRY_SCHEMA_VERSION,
+    currentWorldId: selectedWorldId,
+    worlds,
+    createdAt: String(registry.createdAt ?? now),
+    updatedAt: String(registry.updatedAt ?? now)
+  };
+}
+async function readWorkspaceRegistry() {
+  const registry = await readJsonIfPresent(WORKSPACE_REGISTRY_PATH);
+  return normalizeRegistry(registry);
+}
+async function writeWorkspaceRegistry(registry) {
+  const nextRegistry = {
+    ...registry,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await writeJsonAtomic(WORKSPACE_REGISTRY_PATH, nextRegistry);
+  return nextRegistry;
+}
+async function ensureWorldDirectories(worldId) {
+  const worldRoot = path2.join(AGENT_WORLD_WORLDS_ROOT, normalizeWorldId(worldId));
+  await Promise.all([
+    fs.mkdir(worldRoot, { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "agents"), { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "chats"), { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "queues"), { recursive: true }),
+    fs.mkdir(path2.join(worldRoot, "skills"), { recursive: true })
+  ]);
+  return worldRoot;
+}
+async function ensureWorkspaceWorld(options = {}) {
+  await fs.mkdir(AGENT_WORLD_ROOT, { recursive: true });
+  await fs.mkdir(path2.join(AGENT_WORLD_ROOT, "skills"), { recursive: true });
+  await fs.mkdir(AGENT_WORLD_WORLDS_ROOT, { recursive: true });
+  let registry = await readWorkspaceRegistry();
+  const envWorldId = String(process.env[WORLD_ID_ENV_KEY] ?? "").trim();
+  const requestedWorldId = options.worldId ? pinWorkspaceWorld(options.worldId) : envWorldId ? pinWorkspaceWorld(envWorldId) : pinnedWorldId;
+  if (requestedWorldId && !registry.worlds.some((world) => world.id === requestedWorldId)) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    registry.worlds.push({
+      id: requestedWorldId,
+      name: String(options.name ?? requestedWorldId).trim() || requestedWorldId,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  const selectedWorldId = requestedWorldId || normalizeWorldId(registry.currentWorldId);
+  const nextCurrentWorldId = options.select || !registry.currentWorldId ? selectedWorldId : normalizeWorldId(registry.currentWorldId);
+  registry = {
+    ...registry,
+    currentWorldId: nextCurrentWorldId
+  };
+  registry = await writeWorkspaceRegistry(registry);
+  const activeWorldId = selectedWorldId || registry.currentWorldId || DEFAULT_WORLD_ID;
+  await ensureWorldDirectories(activeWorldId);
+  configureActiveWorld(activeWorldId);
+  return {
+    workspaceRoot: WORKSPACE_ROOT,
+    worldId: ACTIVE_WORLD_ID,
+    worldRoot: ACTIVE_WORLD_ROOT,
+    registry
+  };
 }
 
 // core/agent-config.ts
@@ -276,7 +424,7 @@ function normalizeAgentConfig(source) {
 async function readJsonFileIfPresent(filePath, label) {
   let content;
   try {
-    content = await fs.readFile(filePath, "utf8");
+    content = await fs2.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -322,6 +470,7 @@ function normalizeAgentId(agentId) {
   return normalizedAgentId;
 }
 async function loadDefaultAgentIdFromWorld() {
+  await ensureWorkspaceWorld();
   const world = await readJsonFileIfPresent(WORLD_STATE_PATH, "world metadata");
   if (!world) {
     return "";
@@ -329,6 +478,7 @@ async function loadDefaultAgentIdFromWorld() {
   return normalizeAgentId(world.defaultAgentId);
 }
 async function loadPersistedRuntimeConfig(options = {}) {
+  await ensureWorkspaceWorld();
   const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
   const configuredAgentId = normalizeAgentId(options.agentId);
   const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
@@ -347,8 +497,8 @@ async function loadPersistedRuntimeConfig(options = {}) {
 }
 
 // core/agent-files.ts
-import { promises as fs2 } from "node:fs";
-import path2 from "node:path";
+import { promises as fs3 } from "node:fs";
+import path3 from "node:path";
 var DEFAULT_SYSTEM_PROMPT = [
   "You are Agent CLI.",
   "Be concise, factual, and action-oriented.",
@@ -364,7 +514,7 @@ function getBuiltInSystemPrompt() {
 async function assertReadableFile(filePath, label) {
   let stats;
   try {
-    stats = await fs2.stat(filePath);
+    stats = await fs3.stat(filePath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -378,7 +528,7 @@ async function assertReadableFile(filePath, label) {
 async function assertReadableDirectory(directoryPath, label) {
   let stats;
   try {
-    stats = await fs2.stat(directoryPath);
+    stats = await fs3.stat(directoryPath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -421,10 +571,10 @@ async function collectSkillFilePaths(rootPath) {
     if (!currentPath) {
       continue;
     }
-    const entries = await fs2.readdir(currentPath, { withFileTypes: true });
+    const entries = await fs3.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const entryPath = path2.join(currentPath, entry.name);
+      const entryPath = path3.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         queue.push(entryPath);
         continue;
@@ -445,22 +595,22 @@ async function loadWorkspaceSystemPrompt() {
     }
     throw error;
   }
-  const content = (await fs2.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+  const content = (await fs3.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
   return content;
 }
-async function loadSkillInventory() {
+async function loadSkillInventoryFromRoot(skillsRoot) {
   try {
-    await assertReadableDirectory(SKILLS_ROOT, "skills root");
+    await assertReadableDirectory(skillsRoot, "skills root");
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Missing skills root:")) {
       return [];
     }
     throw error;
   }
-  const skillFilePaths = await collectSkillFilePaths(SKILLS_ROOT);
+  const skillFilePaths = await collectSkillFilePaths(skillsRoot);
   const skills = [];
   for (const skillFilePath of skillFilePaths) {
-    const content = await fs2.readFile(skillFilePath, "utf8");
+    const content = await fs3.readFile(skillFilePath, "utf8");
     const metadata = parseSkillFrontMatter(content);
     if (!metadata.skillId) {
       continue;
@@ -472,6 +622,17 @@ async function loadSkillInventory() {
     });
   }
   return skills;
+}
+async function loadSkillInventory() {
+  await ensureWorkspaceWorld();
+  const skillsById = /* @__PURE__ */ new Map();
+  for (const skill of await loadSkillInventoryFromRoot(SKILLS_ROOT)) {
+    skillsById.set(skill.skillId, skill);
+  }
+  for (const skill of await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT)) {
+    skillsById.set(skill.skillId, skill);
+  }
+  return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
 }
 function buildSkillInventoryMessage(skills) {
   if (skills.length === 0) {
@@ -490,7 +651,7 @@ function buildSkillInventoryMessage(skills) {
 }
 
 // core/workspace-environment.ts
-import path3 from "node:path";
+import path4 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
@@ -514,7 +675,7 @@ function loadAllowedDotEnvEnvironment() {
   loadedDotEnvRoots.add(WORKSPACE_ROOT);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path3.join(WORKSPACE_ROOT, ".env"),
+    path: path4.join(WORKSPACE_ROOT, ".env"),
     quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -533,7 +694,7 @@ function readWorkspaceRootDotEnvFallback() {
   }
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path3.join(process.cwd(), ".env"),
+    path: path4.join(process.cwd(), ".env"),
     quiet: true
   }).parsed ?? {};
   const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
@@ -547,12 +708,12 @@ function prepareWorkspaceEnvironment(workspaceRoot) {
 }
 
 // core/world-store.ts
-import { randomUUID } from "node:crypto";
-import { promises as fs3 } from "node:fs";
-import path4 from "node:path";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { promises as fs4 } from "node:fs";
+import path5 from "node:path";
 var DEFAULT_AGENT_ID = "default";
-function defaultWorldName() {
-  return path4.basename(WORKSPACE_ROOT) || "agent-world";
+function defaultWorldName2() {
+  return path5.basename(WORKSPACE_ROOT) || "agent-world";
 }
 function normalizeAgentId2(agentId) {
   const normalizedAgentId = String(agentId ?? "").trim();
@@ -563,10 +724,10 @@ function normalizeAgentId2(agentId) {
 }
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  return `${timestamp}-${randomUUID().slice(0, 8)}`;
+  return `${timestamp}-${randomUUID2().slice(0, 8)}`;
 }
 function createWorldId() {
-  return randomUUID();
+  return randomUUID2();
 }
 function normalizeTimestamp(value, fallbackTimestamp) {
   if (typeof value === "string" && value.trim()) {
@@ -617,22 +778,22 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
     ...toolCalls ? { tool_calls: toolCalls } : {}
   };
 }
-async function writeJsonAtomic(filePath, value) {
-  const directoryPath = path4.dirname(filePath);
-  const fileName = path4.basename(filePath);
-  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs3.mkdir(directoryPath, { recursive: true });
-  await fs3.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+async function writeJsonAtomic2(filePath, value) {
+  const directoryPath = path5.dirname(filePath);
+  const fileName = path5.basename(filePath);
+  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  await fs4.mkdir(directoryPath, { recursive: true });
+  await fs4.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
-  await fs3.rename(temporaryPath, filePath);
+  await fs4.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
-  const directoryPath = path4.dirname(filePath);
-  const fileName = path4.basename(filePath);
-  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs3.mkdir(directoryPath, { recursive: true });
-  await fs3.writeFile(temporaryPath, text, "utf8");
-  await fs3.rename(temporaryPath, filePath);
+  const directoryPath = path5.dirname(filePath);
+  const fileName = path5.basename(filePath);
+  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
+  await fs4.mkdir(directoryPath, { recursive: true });
+  await fs4.writeFile(temporaryPath, text, "utf8");
+  await fs4.rename(temporaryPath, filePath);
 }
 async function writeJsonlAtomic(filePath, values) {
   const serialized = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}
@@ -643,15 +804,15 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs3.mkdir(path4.dirname(filePath), { recursive: true });
+  await fs4.mkdir(path5.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
-  await fs3.appendFile(filePath, serialized, "utf8");
+  await fs4.appendFile(filePath, serialized, "utf8");
 }
 async function readJson(filePath, missingMessage, invalidMessage) {
   let rawContent;
   try {
-    rawContent = await fs3.readFile(filePath, "utf8");
+    rawContent = await fs4.readFile(filePath, "utf8");
   } catch {
     throw new Error(missingMessage);
   }
@@ -661,9 +822,9 @@ async function readJson(filePath, missingMessage, invalidMessage) {
     throw new Error(invalidMessage);
   }
 }
-async function readJsonIfPresent(filePath) {
+async function readJsonIfPresent2(filePath) {
   try {
-    return JSON.parse(await fs3.readFile(filePath, "utf8"));
+    return JSON.parse(await fs4.readFile(filePath, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -673,7 +834,7 @@ async function readJsonIfPresent(filePath) {
 }
 async function pathExists(filePath) {
   try {
-    await fs3.access(filePath);
+    await fs4.access(filePath);
     return true;
   } catch {
     return false;
@@ -688,7 +849,7 @@ async function ensureTextFile(filePath, defaultText = "") {
 async function readJsonl(filePath) {
   let rawContent;
   try {
-    rawContent = await fs3.readFile(filePath, "utf8");
+    rawContent = await fs4.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(`Missing chat session file: ${filePath}`);
@@ -703,14 +864,15 @@ async function readJsonl(filePath) {
   }
 }
 async function ensureRemoteHostLockDirectory() {
-  await fs3.mkdir(path4.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
+  await fs4.mkdir(path5.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
 }
 async function ensureAgentWorldDirectories() {
+  await ensureWorkspaceWorld();
   await Promise.all([
-    fs3.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
+    fs4.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs4.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs4.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
+    fs4.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
   ]);
 }
 function isProcessRunning(pid) {
@@ -749,7 +911,7 @@ function buildRemoteHostConflictError(remoteLock) {
 }
 async function readRemoteHostLock() {
   try {
-    return JSON.parse(await fs3.readFile(REMOTE_HOST_LOCK_PATH, "utf8"));
+    return JSON.parse(await fs4.readFile(REMOTE_HOST_LOCK_PATH, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -777,12 +939,12 @@ async function inferDefaultAgentRuntime(agentId) {
 }
 async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(agentId));
+  const existingAgentMetadata = await readJsonIfPresent2(buildAgentMetadataPath(agentId));
   const inferredRuntime = await inferDefaultAgentRuntime(agentId);
-  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName()} agent`).trim() || `${defaultWorldName()} agent`;
+  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName2()} agent`).trim() || `${defaultWorldName2()} agent`;
   const provider = String(metadata.provider ?? existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider;
   const model = String(metadata.model ?? existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model;
-  await writeJsonAtomic(buildAgentMetadataPath(agentId), {
+  await writeJsonAtomic2(buildAgentMetadataPath(agentId), {
     id: agentId,
     name,
     provider,
@@ -791,14 +953,14 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
     updatedAt: now
   });
   if (metadata.provider || metadata.model || !await pathExists(buildAgentRuntimeConfigPath(agentId))) {
-    await writeJsonAtomic(buildAgentRuntimeConfigPath(agentId), {
+    await writeJsonAtomic2(buildAgentRuntimeConfigPath(agentId), {
       schemaVersion: 1,
       provider,
       model
     });
   }
   if (!await pathExists(buildAgentStatePath(agentId))) {
-    await writeJsonAtomic(buildAgentStatePath(agentId), {
+    await writeJsonAtomic2(buildAgentStatePath(agentId), {
       id: agentId,
       updatedAt: now
     });
@@ -809,7 +971,7 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   await ensureTextFile(buildAgentMemoryLogPath(agentId));
 }
 async function readWorldState() {
-  const world = await readJsonIfPresent(WORLD_STATE_PATH);
+  const world = await readJsonIfPresent2(WORLD_STATE_PATH);
   if (!world || typeof world !== "object") {
     return null;
   }
@@ -821,7 +983,7 @@ async function writeWorldState({ world, updates }) {
     ...updates,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await writeJsonAtomic(WORLD_STATE_PATH, nextWorld);
+  await writeJsonAtomic2(WORLD_STATE_PATH, nextWorld);
   return nextWorld;
 }
 async function persistWorldChat(chat, agentId) {
@@ -840,7 +1002,7 @@ async function persistWorldChat(chat, agentId) {
     updatedAt,
     messageCount: messages.length
   };
-  await writeJsonAtomic(buildWorldChatMetadataPath(chat.id), metadata);
+  await writeJsonAtomic2(buildWorldChatMetadataPath(chat.id), metadata);
   await writeJsonlAtomic(buildWorldChatMessagesPath(chat.id), messages);
   await ensureTextFile(buildWorldChatSummaryPath(chat.id));
   return {
@@ -856,7 +1018,7 @@ async function ensureWorldBootstrap() {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     world = {
       id: createWorldId(),
-      name: defaultWorldName(),
+      name: defaultWorldName2(),
       defaultAgentId: DEFAULT_AGENT_ID,
       currentChatId: "",
       createdAt: now,
@@ -879,7 +1041,7 @@ async function ensureWorldBootstrap() {
 }
 async function loadAgentMetadata(agentId) {
   const normalizedAgentId = normalizeAgentId2(agentId);
-  const metadata = await readJsonIfPresent(buildAgentMetadataPath(normalizedAgentId));
+  const metadata = await readJsonIfPresent2(buildAgentMetadataPath(normalizedAgentId));
   return metadata && typeof metadata === "object" ? metadata : null;
 }
 async function ensureAgentSelection(options = {}) {
@@ -923,6 +1085,7 @@ async function loadWorldChatById(chatId) {
   };
 }
 async function assertNoActiveRemoteHost() {
+  await ensureWorkspaceWorld();
   const remoteLock = await readRemoteHostLock();
   if (!remoteLock) {
     return null;
@@ -930,10 +1093,11 @@ async function assertNoActiveRemoteHost() {
   if (isActiveRemoteHostLock(remoteLock)) {
     throw buildRemoteHostConflictError(remoteLock);
   }
-  await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+  await fs4.rm(REMOTE_HOST_LOCK_PATH, { force: true });
   return null;
 }
 async function acquireRemoteHostLock({ chat }) {
+  await ensureWorkspaceWorld();
   await ensureRemoteHostLockDirectory();
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const remoteLock = {
@@ -944,7 +1108,7 @@ async function acquireRemoteHostLock({ chat }) {
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await fs3.writeFile(
+      await fs4.writeFile(
         REMOTE_HOST_LOCK_PATH,
         `${JSON.stringify(remoteLock, null, 2)}
 `,
@@ -959,25 +1123,27 @@ async function acquireRemoteHostLock({ chat }) {
       if (isActiveRemoteHostLock(existingRemoteLock)) {
         throw buildRemoteHostConflictError(existingRemoteLock);
       }
-      await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+      await fs4.rm(REMOTE_HOST_LOCK_PATH, { force: true });
     }
   }
   throw new Error("Failed to acquire the remote host lock for this workspace root.");
 }
 async function releaseRemoteHostLock() {
+  await ensureWorkspaceWorld();
   const remoteLock = await readRemoteHostLock();
   if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
     return false;
   }
-  await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+  await fs4.rm(REMOTE_HOST_LOCK_PATH, { force: true });
   return true;
 }
 async function updateRemoteHostLock({ chatId }) {
+  await ensureWorkspaceWorld();
   const remoteLock = await readRemoteHostLock();
   if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
     return false;
   }
-  await writeJsonAtomic(REMOTE_HOST_LOCK_PATH, {
+  await writeJsonAtomic2(REMOTE_HOST_LOCK_PATH, {
     ...remoteLock,
     chatId,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -995,7 +1161,7 @@ async function loadChatById(chatId) {
 async function listPersistedChats() {
   const world = await ensureWorldBootstrap();
   const currentChatId = String(world.currentChatId ?? "").trim();
-  const entries = await fs3.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
+  const entries = await fs4.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
   const chats = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -1005,7 +1171,7 @@ async function listPersistedChats() {
     if (!chatId) {
       continue;
     }
-    const metadata = await readJsonIfPresent(buildWorldChatMetadataPath(chatId));
+    const metadata = await readJsonIfPresent2(buildWorldChatMetadataPath(chatId));
     if (!metadata || typeof metadata !== "object") {
       continue;
     }
@@ -1107,9 +1273,9 @@ async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
 async function persistRemoteSessionState({ chatId, remoteSession }) {
   const world = await ensureWorldBootstrap();
   const statePath = buildAgentStatePath(String(world.defaultAgentId));
-  const existingState = await readJsonIfPresent(statePath);
+  const existingState = await readJsonIfPresent2(statePath);
   const currentChatId = String(chatId ?? world.currentChatId ?? "").trim();
-  await writeJsonAtomic(statePath, {
+  await writeJsonAtomic2(statePath, {
     ...existingState && typeof existingState === "object" ? existingState : {},
     id: String(world.defaultAgentId),
     currentChatId,
@@ -1135,7 +1301,7 @@ __export(relay_client_exports, {
   revokeRelaySession: () => revokeRelaySession,
   sendRelayCommand: () => sendRelayCommand
 });
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 function normalizeRelayServerUrl(rawUrl) {
   const normalized = String(rawUrl ?? "").trim();
   if (!normalized) {
@@ -1159,7 +1325,7 @@ var RelayClientError = class extends Error {
   }
 };
 function createRelayIdempotencyKey(prefix) {
-  return `${prefix}-${randomUUID2()}`;
+  return `${prefix}-${randomUUID3()}`;
 }
 function buildUrl(relayServer, pathname, query = {}) {
   const url = new URL(pathname, `${normalizeRelayServerUrl(relayServer)}/`);
@@ -2777,10 +2943,10 @@ function summarizePathExistsResult(result, forcedDurationMs) {
   const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const exists = readFirstBoolean(record, "exists");
-  const path6 = readFirstString(record, "path", "filePath");
+  const path7 = readFirstString(record, "path", "filePath");
   const type = readFirstString(record, "type", "kind");
   const preview = [
-    path6 ? truncateOneLine(`path: ${path6}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    path7 ? truncateOneLine(`path: ${path7}`, MAX_PREVIEW_LINE_WIDTH) : null,
     type ? `type: ${type}` : null
   ].filter((line) => line !== null);
   return {
@@ -2935,7 +3101,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
   const data = parseJsonRecord2(readDataField(result));
   const contentType = readFirstString(data, "contentType") ?? "content";
   const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
-  const path6 = readFirstString(data, "path");
+  const path7 = readFirstString(data, "path");
   const content = readFirstString(data, "content");
   const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
   const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
@@ -2944,7 +3110,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
     ok: true,
     durationMs,
     summary,
-    preview: path6 ? [`path: ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    preview: path7 ? [`path: ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
     raw: result
   };
 }
@@ -2956,13 +3122,13 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
   const data = isRecord2(record?.data) ? record.data : null;
-  const path6 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const path7 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
     name: toolName,
     ok: true,
     durationMs,
-    summary: path6 ? `${summary} \xB7 ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    summary: path7 ? `${summary} \xB7 ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH)}` : summary,
     raw: result
   };
 }
@@ -3388,7 +3554,7 @@ function usageText() {
     "  --past-messages <count>           --stream-trace <true|false>",
     "  --web-search <true|false|low|medium|high>",
     "  --agent-id <id>                  --new-agent <id>",
-    "  --workspace <path>",
+    "  --workspace <path>               --world <id>",
     "  --remote",
     "",
     `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
@@ -3437,7 +3603,7 @@ function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url
   try {
     return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
   } catch {
-    return pathToFileURL(path5.resolve(argvPath)).href === moduleUrl;
+    return pathToFileURL(path6.resolve(argvPath)).href === moduleUrl;
   }
 }
 function parseArguments(argv) {
@@ -3450,6 +3616,7 @@ function parseArguments(argv) {
   let newAgentId;
   let workspaceRoot;
   let projectRoot;
+  let worldId;
   const messageParts = [];
   const runtimeOverrides = {};
   const normalizeFlagName = (rawValue) => rawValue.trim().toLowerCase();
@@ -3554,6 +3721,12 @@ function parseArguments(argv) {
         index = result.nextIndex;
         continue;
       }
+      if (flagName === "world") {
+        const result = readFlagValue(argv, index, inlineValue, flagName);
+        worldId = String(result.value);
+        index = result.nextIndex;
+        continue;
+      }
       if (flagName === "model") {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         runtimeOverrides.model = result.value;
@@ -3621,6 +3794,7 @@ function parseArguments(argv) {
     ...newAgentId !== void 0 ? { newAgentId } : {},
     ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
+    ...worldId !== void 0 ? { worldId } : {},
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
@@ -3799,6 +3973,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     newAgentId,
     workspaceRoot,
     projectRoot,
+    worldId,
     remoteControl,
     runtimeOverrides,
     streamOff,
@@ -3806,6 +3981,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     message
   } = parseArguments(argv);
   prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
+  await ensureWorkspaceWorld(worldId ? { worldId } : {});
   const parsedArguments = {
     help,
     ...agentId !== void 0 ? { agentId } : {},
@@ -3813,6 +3989,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     ...newAgentId !== void 0 ? { newAgentId } : {},
     ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
+    ...worldId !== void 0 ? { worldId } : {},
     remoteControl,
     runtimeOverrides,
     streamOff,
@@ -3946,6 +4123,7 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
   try {
     const parsed = parseArguments(argv);
     prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
+    await ensureWorkspaceWorld(parsed.worldId ? { worldId: parsed.worldId } : {});
     await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -8,8 +8,10 @@
  * Key features:
  * - Covers help output, world inspection, agent/chat mutations, and provider-free queued sends.
  * - Exercises the same runtime-backed paths as the published `agent-world-cli` binary.
+ * - Verifies workspace-level world management commands.
  *
  * Recent changes:
+ * - 2026-05-23: Added multi-world command and isolation coverage.
  * - 2026-05-23: Added workspace resolution parity coverage for agent-world-cli.
  * - 2026-05-23: Added interactive stream and tool diagnostic coverage.
  * - 2026-05-23: Added scripted interactive-mode coverage.
@@ -21,7 +23,7 @@ import { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createTestRoot, removeTestRoot } from '../helpers/test-root.js';
+import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.js';
 
 const originalCwd = process.cwd();
 /** @type {string[]} */
@@ -29,6 +31,7 @@ const rootsToClean = [];
 const AGENT_WORLD_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
   'AGENT_CLI_ROOT',
+  'AGENT_CLI_WORLD',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
   'OPENAI_API_KEY',
@@ -174,7 +177,10 @@ describe('agent-world-cli', () => {
 
     expect(await runAgentWorldCli([`--workspace=${rootPath}`, 'chats', 'new'], capture.io)).toBe(0);
 
-    expect(await readdir(path.join(rootPath, '.agent-world'))).toContain('world.json');
+    expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
+      expect.arrayContaining(['registry.json', 'worlds']),
+    );
+    expect(await readdir(path.join(rootPath, '.agent-world', 'worlds'))).toContain('default');
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
   });
 
@@ -197,7 +203,10 @@ describe('agent-world-cli', () => {
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(process.env.AGENT_CLI_RELAY_SERVER_URL).toBe('http://127.0.0.1:8787');
     expect(parseJsonOutput(capture.getStdout())).toMatchObject({ defaultAgentId: 'default' });
-    expect(await readdir(path.join(rootPath, '.agent-world'))).toContain('world.json');
+    expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
+      expect.arrayContaining(['registry.json', 'worlds']),
+    );
+    expect(await readdir(path.join(rootPath, '.agent-world', 'worlds'))).toContain('default');
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
   });
 
@@ -218,7 +227,10 @@ describe('agent-world-cli', () => {
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(parseJsonOutput(capture.getStdout())).toMatchObject({ defaultAgentId: 'default' });
-    expect(await readdir(path.join(workspaceRoot, '.agent-world'))).toContain('world.json');
+    expect(await readdir(path.join(workspaceRoot, '.agent-world'))).toEqual(
+      expect.arrayContaining(['registry.json', 'worlds']),
+    );
+    expect(await readdir(path.join(workspaceRoot, '.agent-world', 'worlds'))).toContain('default');
   });
 
   it('queues sends without dispatching to a provider', async () => {
@@ -247,6 +259,52 @@ describe('agent-world-cli', () => {
     expect(parseJsonOutput(queueCapture.getStdout())).toEqual([
       expect.objectContaining({ content: '@reviewer check this', status: 'queued' }),
     ]);
+  });
+
+  it('creates worlds and isolates current chat state per selected world', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    const { runAgentWorldCli } = await loadAgentWorldCli(rootPath);
+    const createWorldCapture = createIoCapture();
+
+    expect(await runAgentWorldCli(['worlds', 'create', 'research', '--name', 'Research', '--default'], createWorldCapture.io)).toBe(0);
+    expect(parseJsonOutput(createWorldCapture.getStdout())).toMatchObject({
+      id: 'research',
+      name: 'Research',
+    });
+
+    const researchChatCapture = createIoCapture();
+    expect(await runAgentWorldCli(['--world', 'research', 'chats', 'new'], researchChatCapture.io)).toBe(0);
+    const researchChatId = parseJsonOutput(researchChatCapture.getStdout()).chatId;
+    expect(researchChatId).toBeTruthy();
+
+    const defaultWorldCapture = createIoCapture();
+    expect(await runAgentWorldCli(['--world', 'default', 'world'], defaultWorldCapture.io)).toBe(0);
+    expect(parseJsonOutput(defaultWorldCapture.getStdout())).toMatchObject({
+      defaultAgentId: 'default',
+      currentChatId: '',
+    });
+
+    const researchWorld = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'research', 'world.json'));
+    const defaultWorld = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    expect(researchWorld.currentChatId).toBe(researchChatId);
+    expect(defaultWorld.currentChatId).toBe('');
+  });
+
+  it('creates a world without selecting it unless requested', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    const { runAgentWorldCli } = await loadAgentWorldCli(rootPath);
+    const createCapture = createIoCapture();
+
+    expect(await runAgentWorldCli(['worlds', 'create', 'sandbox'], createCapture.io)).toBe(0);
+
+    const listCapture = createIoCapture();
+    expect(await runAgentWorldCli(['worlds', 'list'], listCapture.io)).toBe(0);
+    expect(parseJsonOutput(listCapture.getStdout())).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'default', isCurrent: true }),
+      expect.objectContaining({ id: 'sandbox', isCurrent: false }),
+    ]));
   });
 
   it('runs scripted interactive commands over the shared dispatcher', async () => {

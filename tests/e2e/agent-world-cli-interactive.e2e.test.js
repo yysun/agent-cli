@@ -12,6 +12,7 @@
  *
  * Recent changes:
  * - 2026-05-23: Added monitored stdin/stdout E2E coverage for `agent-world-cli` interactive mode.
+ * - 2026-05-23: Updated prompt expectation for plain interactive prompt.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
@@ -95,7 +96,7 @@ async function startInteractiveCli(rootPath) {
   activeSessions.push(session);
 
   await waitForStdout(session, /agent-world-cli interactive/);
-  await waitForStdout(session, /agent-world> /);
+  await waitForStdout(session, /> /);
   return session;
 }
 
@@ -191,9 +192,9 @@ describe('agent-world-cli monitored interactive process', () => {
     expect(exit).toEqual({ code: 0, signal: null });
     expect(session.stderr).toBe('');
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(world.currentChatId).toBeTruthy();
-    const queue = await readJson(path.join(rootPath, '.agent-world', 'queues', `${world.currentChatId}.json`));
+    const queue = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'queues', `${world.currentChatId}.json`));
     expect(queue.rows).toEqual([]);
   }, 15000);
 });

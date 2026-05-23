@@ -7,10 +7,11 @@
  *
  * Key features:
  * - Covers common field aliases such as `modal`, `tokens`, and `permissions`.
- * - Verifies runtime.json, agent.json, and default-agent runtime overrides merge predictably.
+ * - Verifies workspace runtime.json and selected-world agent runtime overrides merge predictably.
  * - Verifies invalid override values fail early with clear messages.
  *
  * Recent changes:
+ * - 2026-05-23: Updated default-agent fixtures for selected-world storage.
  * - 2026-05-20: Added coverage for agent.json provider/model runtime fallback.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -170,14 +171,14 @@ describe('agent-config', () => {
       pastMessages: 20,
       stream: true,
     }, null, 2)}\n`, 'utf8');
-    await mkdir(path.join(rootPath, '.agent-world', 'agents', 'agent-2'), { recursive: true });
-    await writeFile(path.join(rootPath, '.agent-world', 'world.json'), `${JSON.stringify({
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'agent-2'), { recursive: true });
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
       id: 'world-1',
       name: 'Test World',
       defaultAgentId: 'agent-2',
       currentChatId: 'chat-1',
     }, null, 2)}\n`, 'utf8');
-    await writeFile(path.join(rootPath, '.agent-world', 'agents', 'agent-2', 'runtime.json'), `${JSON.stringify({
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'agent-2', 'runtime.json'), `${JSON.stringify({
       schemaVersion: 1,
       model: 'gpt-5-mini',
       toolPermission: 'read',
@@ -199,14 +200,14 @@ describe('agent-config', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    await mkdir(path.join(rootPath, '.agent-world', 'agents', 'default'), { recursive: true });
-    await writeFile(path.join(rootPath, '.agent-world', 'world.json'), `${JSON.stringify({
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default'), { recursive: true });
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
       id: 'world-1',
       name: 'Test World',
       defaultAgentId: 'default',
       currentChatId: '',
     }, null, 2)}\n`, 'utf8');
-    await writeFile(path.join(rootPath, '.agent-world', 'agents', 'default', 'agent.json'), `${JSON.stringify({
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'agent.json'), `${JSON.stringify({
       id: 'default',
       name: 'Local Agent',
       provider: 'ollama',
