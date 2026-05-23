@@ -51,7 +51,19 @@ const FALLBACK_LIVE_MODELS = {
   xai: 'grok-3-mini',
 };
 
-/** @type {Array<Awaited<ReturnType<typeof startInteractiveCli>>>} */
+/**
+ * @typedef {import('node:child_process').ChildProcessWithoutNullStreams & import('node:events').EventEmitter} EventedInteractiveCliProcess
+ */
+
+/**
+ * @typedef {{
+ *   childProcess: EventedInteractiveCliProcess,
+ *   stdout: string,
+ *   stderr: string,
+ * }} InteractiveCliSession
+ */
+
+/** @type {InteractiveCliSession[]} */
 const activeSessions = [];
 /** @type {string[]} */
 const rootsToClean = [];
@@ -64,7 +76,10 @@ afterEach(async () => {
   }
 
   while (rootsToClean.length > 0) {
-    await removeTestRoot(rootsToClean.pop());
+    const rootPath = rootsToClean.pop();
+    if (rootPath) {
+      await removeTestRoot(rootPath);
+    }
   }
 });
 
@@ -142,9 +157,12 @@ async function writeFlowSystemPrompt(rootPath) {
   ].join(' '));
 }
 
-/** @param {string} rootPath */
+/**
+ * @param {string} rootPath
+ * @returns {Promise<InteractiveCliSession>}
+ */
 async function startInteractiveCli(rootPath) {
-  const childProcess = spawn(process.execPath, [agentWorldCliBin], {
+  const childProcess = /** @type {EventedInteractiveCliProcess} */ (spawn(process.execPath, [agentWorldCliBin], {
     cwd: rootPath,
     env: {
       ...process.env,
@@ -153,7 +171,7 @@ async function startInteractiveCli(rootPath) {
       AGENT_CLI_ROOT: '',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }));
 
   const session = {
     childProcess,
@@ -182,7 +200,7 @@ async function startInteractiveCli(rootPath) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>> | undefined} session
+ * @param {InteractiveCliSession | undefined} session
  */
 async function stopInteractiveCli(session) {
   if (!session) {
@@ -213,7 +231,7 @@ async function stopInteractiveCli(session) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {RegExp} pattern
  * @param {number} [fromIndex]
  */
@@ -233,7 +251,7 @@ async function waitForStdout(session, pattern, fromIndex = 0) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {RegExp} pattern
  * @param {number} [fromIndex]
  */
@@ -253,7 +271,7 @@ async function waitForStderr(session, pattern, fromIndex = 0) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {RegExp[]} patterns
  * @param {number} [fromIndex]
  */
@@ -274,7 +292,7 @@ async function waitForStdoutAny(session, patterns, fromIndex = 0) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} line
  * @param {RegExp} pattern
  */
@@ -285,7 +303,7 @@ async function sendLineAndWaitForStdout(session, line, pattern) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} line
  * @param {RegExp} [pattern]
  */
@@ -312,7 +330,7 @@ async function sendLineAndWaitForCompletion(session, line, pattern = /"assistant
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} line
  * @param {RegExp} pattern
  */
@@ -323,7 +341,7 @@ async function sendLineAndWaitForStderr(session, line, pattern) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} token
  */
 async function sendHitlAndApprove(session, token) {
@@ -334,7 +352,7 @@ async function sendHitlAndApprove(session, token) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} chatId
  * @param {string} messageId
  * @param {string} token
@@ -385,7 +403,7 @@ async function latestUserMessageId(rootPath, chatId) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} label
  */
 async function createChat(session, label) {

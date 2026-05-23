@@ -82,6 +82,7 @@ export interface CreateTurnExecutorOptions {
   io: CliIo;
   verbose: boolean;
   streamOff: boolean;
+  agentId?: string;
   agentConfig: Record<string, unknown>;
   workspaceSystemPrompt?: string;
   projectSystemPrompt?: string;
@@ -303,6 +304,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         },
         builtInSystemPrompt,
         workspaceSystemPrompt: options.workspaceSystemPrompt ?? options.projectSystemPrompt,
+        projectSystemPrompt: options.projectSystemPrompt,
         skillInventory: options.skillInventory,
         agentConfig: options.agentConfig,
       });
@@ -310,6 +312,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       await persistCompletedChat({
         chat,
         messages: turnResult.messages,
+        agentId: options.agentId,
       });
 
       if (streamTraceEnabled) {

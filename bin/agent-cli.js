@@ -3186,12 +3186,14 @@ function createTurnExecutor(options) {
         },
         builtInSystemPrompt,
         workspaceSystemPrompt: options.workspaceSystemPrompt ?? options.projectSystemPrompt,
+        projectSystemPrompt: options.projectSystemPrompt,
         skillInventory: options.skillInventory,
         agentConfig: options.agentConfig
       });
       await persistCompletedChat({
         chat,
-        messages: turnResult.messages
+        messages: turnResult.messages,
+        agentId: options.agentId
       });
       if (streamTraceEnabled) {
         await persistStreamTraceEvents({
@@ -3779,6 +3781,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     io,
     verbose,
     streamOff: effectiveStreamOff,
+    agentId: selectedAgentId,
     agentConfig,
     workspaceSystemPrompt,
     skillInventory
@@ -3792,7 +3795,8 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     try {
       await persistCompletedChat({
         chat,
-        messages: chat.messages
+        messages: chat.messages,
+        agentId: selectedAgentId
       });
       const relaySession = await runRemoteControlSession({
         relayServer,
@@ -3809,6 +3813,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
         initialMessage: message || void 0,
         onSessionReady: async (startedRelaySession) => {
           await persistRemoteSessionState({
+            chatId: chat.id,
             remoteSession: startedRelaySession
           });
         },
@@ -3816,6 +3821,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
         relayClient: relay_client_exports
       });
       await persistRemoteSessionState({
+        chatId: chat.id,
         remoteSession: relaySession
       });
       return relaySession;

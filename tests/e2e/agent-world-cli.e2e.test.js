@@ -26,12 +26,16 @@ import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.j
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const agentWorldCliBin = path.join(repoRoot, 'bin', 'agent-world-cli.js');
+
 /** @type {string[]} */
 const rootsToClean = [];
 
 afterEach(async () => {
   while (rootsToClean.length > 0) {
-    await removeTestRoot(rootsToClean.pop());
+    const rootPath = rootsToClean.pop();
+    if (rootPath) {
+      await removeTestRoot(rootPath);
+    }
   }
 });
 
@@ -65,7 +69,7 @@ async function runAgentWorldCli(rootPath, args) {
  * @param {string[]} lines
  */
 async function runAgentWorldCliInteractive(rootPath, lines) {
-  const childProcess = spawn(process.execPath, [agentWorldCliBin], {
+  const childProcess = /** @type {any} */ (spawn(process.execPath, [agentWorldCliBin], {
     cwd: rootPath,
     env: {
       ...process.env,
@@ -78,7 +82,7 @@ async function runAgentWorldCliInteractive(rootPath, lines) {
       OLLAMA_BASE_URL: '',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }));
 
   let stdout = '';
   let stderr = '';
@@ -96,7 +100,10 @@ async function runAgentWorldCliInteractive(rootPath, lines) {
   }
   childProcess.stdin.end();
 
-  const [code, signal] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(childProcess, 'exit'));
+  const [code, signal] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(
+    /** @type {any} */(childProcess),
+    'exit',
+  ));
 
   return { code, signal, stdout, stderr };
 }

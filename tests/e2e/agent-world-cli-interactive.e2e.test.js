@@ -27,18 +27,30 @@ const START_TIMEOUT_MS = 5000;
 const OUTPUT_TIMEOUT_MS = 5000;
 const CLOSE_TIMEOUT_MS = 1500;
 
-/** @type {Array<Awaited<ReturnType<typeof startInteractiveCli>>>} */
+/**
+ * @typedef {{
+ *   childProcess: any,
+ *   stdout: string,
+ *   stderr: string,
+ * }} InteractiveCliSession
+ */
+
+/** @type {InteractiveCliSession[]} */
 const activeSessions = [];
 /** @type {string[]} */
 const rootsToClean = [];
 
 afterEach(async () => {
   while (activeSessions.length > 0) {
-    await stopInteractiveCli(activeSessions.pop());
+    const session = activeSessions.pop();
+    await stopInteractiveCli(session);
   }
 
   while (rootsToClean.length > 0) {
-    await removeTestRoot(rootsToClean.pop());
+    const rootPath = rootsToClean.pop();
+    if (rootPath) {
+      await removeTestRoot(rootPath);
+    }
   }
 });
 
@@ -55,13 +67,16 @@ function providerFreeEnv() {
   };
 }
 
-/** @param {string} rootPath */
+/**
+ * @param {string} rootPath
+ * @returns {Promise<InteractiveCliSession>}
+ */
 async function startInteractiveCli(rootPath) {
-  const childProcess = spawn(process.execPath, [agentWorldCliBin], {
+  const childProcess = /** @type {any} */ (spawn(process.execPath, [agentWorldCliBin], {
     cwd: rootPath,
     env: providerFreeEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  }));
 
   const session = {
     childProcess,
@@ -85,7 +100,7 @@ async function startInteractiveCli(rootPath) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>> | undefined} session
+ * @param {InteractiveCliSession | undefined} session
  */
 async function stopInteractiveCli(session) {
   if (!session) {
@@ -116,7 +131,7 @@ async function stopInteractiveCli(session) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {RegExp} pattern
  * @param {number} [fromIndex]
  */
@@ -136,7 +151,7 @@ async function waitForStdout(session, pattern, fromIndex = 0) {
 }
 
 /**
- * @param {Awaited<ReturnType<typeof startInteractiveCli>>} session
+ * @param {InteractiveCliSession} session
  * @param {string} line
  * @param {RegExp} pattern
  */
@@ -146,7 +161,7 @@ async function sendLineAndWait(session, line, pattern) {
   return await waitForStdout(session, pattern, cursor);
 }
 
-/** @param {Awaited<ReturnType<typeof startInteractiveCli>>} session */
+/** @param {InteractiveCliSession} session */
 async function exitInteractiveCli(session) {
   const cursor = session.stdout.length;
   session.childProcess.stdin.write('/exit\n');

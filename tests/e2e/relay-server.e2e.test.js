@@ -36,7 +36,11 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const relayServerBin = path.join(repoRoot, 'bin', 'server.js');
 const START_TIMEOUT_MS = 5000;
 
-/** @type {import('node:child_process').ChildProcess[]} */
+/**
+ * @typedef {import('node:child_process').ChildProcess & import('node:events').EventEmitter} EventedChildProcess
+ */
+
+/** @type {EventedChildProcess[]} */
 const relayProcessesToStop = [];
 /** @type {string[]} */
 const tempDirsToRemove = [];
@@ -66,14 +70,14 @@ afterEach(async () => {
 async function startRelayServer(options = {}) {
   const host = options.host ?? '127.0.0.1';
   const extraArgs = options.extraArgs ?? [];
-  const relayProcess = spawn(process.execPath, [relayServerBin, '--host', host, '--port', '0', ...extraArgs], {
+  const relayProcess = /** @type {EventedChildProcess} */ (spawn(process.execPath, [relayServerBin, '--host', host, '--port', '0', ...extraArgs], {
     cwd: repoRoot,
     env: {
       ...process.env,
       PORT: '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }));
   relayProcessesToStop.push(relayProcess);
 
   relayProcess.stdout?.setEncoding('utf8');
@@ -84,6 +88,7 @@ async function startRelayServer(options = {}) {
 
   return await new Promise((resolve, reject) => {
     let settled = false;
+    const relayProcessEvents = /** @type {any} */ (relayProcess);
     const timer = setTimeout(() => {
       finish(
         reject,
@@ -102,8 +107,8 @@ async function startRelayServer(options = {}) {
 
       settled = true;
       clearTimeout(timer);
-      relayProcess.removeListener('error', handleError);
-      relayProcess.removeListener('exit', handleExit);
+      relayProcessEvents.removeListener('error', handleError);
+      relayProcessEvents.removeListener('exit', handleExit);
       callback(value);
     }
 
@@ -123,8 +128,8 @@ async function startRelayServer(options = {}) {
       );
     }
 
-    relayProcess.once('error', handleError);
-    relayProcess.once('exit', handleExit);
+    relayProcessEvents.once('error', handleError);
+    relayProcessEvents.once('exit', handleExit);
     relayProcess.stdout?.on('data', (chunk) => {
       stdout += String(chunk);
       const match = stdout.match(/https?:\/\/[^\s]+/u);
@@ -143,7 +148,7 @@ async function startRelayServer(options = {}) {
   });
 }
 
-/** @param {import('node:child_process').ChildProcess} relayProcess */
+/** @param {EventedChildProcess} relayProcess */
 async function stopRelayProcess(relayProcess) {
   if (relayProcess.exitCode !== null || relayProcess.signalCode !== null) {
     return;
@@ -152,7 +157,7 @@ async function stopRelayProcess(relayProcess) {
   relayProcess.kill('SIGTERM');
 
   const stopped = await Promise.race([
-    once(relayProcess, 'exit').then(() => true),
+    once(/** @type {any} */(relayProcess), 'exit').then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
   ]);
 
@@ -169,7 +174,7 @@ async function stopRelayProcess(relayProcess) {
     return;
   }
 
-  await once(relayProcess, 'exit');
+  await once(/** @type {any} */(relayProcess), 'exit');
 }
 
 async function createTempStaticDir() {
@@ -474,11 +479,17 @@ describe('relay server binary', () => {
       after: 0,
     });
 
-    expect(firstClientEvents.events.map((event) => event.type)).toEqual([
+    expect(firstClientEvents.events.map(
+      /** @param {{ type?: string }} event */
+      (event) => event.type,
+    )).toEqual([
       'run_status',
       'command_result',
     ]);
-    expect(secondClientEvents.events.map((event) => event.type)).toEqual([
+    expect(secondClientEvents.events.map(
+      /** @param {{ type?: string }} event */
+      (event) => event.type,
+    )).toEqual([
       'run_status',
     ]);
     expect(firstClientNotifications).toEqual({

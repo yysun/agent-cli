@@ -775,6 +775,7 @@ export async function main(
     io,
     verbose,
     streamOff: effectiveStreamOff,
+    agentId: selectedAgentId,
     agentConfig,
     workspaceSystemPrompt,
     skillInventory,
@@ -792,6 +793,7 @@ export async function main(
       await persistCompletedChat({
         chat,
         messages: chat.messages,
+        agentId: selectedAgentId,
       });
 
       const relaySession = await runRemoteControlSession({
@@ -809,6 +811,7 @@ export async function main(
         initialMessage: message || undefined,
         onSessionReady: async (startedRelaySession) => {
           await persistRemoteSessionState({
+            chatId: chat.id,
             remoteSession: startedRelaySession,
           });
         },
@@ -817,6 +820,7 @@ export async function main(
       });
 
       await persistRemoteSessionState({
+        chatId: chat.id,
         remoteSession: relaySession,
       });
 

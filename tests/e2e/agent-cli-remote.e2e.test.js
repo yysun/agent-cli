@@ -36,7 +36,11 @@ const relayServerBin = path.join(repoRoot, 'bin', 'server.js');
 const agentCliBin = path.join(repoRoot, 'bin/agent-cli.js');
 const START_TIMEOUT_MS = 5000;
 
-/** @type {import('node:child_process').ChildProcess[]} */
+/**
+ * @typedef {import('node:child_process').ChildProcess & import('node:events').EventEmitter} EventedChildProcess
+ */
+
+/** @type {EventedChildProcess[]} */
 const processesToStop = [];
 /** @type {string[]} */
 const rootsToClean = [];
@@ -59,7 +63,7 @@ afterEach(async () => {
   }
 });
 
-/** @param {import('node:child_process').ChildProcess} childProcess */
+/** @param {EventedChildProcess} childProcess */
 async function stopChildProcess(childProcess) {
   if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
     return;
@@ -68,7 +72,7 @@ async function stopChildProcess(childProcess) {
   childProcess.kill('SIGTERM');
 
   const stopped = await Promise.race([
-    once(childProcess, 'exit').then(() => true),
+    once(/** @type {any} */(childProcess), 'exit').then(() => true),
     new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
   ]);
 
@@ -86,7 +90,7 @@ async function stopChildProcess(childProcess) {
     return;
   }
 
-  await once(childProcess, 'exit');
+  await once(/** @type {any} */(childProcess), 'exit');
 }
 
 /**
@@ -95,14 +99,14 @@ async function stopChildProcess(childProcess) {
  */
 async function startRelayServer(options = {}) {
   const host = options.host ?? '127.0.0.1';
-  const relayProcess = spawn(process.execPath, [relayServerBin, '--host', host, '--port', '0'], {
+  const relayProcess = /** @type {EventedChildProcess} */ (spawn(process.execPath, [relayServerBin, '--host', host, '--port', '0'], {
     cwd: repoRoot,
     env: {
       ...process.env,
       PORT: '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }));
   processesToStop.push(relayProcess);
 
   relayProcess.stdout?.setEncoding('utf8');
@@ -113,6 +117,7 @@ async function startRelayServer(options = {}) {
 
   return await new Promise((resolve, reject) => {
     let settled = false;
+    const relayProcessEvents = /** @type {any} */ (relayProcess);
     const timer = setTimeout(() => {
       finish(
         reject,
@@ -131,8 +136,8 @@ async function startRelayServer(options = {}) {
 
       settled = true;
       clearTimeout(timer);
-      relayProcess.removeListener('error', handleError);
-      relayProcess.removeListener('exit', handleExit);
+      relayProcessEvents.removeListener('error', handleError);
+      relayProcessEvents.removeListener('exit', handleExit);
       callback(value);
     }
 
@@ -152,8 +157,8 @@ async function startRelayServer(options = {}) {
       );
     }
 
-    relayProcess.once('error', handleError);
-    relayProcess.once('exit', handleExit);
+    relayProcessEvents.once('error', handleError);
+    relayProcessEvents.once('exit', handleExit);
     relayProcess.stdout?.on('data', (chunk) => {
       stdout += String(chunk);
       const match = stdout.match(/https?:\/\/[^\s]+/u);
@@ -170,17 +175,17 @@ async function startRelayServer(options = {}) {
 
 /**
  * @param {{ rootPath: string, relayServer: string }} input
- * @returns {Promise<{ cliProcess: import('node:child_process').ChildProcess, clientConnectionUrl: string }>}
+ * @returns {Promise<{ cliProcess: EventedChildProcess, clientConnectionUrl: string }>}
  */
 async function startRemoteCli(input) {
-  const cliProcess = spawn(process.execPath, [agentCliBin, '--remote'], {
+  const cliProcess = /** @type {EventedChildProcess} */ (spawn(process.execPath, [agentCliBin, '--remote'], {
     cwd: input.rootPath,
     env: {
       ...process.env,
       AGENT_CLI_RELAY_SERVER_URL: input.relayServer,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }));
   processesToStop.push(cliProcess);
 
   cliProcess.stdout?.setEncoding('utf8');
@@ -191,6 +196,7 @@ async function startRemoteCli(input) {
 
   return await new Promise((resolve, reject) => {
     let settled = false;
+    const cliProcessEvents = /** @type {any} */ (cliProcess);
     const timer = setTimeout(() => {
       finish(
         reject,
@@ -209,8 +215,8 @@ async function startRemoteCli(input) {
 
       settled = true;
       clearTimeout(timer);
-      cliProcess.removeListener('error', handleError);
-      cliProcess.removeListener('exit', handleExit);
+      cliProcessEvents.removeListener('error', handleError);
+      cliProcessEvents.removeListener('exit', handleExit);
       callback(value);
     }
 
@@ -230,8 +236,8 @@ async function startRemoteCli(input) {
       );
     }
 
-    cliProcess.once('error', handleError);
-    cliProcess.once('exit', handleExit);
+    cliProcessEvents.once('error', handleError);
+    cliProcessEvents.once('exit', handleExit);
     cliProcess.stdout?.on('data', (chunk) => {
       stdout += String(chunk);
       const match = stdout.match(/Client connection URL:\s*(https?:\/\/[^\s]+)/u);
@@ -311,14 +317,17 @@ async function waitForMatchingEvent(input) {
       mobileToken: input.mobileToken,
       after: cursor,
     });
-    const events = backlog.events ?? [];
+    const events = /** @type {Array<{ type?: string, sequence?: number | string, payload?: any }>} */ (backlog.events ?? []);
 
     if (events.length > 0) {
       for (const event of events) {
         seenEventTypes.push(String(event.type ?? 'unknown'));
       }
 
-      cursor = Math.max(cursor, ...events.map((event) => Number(event.sequence) || 0));
+      cursor = Math.max(cursor, ...events.map(
+        /** @param {{ sequence?: number | string }} event */
+        (event) => Number(event.sequence) || 0,
+      ));
       const matchedEvent = events.find(input.matchEvent);
 
       if (matchedEvent) {
@@ -389,8 +398,15 @@ describe('agent-cli --remote host', () => {
       mobileToken: pairResult.mobileToken,
       after: 0,
     });
-    const initialEventTypes = initialBacklog.events.map((event) => event.type);
-    let cursor = Math.max(0, ...initialBacklog.events.map((event) => Number(event.sequence) || 0));
+    const initialEvents = /** @type {Array<{ type?: string, sequence?: number | string, payload?: any }>} */ (initialBacklog.events);
+    const initialEventTypes = initialEvents.map(
+      /** @param {{ type?: string }} event */
+      (event) => event.type,
+    );
+    let cursor = Math.max(0, ...initialEvents.map(
+      /** @param {{ sequence?: number | string }} event */
+      (event) => Number(event.sequence) || 0,
+    ));
 
     expect(initialEventTypes).toContain('session_snapshot');
     expect(initialBacklog.events).toContainEqual(expect.objectContaining({
@@ -415,9 +431,11 @@ describe('agent-cli --remote host', () => {
       sessionId,
       mobileToken: pairResult.mobileToken,
       after: cursor,
-      matchEvent: (event) => event.type === 'command_result'
-        && event.payload?.kind === 'chat_list'
-        && event.payload?.requestId === listRequestId,
+      matchEvent:
+        /** @param {{ type?: string, payload?: any }} event */
+        (event) => event.type === 'command_result'
+          && event.payload?.kind === 'chat_list'
+          && event.payload?.requestId === listRequestId,
     });
     cursor = chatListResult.cursor;
 
@@ -448,9 +466,11 @@ describe('agent-cli --remote host', () => {
       sessionId,
       mobileToken: pairResult.mobileToken,
       after: cursor,
-      matchEvent: (event) => event.type === 'command_result'
-        && event.payload?.kind === 'chat_selected'
-        && event.payload?.requestId === selectRequestId,
+      matchEvent:
+        /** @param {{ type?: string, payload?: any }} event */
+        (event) => event.type === 'command_result'
+          && event.payload?.kind === 'chat_selected'
+          && event.payload?.requestId === selectRequestId,
     });
     cursor = activeChatChanged.cursor;
 
@@ -486,9 +506,11 @@ describe('agent-cli --remote host', () => {
       sessionId,
       mobileToken: pairResult.mobileToken,
       after: cursor,
-      matchEvent: (event) => event.type === 'command_result'
-        && event.payload?.kind === 'chat_messages'
-        && event.payload?.requestId === readMessagesRequestId,
+      matchEvent:
+        /** @param {{ type?: string, payload?: any }} event */
+        (event) => event.type === 'command_result'
+          && event.payload?.kind === 'chat_messages'
+          && event.payload?.requestId === readMessagesRequestId,
     });
     cursor = chatMessagesResult.cursor;
 
@@ -511,7 +533,7 @@ describe('agent-cli --remote host', () => {
     });
 
     const [exitCode, signal] = await Promise.race([
-      once(cliProcess, 'exit'),
+      once(/** @type {any} */(cliProcess), 'exit'),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for agent-cli --remote to exit.')), 5000)),
     ]);
 
