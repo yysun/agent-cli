@@ -11,6 +11,7 @@
  * - Prints startup diagnostics for project root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
  * - 2026-05-20: Added startup agent-id output.
  * - 2026-05-20: Added --agent-id and --new-agent agent selection.
  * - 2026-05-20: Added startup project-root output and cwd .env fallback for AGENT_CLI_ROOT.
@@ -651,6 +652,7 @@ async function runInteractiveSession({
         await executeTurn({
           chat,
           message: input,
+          inputPrompt: prompt,
         });
         io.stdout.write('\n');
       } catch (error) {
@@ -816,12 +818,21 @@ export async function main(
     });
   }
 
+  const oneShotInputPrompt = options.interactivePrompt
+    ?? agentSetupPrompt
+    ?? (process.stdin.isTTY ? createDefaultInteractivePrompt() : undefined);
+  const createdOneShotInputPrompt = !options.interactivePrompt && !agentSetupPrompt
+    ? oneShotInputPrompt
+    : undefined;
+
   try {
     return await executeTurn({
       chat,
       message,
+      inputPrompt: oneShotInputPrompt,
     });
   } finally {
+    createdOneShotInputPrompt?.close?.();
     if (!options.interactivePrompt && !agentSetupPromptPassedToInteractive) {
       agentSetupPrompt?.close?.();
     }

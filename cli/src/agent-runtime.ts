@@ -11,6 +11,7 @@
  *
  * Recent changes:
  * - 2026-05-16: Added structured verbose tool-call and tool-result rendering.
+ * - 2026-05-23: Added TTY pending animation and ask_user_input terminal prompts.
  */
 import { loadPersistedRuntimeConfig } from '../../core/agent-config.js';
 import { getBuiltInSystemPrompt } from '../../core/agent-files.js';
@@ -20,11 +21,18 @@ import {
 } from '../../core/session-store.js';
 import { runChatTurn } from '../../core/runtime-client.js';
 import {
+  collectHumanInputAnswer,
+  type HumanInputPrompt,
+  parseHumanInputRequest,
+} from './human-input-ui.js';
+import { createPendingDisplay } from './pending-display.js';
+import {
   formatToolCallDiagnostic,
   formatToolResultDiagnostic,
 } from './tool-trace-renderer.js';
 
 export interface WritableSink {
+  isTTY?: boolean;
   write(chunk: string): void;
 }
 
@@ -84,6 +92,7 @@ export interface ExecuteTurnParams {
   approvalGate?: ApprovalGate;
   abortSignal?: AbortSignal;
   onAssistantChunk?: (chunkText: string) => Promise<void> | void;
+  inputPrompt?: HumanInputPrompt;
 }
 
 function writeTypeTransitionSeparator(
@@ -127,17 +136,22 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
     approvalGate,
     abortSignal,
     onAssistantChunk,
+    inputPrompt,
   }: ExecuteTurnParams) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
     const streamTraceEvents: StreamTraceEvent[] = [];
     let lastStreamType: string | null = null;
-    let wroteTextChunk = false;
+    const pendingDisplay = createPendingDisplay(options.io.stdout);
     const pastMessages = Number(options.agentConfig.pastMessages);
     const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
       ? pastMessages
       : 0;
 
     try {
+      if (!options.streamOff) {
+        pendingDisplay.start();
+      }
+
       const turnResult = await runChatTurn({
         chat,
         userMessage: message,
@@ -166,6 +180,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               );
 
               if (options.verbose) {
+                pendingDisplay.clear();
                 writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
                 writeDiagnostic(stderr, 'warning', warningText);
               }
@@ -189,6 +204,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               );
 
               if (options.verbose) {
+                pendingDisplay.clear();
                 writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
                 writeDiagnostic(stderr, 'error', errorText);
               }
@@ -206,6 +222,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
             if (reasoningText) {
               if (options.verbose) {
+                pendingDisplay.clear();
                 writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
                 writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
               }
@@ -222,8 +239,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             }
 
             if (chunk.content) {
-              options.io.stdout.write(chunk.content);
-              wroteTextChunk = true;
+              pendingDisplay.writeText(chunk.content);
               await onAssistantChunk?.(chunk.content);
 
               if (streamTraceEnabled) {
@@ -241,6 +257,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           ? undefined
           : (toolCall) => {
             if (options.verbose) {
+              pendingDisplay.clear();
               stderr.write(formatToolCallDiagnostic(toolCall));
             }
 
@@ -258,12 +275,30 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           ? undefined
           : (toolResult) => {
             if (options.verbose) {
+              pendingDisplay.clear();
               stderr.write(formatToolResultDiagnostic(toolResult));
             }
 
             lastStreamType = 'tool';
           },
         historyMessageLimit,
+        handleToolCall: async ({ toolCall, toolName, arguments: toolArguments }) => {
+          const request = parseHumanInputRequest(toolName, toolArguments, toolCall.id);
+          if (!request) {
+            return { handled: false };
+          }
+
+          pendingDisplay.clear();
+          const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
+          if (!options.streamOff) {
+            pendingDisplay.start();
+          }
+
+          return {
+            handled: true,
+            result,
+          };
+        },
         builtInSystemPrompt,
         projectSystemPrompt: options.projectSystemPrompt,
         skillInventory: options.skillInventory,
@@ -285,13 +320,17 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       chat.messages = turnResult.messages;
 
       if (options.streamOff) {
+        pendingDisplay.clear();
         options.io.stdout.write(`${turnResult.assistantText}\n`);
-      } else if (wroteTextChunk) {
+      } else if (pendingDisplay.hasWrittenText()) {
         options.io.stdout.write('\n');
+      } else {
+        pendingDisplay.clear();
       }
 
       return turnResult;
     } catch (error) {
+      pendingDisplay.clear();
       if (streamTraceEnabled) {
         const errorText = error instanceof Error ? error.message : String(error);
 

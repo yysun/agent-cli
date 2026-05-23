@@ -15,6 +15,7 @@
  * - 2026-05-11: Layered built-in prompt, AGENTS.md, and skill inventory in explicit order.
  * - 2026-05-20: Added tool-result duration and argument context for richer CLI trace rendering.
  * - 2026-05-16: Migrated the host adapter to the `llm-runtime` 0.5.0 completion loop API.
+ * - 2026-05-23: Added a CLI tool-call handler hook for terminal-native user input tools.
  */
 import { createRuntime, executeToolCall as executeRuntimeToolCall, executeToolCalls as executeRuntimeToolCalls, runCompletionLoop, } from 'llm-runtime';
 import { buildSkillInventoryMessage } from './agent-files.js';
@@ -44,6 +45,22 @@ import { REPO_ROOT, SKILLS_ROOT } from './paths.js';
  *   model: string,
  *   providers: LLMProviderConfigs,
  * }} RuntimeSettings
+ */
+/**
+ * @typedef {{
+ *   handled: boolean,
+ *   result?: unknown,
+ * }} RuntimeToolHandlerResult
+ */
+/**
+ * @typedef {(request: {
+ *   toolCall: any,
+ *   toolName: string,
+ *   arguments?: string,
+ *   parsedArguments: Record<string, unknown>,
+ *   context: LLMToolExecutionContext,
+ *   executeDefault: () => Promise<unknown>,
+ * }) => Promise<RuntimeToolHandlerResult | undefined> | RuntimeToolHandlerResult | undefined} RuntimeToolCallHandler
  */
 /** @type {Set<LLMProviderName>} */
 const SUPPORTED_PROVIDERS = new Set([
@@ -306,6 +323,7 @@ function selectContextMessages(messages, historyMessageLimit) {
  *   }) => void,
  *   onToolCall?: (toolCall: { id: string, name: string, arguments?: string }) => void,
  *   onToolResult?: (toolResult: { id: string, name: string, result: unknown, arguments?: string, durationMs?: number }) => void,
+ *   handleToolCall?: RuntimeToolCallHandler,
  *   historyMessageLimit?: number,
  *   builtInSystemPrompt: string,
  *   projectSystemPrompt?: string,
@@ -315,7 +333,7 @@ function selectContextMessages(messages, historyMessageLimit) {
  *   abortSignal?: AbortSignal,
  * }} params
  */
-export async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, historyMessageLimit, builtInSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal, }) {
+export async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, handleToolCall, historyMessageLimit, builtInSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal, }) {
     const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
     const environmentDefaults = buildEnvironmentDefaults(agentConfig);
     const executionContext = buildExecutionContext({
@@ -400,13 +418,28 @@ export async function runChatTurn({ chat, userMessage, stream = true, onStreamCh
                             toolResult = createRejectedToolResult(toolCall.id, toolName, approvalDecision?.reason || `Tool execution rejected: ${toolName}`);
                         }
                     }
-                    if (typeof toolResult === 'undefined') {
-                        toolResult = await activeToolExecutor.executeToolCall(toolCall, {
-                            ...executionContext,
-                            toolCallId: toolCall.id,
-                        }, {
-                            errorMode: 'return-artifact',
+                    const toolContext = {
+                        ...executionContext,
+                        toolCallId: toolCall.id,
+                    };
+                    const executeDefaultToolCall = async () => activeToolExecutor.executeToolCall(toolCall, toolContext, {
+                        errorMode: 'return-artifact',
+                    });
+                    if (typeof toolResult === 'undefined' && typeof handleToolCall === 'function') {
+                        const handlerResult = await handleToolCall({
+                            toolCall,
+                            toolName,
+                            arguments: toolArguments,
+                            parsedArguments: parseToolArguments(toolArguments ?? '{}'),
+                            context: toolContext,
+                            executeDefault: executeDefaultToolCall,
                         });
+                        if (handlerResult?.handled) {
+                            toolResult = handlerResult.result;
+                        }
+                    }
+                    if (typeof toolResult === 'undefined') {
+                        toolResult = await executeDefaultToolCall();
                     }
                     if (typeof onToolResult === 'function') {
                         onToolResult({

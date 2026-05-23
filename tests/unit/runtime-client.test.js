@@ -12,6 +12,7 @@
  *
  * Recent changes:
  * - 2026-05-16: Added coverage for runtime tool-result callbacks.
+ * - 2026-05-23: Added coverage for CLI-handled tool-call results.
  * - 2026-05-16: Migrated runtime-client coverage to the `llm-runtime` 0.5.0 loop API.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -456,6 +457,95 @@ describe('runtime-client', () => {
       role: 'tool',
       tool_call_id: 'tool-1',
       content: '{\n  "ok": false,\n  "status": "rejected",\n  "errorType": "tool_execution_rejected",\n  "toolCallId": "tool-1",\n  "toolName": "load_skill",\n  "message": "Nope"\n}',
+    }));
+  });
+
+  it('uses a CLI tool-call handler result before falling back to runtime tools', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    runCompletionLoop.mockImplementation(async ({ initialState, onToolCallsResponse, onTextResponse }) => {
+      const toolStep = await onToolCallsResponse({
+        state: initialState,
+        response: {
+          type: 'tool_calls',
+          content: '',
+          assistantMessage: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'tool-input-1',
+                function: {
+                  name: 'ask_user_input',
+                  arguments: '{"question":"Choose","options":["A","B"]}',
+                },
+              },
+            ],
+          },
+          tool_calls: [
+            {
+              id: 'tool-input-1',
+              function: {
+                name: 'ask_user_input',
+                arguments: '{"question":"Choose","options":["A","B"]}',
+              },
+            },
+          ],
+        },
+        messages: [],
+        iteration: 1,
+      });
+
+      return {
+        reason: 'text_response',
+        state: (await onTextResponse({
+          state: toolStep.state,
+          response: {
+            type: 'text',
+            content: 'Answered',
+            assistantMessage: { role: 'assistant', content: 'Answered' },
+          },
+          messages: [],
+          iteration: 2,
+          responseText: 'Answered',
+        })).state,
+      };
+    });
+
+    const { runChatTurn } = await import('../../core/runtime-client.js');
+    const handleToolCall = vi.fn().mockResolvedValue({
+      handled: true,
+      result: {
+        ok: true,
+        status: 'answered',
+      },
+    });
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      handleToolCall,
+    });
+
+    expect(handleToolCall).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'ask_user_input',
+      parsedArguments: {
+        question: 'Choose',
+        options: ['A', 'B'],
+      },
+      executeDefault: expect.any(Function),
+    }));
+    expect(executeToolCall).not.toHaveBeenCalled();
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'tool',
+      tool_call_id: 'tool-input-1',
+      content: '{\n  "ok": true,\n  "status": "answered"\n}',
     }));
   });
 

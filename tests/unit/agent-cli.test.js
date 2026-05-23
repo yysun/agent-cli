@@ -12,6 +12,7 @@
  *
  * Recent changes:
  * - 2026-05-20: Added coverage for automatic interactive mode when no message is provided.
+ * - 2026-05-23: Added coverage for TTY pending display and ask_user_input prompts.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
@@ -1000,6 +1001,127 @@ describe('agent-cli entrypoint', () => {
     expect(stdout).not.toContain('tool:');
     expect(stdout).not.toContain('tool.call:');
     expect(stdout).not.toContain('tool.result:');
+  });
+
+  it('shows and clears a pending dot animation on TTY stdout', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await ensureSkillsRoot(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockImplementation(async ({ onStreamChunk }) => {
+          onStreamChunk?.({ content: 'Hello' });
+
+          return {
+            assistantText: 'Hello',
+            messages: [
+              { role: 'user', content: 'hello' },
+              { role: 'assistant', content: 'Hello' },
+            ],
+          };
+        }),
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true });
+
+    await main(['--new-chat', 'hello'], io);
+
+    expect(io.getStdout()).toContain('...');
+    expect(io.getStdout()).toContain('\r\u001b[2KHello\n');
+  });
+
+  it('collects ask_user_input answers and returns them as tool results', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await ensureSkillsRoot(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const inputArgs = JSON.stringify({
+      requestId: 'request-1',
+      type: 'single-select',
+      questions: [
+        {
+          id: 'plan',
+          question: 'Choose a plan',
+          options: [
+            { id: 'basic', label: 'Basic' },
+            { id: 'pro', label: 'Pro' },
+          ],
+          allowFreeformInput: false,
+        },
+      ],
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockImplementation(async ({ handleToolCall }) => {
+          const handlerResult = await handleToolCall?.({
+            toolCall: {
+              id: 'tool-input-1',
+              function: {
+                name: 'ask_user_input',
+                arguments: inputArgs,
+              },
+            },
+            toolName: 'ask_user_input',
+            arguments: inputArgs,
+            parsedArguments: {},
+            context: {},
+            executeDefault: vi.fn(),
+          });
+          const toolContent = JSON.stringify(handlerResult?.result ?? null, null, 2);
+
+          return {
+            assistantText: 'Selected Pro',
+            messages: [
+              { role: 'user', content: 'hello' },
+              {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-input-1',
+                    function: {
+                      name: 'ask_user_input',
+                      arguments: inputArgs,
+                    },
+                  },
+                ],
+              },
+              {
+                role: 'tool',
+                tool_call_id: 'tool-input-1',
+                content: toolContent,
+              },
+              { role: 'assistant', content: 'Selected Pro' },
+            ],
+          };
+        }),
+      },
+    });
+    const io = createIoCapture();
+    const interactivePrompt = createScriptedPrompt(['2']);
+
+    const result = await main(['--new-chat', 'hello'], io, { interactivePrompt });
+
+    expect(io.getStdout()).toContain('assistant needs input:');
+    expect(io.getStdout()).toContain('  Choose a plan');
+    expect(io.getStdout()).toContain('  2. Pro');
+    expect(interactivePrompt.question).toHaveBeenCalledWith(expect.stringContaining('Select a number or option id'));
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'tool',
+      tool_call_id: 'tool-input-1',
+      content: expect.stringContaining('"status": "answered"'),
+    }));
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'tool',
+      content: expect.stringContaining('"id": "pro"'),
+    }));
   });
 
   it('prints streaming diagnostics to stderr in verbose mode', async () => {

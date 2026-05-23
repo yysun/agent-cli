@@ -11,6 +11,7 @@
  *
  * Recent changes:
  * - 2026-05-07: Added shared test-fixture helpers for unit and e2e coverage.
+ * - 2026-05-23: Added optional TTY flags to output capture helpers.
  */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -64,7 +65,10 @@ export async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'));
 }
 
-export function createIoCapture() {
+/**
+ * @param {{ stdoutIsTTY?: boolean, stderrIsTTY?: boolean }} [options]
+ */
+export function createIoCapture(options = {}) {
   /** @type {string[]} */
   const stdoutChunks = [];
   /** @type {string[]} */
@@ -72,12 +76,14 @@ export function createIoCapture() {
 
   return {
     stdout: {
+      ...(options.stdoutIsTTY ? { isTTY: true } : {}),
       /** @param {string} chunk */
       write(chunk) {
         stdoutChunks.push(String(chunk));
       },
     },
     stderr: {
+      ...(options.stderrIsTTY ? { isTTY: true } : {}),
       /** @param {string} chunk */
       write(chunk) {
         stderrChunks.push(String(chunk));
