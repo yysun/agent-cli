@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Keep the work in the CLI runtime boundary. `core/runtime-client.ts` already owns the provider loop and exposes `onToolCall` / `onToolResult`; it also accepts a provided tool executor from the completion loop. The local terminal UI belongs in `cli/src/agent-runtime.ts`, where stdout/stderr/prompt behavior is already mediated.
+Keep the work in the CLI turn boundary. `core/runtime-client.ts` already owns the provider loop and exposes `onToolCall` / `onToolResult`; it also accepts a provided tool executor from the completion loop. The local terminal UI belongs in `cli/src/turn-executor.ts`, where stdout/stderr/prompt behavior is already mediated.
 
 For `ask_user_input`, intercept only the human-input tool family. For normal tools, keep the existing executor path. For input tools, collect terminal answers during the tool-call handling step, then continue the completion loop with a tool result message. This keeps model-facing history compatible with the existing tool message shape.
 

@@ -12,17 +12,21 @@
  *
  * Recent changes:
  * - 2026-05-23: Aligned workspace flag aliases and `.env` preparation with `agent-cli`.
+ * - 2026-05-23: Reused CLI stream and tool trace renderers for interactive sends.
  * - 2026-05-23: Imports the world runtime from core and keeps HITL prompt handling in this shell layer.
  * - 2026-05-23: Added interactive mode for `agent-world-cli`.
  * - 2026-05-23: Implemented the published `agent-world-cli` binary over the world runtime.
  */
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   type AgentWorldRuntime,
   type CreateAgentInput,
+  type SendMessageInput,
+  type SendMessageResult,
   type WorldToolCallHandler,
   createAgentWorldRuntime,
 } from '../../core/agent-world-runtime.js';
@@ -31,6 +35,11 @@ import {
   collectHumanInputAnswer,
   parseHumanInputRequest,
 } from './human-input-ui.js';
+import { createPendingDisplay } from './pending-display.js';
+import {
+  formatToolCallDiagnostic,
+  formatToolResultDiagnostic,
+} from './tool-trace-renderer.js';
 
 export interface AgentWorldCliIo {
   stdin?: NodeJS.ReadableStream;
@@ -42,6 +51,11 @@ type ParsedArgs = {
   command: string[];
   flags: Map<string, string | true>;
 };
+
+interface CommandExecutionOptions {
+  renderSendEvents?: boolean;
+  suppressRenderedSendJson?: boolean;
+}
 
 type AgentWorldRuntimeWithToolHandler = AgentWorldRuntime & {
   setToolCallHandler?: (handler: WorldToolCallHandler | undefined) => void;
@@ -274,10 +288,51 @@ function requireValue(value: string | undefined, label: string): string {
   return normalized;
 }
 
+async function sendMessageWithInteractiveDisplay(
+  runtime: AgentWorldRuntime,
+  input: SendMessageInput,
+  io: AgentWorldCliIo,
+): Promise<SendMessageResult> {
+  const pendingDisplay = createPendingDisplay(io.stdout);
+
+  pendingDisplay.start();
+  try {
+    const result = await runtime.messages.send({
+      ...input,
+      onStreamChunk: (chunk) => {
+        if (chunk.content) {
+          pendingDisplay.writeText(chunk.content);
+        }
+      },
+      onToolCall: (toolCall) => {
+        pendingDisplay.clear();
+        io.stderr.write(formatToolCallDiagnostic(toolCall));
+      },
+      onToolResult: (toolResult) => {
+        pendingDisplay.clear();
+        io.stderr.write(formatToolResultDiagnostic(toolResult));
+      },
+    });
+    if (pendingDisplay.hasWrittenText()) {
+      io.stdout.write('\n');
+    } else if (result.assistantText) {
+      pendingDisplay.clear();
+      io.stdout.write(`${result.assistantText}\n`);
+    } else {
+      pendingDisplay.clear();
+    }
+    return result;
+  } catch (error) {
+    pendingDisplay.clear();
+    throw error;
+  }
+}
+
 async function executeAgentWorldCommand(
   parsed: ParsedArgs,
   io: AgentWorldCliIo,
   runtime: AgentWorldRuntime,
+  options: CommandExecutionOptions = {},
 ): Promise<number> {
   const [area, action, ...rest] = parsed.command;
 
@@ -378,11 +433,17 @@ async function executeAgentWorldCommand(
       return 0;
     }
 
-    writeJson(io, await runtime.messages.send({
+    const sendInput = {
       content,
       ...(chatId ? { chatId } : {}),
       ...(flagString(parsed.flags, 'agent') ? { agentId: flagString(parsed.flags, 'agent') } : {}),
-    }));
+    };
+    const result = options.renderSendEvents
+      ? await sendMessageWithInteractiveDisplay(runtime, sendInput, io)
+      : await runtime.messages.send(sendInput);
+    if (!options.suppressRenderedSendJson || !options.renderSendEvents) {
+      writeJson(io, result);
+    }
     return 0;
   }
 
@@ -494,7 +555,12 @@ async function executeInteractiveLine(
   }
 
   try {
-    await executeAgentWorldCommand(parseArgs(argv), io, runtime);
+    const parsed = parseArgs(argv);
+    const isRenderedSend = parsed.command[0] === 'send' && !flagBoolean(parsed.flags, 'queue');
+    await executeAgentWorldCommand(parsed, io, runtime, {
+      renderSendEvents: isRenderedSend,
+      suppressRenderedSendJson: true,
+    });
   } catch (error) {
     io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   }
@@ -699,14 +765,19 @@ export async function runAgentWorldCli(argv = process.argv.slice(2), io = defaul
   }
 }
 
-export function isAgentWorldCliEntrypoint(argv = process.argv): boolean {
-  const entrypoint = argv[1] ? path.resolve(argv[1]) : '';
-  if (!entrypoint) {
+export function isAgentWorldCliEntrypoint(
+  argvPath = process.argv[1],
+  moduleUrl = import.meta.url,
+): boolean {
+  if (!argvPath) {
     return false;
   }
 
-  return entrypoint === fileURLToPath(import.meta.url)
-    || path.basename(entrypoint) === 'agent-world-cli.js';
+  try {
+    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return pathToFileURL(path.resolve(argvPath)).href === moduleUrl;
+  }
 }
 
 export async function main() {

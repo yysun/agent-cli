@@ -1,5 +1,5 @@
 /**
- * Agent CLI Turn Runtime
+ * Agent CLI Turn Executor
  *
  * Purpose:
  * - Connect CLI I/O to streamed runtime events and persisted chat updates.
@@ -10,6 +10,7 @@
  * - Formats verbose tool activity through a dedicated trace renderer.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed from agent-runtime to clarify this is the CLI turn executor.
  * - 2026-05-23: Renamed root prompt option from project to workspace terminology.
  * - 2026-05-16: Added structured verbose tool-call and tool-result rendering.
  * - 2026-05-23: Added TTY pending animation and ask_user_input terminal prompts.

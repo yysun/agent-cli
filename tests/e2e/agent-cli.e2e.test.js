@@ -66,7 +66,7 @@ const liveRuntimeConfig = resolveRequiredLiveRuntimeConfig(originalRuntimeEnviro
 
 /**
  * @typedef {{
- *   main: (argv?: string[], io?: import('../../cli/src/agent-runtime.js').CliIo, options?: any) => Promise<any>,
+ *   main: (argv?: string[], io?: import('../../cli/src/turn-executor.js').CliIo, options?: any) => Promise<any>,
  * }} AgentCliModule
  */
 
@@ -276,7 +276,7 @@ describe('agent-cli CLI', () => {
     await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
-    const io = /** @type {import('../../cli/src/agent-runtime.js').CliIo} */ (createIoCapture());
+    const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
     const userMessage = 'Acknowledge that the live e2e test reached the language model.';
 
     await main(['--new-chat', userMessage], io);
@@ -327,7 +327,7 @@ describe('agent-cli CLI', () => {
     await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
-    const io = /** @type {import('../../cli/src/agent-runtime.js').CliIo} */ (createIoCapture());
+    const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
     const userMessage = 'What is the next checkpoint routing decision I should make?';
 
     await main(['--new-chat', userMessage], io);
@@ -366,11 +366,11 @@ describe('agent-cli CLI', () => {
 
     await main(
       ['--new-chat', 'Say hello briefly.'],
-      /** @type {import('../../cli/src/agent-runtime.js').CliIo} */(createIoCapture()),
+      /** @type {import('../../cli/src/turn-executor.js').CliIo} */(createIoCapture()),
     );
     const firstWorld = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
 
-    const secondIo = /** @type {import('../../cli/src/agent-runtime.js').CliIo} */ (createIoCapture());
+    const secondIo = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
     await main(['Now say goodbye briefly.'], secondIo);
 
     const secondWorld = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
@@ -402,7 +402,7 @@ describe('agent-cli CLI', () => {
     await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
-    const io = /** @type {import('../../cli/src/agent-runtime.js').CliIo} */ (createIoCapture());
+    const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
 
     await main(['follow up'], io);
 

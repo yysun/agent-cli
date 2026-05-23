@@ -10,6 +10,7 @@
  * - Persists per-agent memory and durable per-chat queue rows without replacing agent-runtime.
  *
  * Recent changes:
+ * - 2026-05-23: Added per-send stream/tool callbacks for terminal renderers without relying on global events.
  * - 2026-05-23: Moved from CLI source into core while keeping HITL UI in shell layers.
  * - 2026-05-23: Made queue API add enqueue-only so CLI queued sends do not auto-dispatch.
  * - 2026-05-23: Implemented the world API runtime, event emitter, mention routing, agent memory, and queue dispatch.
@@ -145,6 +146,24 @@ export interface SendMessageInput extends Record<string, unknown> {
   stream?: boolean;
   agentId?: string;
   queue?: boolean;
+  onStreamChunk?: (chunk: {
+    content?: string;
+    reasoningContent?: string;
+    reasoning?: string;
+    reasoningText?: string;
+    thinking?: string;
+    warnings?: unknown[];
+    errors?: unknown[];
+    error?: unknown;
+  }) => void | Promise<void>;
+  onToolCall?: (toolCall: { id?: string; name: string; arguments?: string }) => void | Promise<void>;
+  onToolResult?: (toolResult: {
+    id?: string;
+    name: string;
+    result: unknown;
+    arguments?: string;
+    durationMs?: number;
+  }) => void | Promise<void>;
 }
 
 export interface SendMessageResult extends Record<string, unknown> {
@@ -897,6 +916,9 @@ export class AgentWorldRuntime implements AgentWorldApi {
     content: string;
     sender: string;
     stream?: boolean;
+    onStreamChunk?: SendMessageInput['onStreamChunk'];
+    onToolCall?: SendMessageInput['onToolCall'];
+    onToolResult?: SendMessageInput['onToolResult'];
   }) {
     const existingChat = await loadChatById(params.chatId).catch(async () => createPersistedChat());
     const contextMessages = await this.buildAgentContext(params.agentId, params.chatId);
@@ -930,6 +952,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
       skillInventory,
       agentConfig,
       onStreamChunk: (chunk) => {
+        void params.onStreamChunk?.(chunk);
         if (chunk.content) {
           this.emit({
             type: 'assistant_chunk',
@@ -941,6 +964,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
         }
       },
       onToolCall: (toolCall) => {
+        void params.onToolCall?.(toolCall);
         this.emit({
           type: 'tool_call',
           chatId: params.chatId,
@@ -950,6 +974,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
         });
       },
       onToolResult: (toolResult) => {
+        void params.onToolResult?.(toolResult);
         this.emit({
           type: 'tool_result',
           chatId: params.chatId,
@@ -1016,7 +1041,16 @@ export class AgentWorldRuntime implements AgentWorldApi {
       return { chatId, agentIds: [], queued: true, queueMessage: row };
     }
 
-    return await this.dispatchMessage({ chatId, content, sender, stream: input.stream, agentId: input.agentId });
+    return await this.dispatchMessage({
+      chatId,
+      content,
+      sender,
+      stream: input.stream,
+      agentId: input.agentId,
+      onStreamChunk: input.onStreamChunk,
+      onToolCall: input.onToolCall,
+      onToolResult: input.onToolResult,
+    });
   }
 
   private async dispatchMessage(params: {
@@ -1025,6 +1059,9 @@ export class AgentWorldRuntime implements AgentWorldApi {
     sender: string;
     stream?: boolean;
     agentId?: string;
+    onStreamChunk?: SendMessageInput['onStreamChunk'];
+    onToolCall?: SendMessageInput['onToolCall'];
+    onToolResult?: SendMessageInput['onToolResult'];
   }): Promise<SendMessageResult> {
     const route = await this.resolveRoutes(params.content, params.agentId, params.sender);
 
@@ -1058,6 +1095,9 @@ export class AgentWorldRuntime implements AgentWorldApi {
           content: params.content,
           sender: params.sender,
           stream: params.stream,
+          onStreamChunk: params.onStreamChunk,
+          onToolCall: params.onToolCall,
+          onToolResult: params.onToolResult,
         });
         assistantTexts.push(result.assistantText);
         messages = result.messages as ChatMessage[];

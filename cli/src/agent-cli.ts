@@ -52,7 +52,7 @@ import {
   type CliIo,
   createTurnExecutor,
   resolveEffectiveAgentConfig,
-} from './agent-runtime.js';
+} from './turn-executor.js';
 
 export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
 export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;

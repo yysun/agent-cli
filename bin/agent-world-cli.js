@@ -2,8 +2,9 @@
 
 // cli/src/agent-world-cli.ts
 import path5 from "node:path";
+import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // core/agent-world-runtime.ts
 import { EventEmitter } from "node:events";
@@ -2185,6 +2186,7 @@ var AgentWorldRuntime = class {
       skillInventory,
       agentConfig,
       onStreamChunk: (chunk) => {
+        void params.onStreamChunk?.(chunk);
         if (chunk.content) {
           this.emit({
             type: "assistant_chunk",
@@ -2196,6 +2198,7 @@ var AgentWorldRuntime = class {
         }
       },
       onToolCall: (toolCall) => {
+        void params.onToolCall?.(toolCall);
         this.emit({
           type: "tool_call",
           chatId: params.chatId,
@@ -2205,6 +2208,7 @@ var AgentWorldRuntime = class {
         });
       },
       onToolResult: (toolResult) => {
+        void params.onToolResult?.(toolResult);
         this.emit({
           type: "tool_result",
           chatId: params.chatId,
@@ -2263,7 +2267,16 @@ var AgentWorldRuntime = class {
       }
       return { chatId, agentIds: [], queued: true, queueMessage: row };
     }
-    return await this.dispatchMessage({ chatId, content, sender, stream: input.stream, agentId: input.agentId });
+    return await this.dispatchMessage({
+      chatId,
+      content,
+      sender,
+      stream: input.stream,
+      agentId: input.agentId,
+      onStreamChunk: input.onStreamChunk,
+      onToolCall: input.onToolCall,
+      onToolResult: input.onToolResult
+    });
   }
   async dispatchMessage(params) {
     const route = await this.resolveRoutes(params.content, params.agentId, params.sender);
@@ -2292,7 +2305,10 @@ var AgentWorldRuntime = class {
           chatId: params.chatId,
           content: params.content,
           sender: params.sender,
-          stream: params.stream
+          stream: params.stream,
+          onStreamChunk: params.onStreamChunk,
+          onToolCall: params.onToolCall,
+          onToolResult: params.onToolResult
         });
         assistantTexts.push(result.assistantText);
         messages = result.messages;
@@ -2709,6 +2725,749 @@ ${formatHumanInputCheckpoint(request, question)}`);
   };
 }
 
+// cli/src/pending-display.ts
+function createPendingDisplay(output) {
+  const frames = [".", "..", "..."];
+  let frameIndex = frames.length - 1;
+  let interval = null;
+  let pendingVisible = false;
+  let wroteText = false;
+  const writeFrame = (frame) => {
+    output.write(`\r\x1B[2K${frame}`);
+  };
+  const stop = () => {
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+  };
+  return {
+    start() {
+      if (!output.isTTY || interval || pendingVisible) {
+        return;
+      }
+      pendingVisible = true;
+      frameIndex = frames.length - 1;
+      output.write(frames[frameIndex] ?? "...");
+      interval = setInterval(() => {
+        frameIndex = (frameIndex + 1) % frames.length;
+        writeFrame(frames[frameIndex] ?? "...");
+      }, 250);
+      interval.unref?.();
+    },
+    clear() {
+      stop();
+      if (pendingVisible) {
+        output.write("\r\x1B[2K");
+        pendingVisible = false;
+      }
+    },
+    writeText(text) {
+      this.clear();
+      if (text) {
+        wroteText = true;
+        output.write(text);
+      }
+    },
+    hasWrittenText() {
+      return wroteText;
+    }
+  };
+}
+
+// cli/src/tool-trace-renderer.ts
+var MAX_COMMAND_WIDTH = 100;
+var MAX_PREVIEW_LINES = 5;
+var MAX_PREVIEW_LINE_WIDTH = 120;
+var MAX_VERBOSE_JSON_WIDTH = 320;
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stringifyCompact(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+function parseJsonRecord2(value) {
+  if (isRecord2(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord2(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function truncateOneLine(value, maxWidth) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxWidth) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxWidth - 1)).trimEnd()}...`;
+}
+function countLines(value) {
+  if (!value) {
+    return 0;
+  }
+  const normalized = value.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines.length;
+}
+function previewLines(value, maxLines = MAX_PREVIEW_LINES, maxWidth = MAX_PREVIEW_LINE_WIDTH) {
+  const normalized = value.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n").map((line) => line.trimEnd()).filter((line) => line.trim().length > 0).map((line) => truncateOneLine(line, maxWidth));
+  const compactLines = lines.filter((line) => !/^[\[{]$|^[}\])][,]?$/.test(line.trim()));
+  if (compactLines.length > 0) {
+    return compactLines.slice(0, maxLines);
+  }
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+  const closingLine = lines.at(-1);
+  if (closingLine && /^[}\])][,]?$/.test(closingLine.trim())) {
+    return [
+      ...lines.slice(0, maxLines),
+      closingLine
+    ];
+  }
+  return lines.slice(0, maxLines);
+}
+function readFirstString(record, ...keys) {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+}
+function readFirstNumber(record, ...keys) {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+function readFirstBoolean(record, ...keys) {
+  if (!record) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return null;
+}
+function formatToken(token) {
+  return /^[A-Za-z0-9_./:=@%-]+$/.test(token) ? token : JSON.stringify(token);
+}
+function compactJsonPreview(value, maxWidth = MAX_COMMAND_WIDTH) {
+  const serialized = stringifyCompact(value);
+  return truncateOneLine(serialized ?? String(value), maxWidth);
+}
+function formatLineCount(lineCount) {
+  return `${lineCount} line${lineCount === 1 ? "" : "s"}`;
+}
+function formatRequestedLineSummary(args) {
+  const record = parseJsonRecord2(args);
+  if (!record) {
+    return null;
+  }
+  const startLine = readFirstNumber(record, "startLine");
+  const endLine = readFirstNumber(record, "endLine");
+  if (startLine !== null && endLine !== null && startLine > 0 && endLine >= startLine) {
+    return startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`;
+  }
+  if (startLine !== null && startLine > 0) {
+    return `from line ${startLine}`;
+  }
+  if (endLine !== null && endLine > 0) {
+    return `through line ${endLine}`;
+  }
+  return null;
+}
+function isReadFileLikeToolName(toolName) {
+  return toolName === "read_file";
+}
+function formatFileSize(bytes) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(bytes >= 10 * 1024 ? 0 : 1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function extractMeaningfulLine(value) {
+  if (typeof value !== "string") {
+    if (isRecord2(value)) {
+      return extractMeaningfulLine(
+        readFirstString(value, "message", "error", "stderr", "stdout", "detail", "reason")
+      );
+    }
+    return null;
+  }
+  const line = value.replace(/\r\n/g, "\n").split("\n").map((candidate) => candidate.trim()).find((candidate) => candidate.length > 0);
+  return line ? truncateOneLine(line, MAX_PREVIEW_LINE_WIDTH) : null;
+}
+function summarizeShellInvocation(command, parameters) {
+  if (/python(?:\d+(?:\.\d+)*)?$/.test(command) && parameters[0] === "-c") {
+    const remainder = parameters.slice(2).map(formatToken);
+    return truncateOneLine([command, "-c", JSON.stringify("..."), ...remainder].join(" "), MAX_COMMAND_WIDTH);
+  }
+  if (/node$/.test(command) && parameters[0] === "-e") {
+    const remainder = parameters.slice(2).map(formatToken);
+    return truncateOneLine([command, "-e", JSON.stringify("..."), ...remainder].join(" "), MAX_COMMAND_WIDTH);
+  }
+  return truncateOneLine([command, ...parameters.map(formatToken)].join(" "), MAX_COMMAND_WIDTH);
+}
+function summarizeShellToolCall(args) {
+  const command = typeof args.command === "string" ? args.command : "shell";
+  const parameters = Array.isArray(args.parameters) ? args.parameters.filter((value) => typeof value === "string") : [];
+  return summarizeShellInvocation(command, parameters);
+}
+function summarizePathLikeCall(args, ...keys) {
+  const value = readFirstString(args, ...keys);
+  return value ? truncateOneLine(value, MAX_COMMAND_WIDTH) : compactJsonPreview(args);
+}
+function summarizePathExistsCall(args) {
+  return summarizePathLikeCall(args, "path", "filePath");
+}
+function summarizeLoadSkillCall(args) {
+  const skillId = readFirstString(args, "skillId", "id", "name");
+  return skillId ? truncateOneLine(skillId, MAX_COMMAND_WIDTH) : compactJsonPreview(args);
+}
+function summarizeGenericCall(args) {
+  const record = parseJsonRecord2(args);
+  if (!record) {
+    return typeof args === "undefined" ? "" : compactJsonPreview(args);
+  }
+  const value = readFirstString(record, "url", "path", "filePath", "query", "pattern", "glob");
+  return value ? truncateOneLine(value, MAX_COMMAND_WIDTH) : compactJsonPreview(record);
+}
+function inferOk(record, fallback = true) {
+  if (!record) {
+    return fallback;
+  }
+  const ok = readFirstBoolean(record, "ok", "success");
+  if (ok !== null) {
+    return ok;
+  }
+  const exitCode = readFirstNumber(record, "exit_code", "exitCode", "code");
+  if (exitCode !== null) {
+    return exitCode === 0;
+  }
+  if (record.error !== void 0) {
+    return false;
+  }
+  return fallback;
+}
+function countMatches(result) {
+  if (Array.isArray(result)) {
+    return result.length;
+  }
+  const record = parseJsonRecord2(result);
+  if (!record) {
+    return null;
+  }
+  for (const key of ["matches", "results", "files", "items", "entries"]) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+  }
+  return readFirstNumber(record, "count", "matchCount", "total");
+}
+function summarizeShellToolResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const exitCode = readFirstNumber(record, "exit_code", "exitCode");
+  const aborted = readFirstBoolean(record, "aborted") === true;
+  const timedOut = readFirstBoolean(record, "timed_out", "timedOut") === true;
+  const stdout = readFirstString(record, "stdout");
+  const stderr = readFirstString(record, "stderr");
+  const ok = !aborted && !timedOut && (exitCode === null ? inferOk(record, true) : exitCode === 0);
+  if (timedOut) {
+    return {
+      name: "shell_cmd",
+      ok: false,
+      durationMs,
+      summary: "timed out",
+      preview: stderr ? previewLines(stderr, 3) : void 0,
+      raw: result
+    };
+  }
+  if (aborted) {
+    return {
+      name: "shell_cmd",
+      ok: false,
+      durationMs,
+      summary: "aborted",
+      preview: stderr ? previewLines(stderr, 3) : void 0,
+      raw: result
+    };
+  }
+  if (!ok) {
+    return {
+      name: "shell_cmd",
+      ok: false,
+      durationMs,
+      summary: extractMeaningfulLine(stderr) ?? extractMeaningfulLine(record?.error) ?? extractMeaningfulLine(stdout) ?? (exitCode === null ? "command failed" : `exit ${exitCode}`),
+      preview: stderr ? previewLines(stderr, 3) : void 0,
+      raw: result
+    };
+  }
+  if (stdout) {
+    const lineCount = countLines(stdout);
+    return {
+      name: "shell_cmd",
+      ok: true,
+      durationMs,
+      summary: `stdout ${formatLineCount(lineCount)}`,
+      preview: previewLines(stdout, Math.min(MAX_PREVIEW_LINES, lineCount || 1)),
+      raw: result
+    };
+  }
+  return {
+    name: "shell_cmd",
+    ok: true,
+    durationMs,
+    summary: exitCode === null ? "completed" : `exit ${exitCode}`,
+    raw: result
+  };
+}
+function summarizeSearchFilesResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const count = countMatches(result);
+  return {
+    name: "search_files",
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: count === null ? "completed" : `${count} match${count === 1 ? "" : "es"}`,
+    raw: result
+  };
+}
+function summarizeReadFileResult(result, forcedDurationMs, callArgs, toolName = "read_file") {
+  const record = parseJsonRecord2(result);
+  const content = typeof result === "string" ? result : readFirstString(record, "content", "text", "result");
+  const lineCount = content ? countLines(content) : null;
+  return {
+    name: toolName,
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: formatRequestedLineSummary(callArgs) ?? (lineCount === null ? "completed" : formatLineCount(lineCount)),
+    raw: result
+  };
+}
+function summarizePathExistsResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  const exists = readFirstBoolean(record, "exists");
+  const path6 = readFirstString(record, "path", "filePath");
+  const type = readFirstString(record, "type", "kind");
+  const preview = [
+    path6 ? truncateOneLine(`path: ${path6}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    type ? `type: ${type}` : null
+  ].filter((line) => line !== null);
+  return {
+    name: "path_exists",
+    ok,
+    durationMs,
+    summary: exists === null ? ok ? "completed" : "failed" : String(exists),
+    ...preview.length > 0 ? { preview } : {},
+    raw: result
+  };
+}
+function summarizeWriteFileResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const bytes = readFirstNumber(record, "bytesWritten", "bytes", "size") ?? (typeof result === "string" ? Buffer.byteLength(result, "utf8") : null);
+  return {
+    name: "write_file",
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: bytes === null ? "written" : `${formatFileSize(bytes)} written`,
+    raw: result
+  };
+}
+function summarizeListFilesResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const entryCount = countMatches(result) ?? readFirstNumber(record, "entryCount", "lineCount") ?? (typeof result === "string" ? countLines(result) : null);
+  return {
+    name: "list_files",
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: entryCount === null ? "completed" : formatLineCount(entryCount),
+    raw: result
+  };
+}
+function summarizeCreateDirectoryResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const status = readFirstString(record, "status", "message");
+  return {
+    name: "create_directory",
+    ok: inferOk(record, true),
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: status ? truncateOneLine(status, MAX_PREVIEW_LINE_WIDTH) : "completed",
+    raw: result
+  };
+}
+function summarizeApiRequestResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  const bodySaved = readFirstBoolean(record, "bodySaved") === true;
+  const bodyFilePath = readFirstString(record, "bodyFilePath");
+  if (ok && bodySaved && bodyFilePath) {
+    return {
+      name: "api_request",
+      ok,
+      durationMs,
+      summary: `completed \xB7 saved to ${truncateOneLine(bodyFilePath, MAX_PREVIEW_LINE_WIDTH)}`,
+      raw: result
+    };
+  }
+  return summarizeGenericToolResult(result, "api_request", forcedDurationMs);
+}
+function summarizeApiRequestOutputPathFailure(result, forcedDurationMs, callArgs) {
+  const record = parseJsonRecord2(result);
+  const errorText = readFirstString(record, "error", "message", "detail");
+  const args = parseJsonRecord2(callArgs);
+  const outputFilePath = readFirstString(args, "outputFilePath");
+  if (!errorText || !outputFilePath) {
+    return null;
+  }
+  if (!/api_request outputFilePath must /i.test(errorText)) {
+    return null;
+  }
+  return {
+    name: "api_request",
+    ok: false,
+    durationMs: forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0,
+    summary: `cannot save to: ${truncateOneLine(outputFilePath, MAX_PREVIEW_LINE_WIDTH)}`,
+    raw: result
+  };
+}
+function readDataField(result) {
+  const record = parseJsonRecord2(result);
+  return record?.data;
+}
+function summarizeResolveObjectResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "resolve_object", forcedDurationMs);
+  }
+  const data = readDataField(result);
+  const matches = Array.isArray(data) ? data.filter(isRecord2) : [];
+  const first = matches[0];
+  const displayName = readFirstString(first ?? null, "displayName");
+  const canonicalPath = readFirstString(first ?? null, "canonicalPath");
+  const preview = displayName || canonicalPath ? [truncateOneLine([displayName, canonicalPath].filter((value) => !!value).join(" \xB7 "), MAX_PREVIEW_LINE_WIDTH)] : void 0;
+  return {
+    name: "resolve_object",
+    ok: true,
+    durationMs,
+    summary: `${matches.length} match${matches.length === 1 ? "" : "es"}`,
+    preview,
+    raw: result
+  };
+}
+function summarizeSearchContentResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "search_content", forcedDurationMs);
+  }
+  const data = readDataField(result);
+  const matches = Array.isArray(data) ? data.filter(isRecord2) : [];
+  const firstPath = readFirstString(matches[0] ?? null, "path");
+  return {
+    name: "search_content",
+    ok: true,
+    durationMs,
+    summary: `${matches.length} match${matches.length === 1 ? "" : "es"}`,
+    preview: firstPath ? [truncateOneLine(firstPath, MAX_PREVIEW_LINE_WIDTH)] : void 0,
+    raw: result
+  };
+}
+function summarizeListContentResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "list_content", forcedDurationMs);
+  }
+  const data = readDataField(result);
+  const entries = Array.isArray(data) ? data.filter(isRecord2) : [];
+  const firstPath = readFirstString(entries[0] ?? null, "path");
+  return {
+    name: "list_content",
+    ok: true,
+    durationMs,
+    summary: `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`,
+    preview: firstPath ? [truncateOneLine(firstPath, MAX_PREVIEW_LINE_WIDTH)] : void 0,
+    raw: result
+  };
+}
+function summarizeReadContentResult(result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, "read_content", forcedDurationMs);
+  }
+  const data = parseJsonRecord2(readDataField(result));
+  const contentType = readFirstString(data, "contentType") ?? "content";
+  const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
+  const path6 = readFirstString(data, "path");
+  const content = readFirstString(data, "content");
+  const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
+  const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
+  return {
+    name: "read_content",
+    ok: true,
+    durationMs,
+    summary,
+    preview: path6 ? [`path: ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    raw: result
+  };
+}
+function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  if (!ok) {
+    return summarizeGenericToolResult(result, toolName, forcedDurationMs);
+  }
+  const data = isRecord2(record?.data) ? record.data : null;
+  const path6 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
+  return {
+    name: toolName,
+    ok: true,
+    durationMs,
+    summary: path6 ? `${summary} \xB7 ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    raw: result
+  };
+}
+function summarizeGenericToolResult(result, toolName, forcedDurationMs) {
+  const record = parseJsonRecord2(result);
+  const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
+  const ok = inferOk(record, true);
+  const textPreview = typeof result === "string" ? result : readFirstString(record, "stdout", "stderr", "text", "content", "message", "result", "detail");
+  if (!ok) {
+    return {
+      name: toolName,
+      ok: false,
+      durationMs,
+      summary: extractMeaningfulLine(record?.error) ?? extractMeaningfulLine(textPreview) ?? "failed",
+      preview: textPreview ? previewLines(textPreview, 3) : void 0,
+      raw: result
+    };
+  }
+  if (textPreview) {
+    const lineCount = countLines(textPreview);
+    return {
+      name: toolName,
+      ok: true,
+      durationMs,
+      summary: lineCount > 1 ? formatLineCount(lineCount) : truncateOneLine(textPreview, MAX_PREVIEW_LINE_WIDTH),
+      preview: lineCount > 1 ? previewLines(textPreview, 3) : void 0,
+      raw: result
+    };
+  }
+  const status = readFirstString(record, "status", "message");
+  return {
+    name: toolName,
+    ok,
+    durationMs,
+    summary: status ? truncateOneLine(status, MAX_PREVIEW_LINE_WIDTH) : ok ? "completed" : "failed",
+    raw: result
+  };
+}
+function rawFieldLines(record) {
+  return Object.entries(record).map(([key, value]) => {
+    const serialized = stringifyCompact(value);
+    return serialized ? `  ${key}: ${serialized}` : null;
+  }).filter((line) => line !== null);
+}
+function formatRawCallPayload(toolName, args) {
+  if (toolName === "shell_cmd" && isRecord2(args)) {
+    const lines = [];
+    if (typeof args.command === "string") {
+      lines.push(`  command: ${JSON.stringify(args.command)}`);
+    }
+    if (Array.isArray(args.parameters)) {
+      lines.push(`  args: ${JSON.stringify(args.parameters)}`);
+    }
+    for (const key of ["directory", "timeout", "output_format", "output_detail"]) {
+      if (args[key] !== void 0) {
+        const serialized = stringifyCompact(args[key]);
+        if (serialized) {
+          lines.push(`  ${key}: ${serialized}`);
+        }
+      }
+    }
+    return lines.length > 0 ? `
+${lines.join("\n")}` : "";
+  }
+  if (isRecord2(args)) {
+    const lines = rawFieldLines(args);
+    return lines.length > 0 ? `
+${lines.join("\n")}` : "";
+  }
+  if (typeof args === "string") {
+    return `
+  result: ${JSON.stringify(args)}`;
+  }
+  return "";
+}
+function formatRawResultPayload(result) {
+  const record = parseJsonRecord2(result);
+  if (record) {
+    const lines = rawFieldLines(record);
+    return lines.length > 0 ? `
+${lines.join("\n")}` : "";
+  }
+  if (typeof result === "string") {
+    return `
+  result: ${JSON.stringify(result)}`;
+  }
+  return "";
+}
+function summarizeToolCall(toolName, args) {
+  const record = parseJsonRecord2(args);
+  if (toolName === "shell_cmd" && record) {
+    return { name: toolName, summary: summarizeShellToolCall(record), args: record };
+  }
+  if (toolName === "load_skill" && record) {
+    return { name: toolName, summary: summarizeLoadSkillCall(record), args: record };
+  }
+  if (toolName === "path_exists" && record) {
+    return { name: toolName, summary: summarizePathExistsCall(record), args: record };
+  }
+  if (toolName === "search_files" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "query", "pattern", "glob", "includePattern"), args: record };
+  }
+  if (toolName === "list_files" && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "requestedPath", "path", "filePath"), args: record };
+  }
+  if (isReadFileLikeToolName(toolName) && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path"), args: record };
+  }
+  if ((toolName === "write_file" || toolName === "create_directory") && record) {
+    return { name: toolName, summary: summarizePathLikeCall(record, "filePath", "path"), args: record };
+  }
+  return { name: toolName, summary: summarizeGenericCall(args), args };
+}
+function summarizeToolResult(toolName, result, durationMs, callArgs) {
+  if (toolName === "shell_cmd") {
+    return summarizeShellToolResult(result, durationMs);
+  }
+  if (toolName === "search_files") {
+    return summarizeSearchFilesResult(result, durationMs);
+  }
+  if (isReadFileLikeToolName(toolName)) {
+    return summarizeReadFileResult(result, durationMs, callArgs, toolName);
+  }
+  if (toolName === "path_exists") {
+    return summarizePathExistsResult(result, durationMs);
+  }
+  if (toolName === "write_file") {
+    return summarizeWriteFileResult(result, durationMs);
+  }
+  if (toolName === "list_files") {
+    return summarizeListFilesResult(result, durationMs);
+  }
+  if (toolName === "create_directory") {
+    return summarizeCreateDirectoryResult(result, durationMs);
+  }
+  if (toolName === "api_request") {
+    return summarizeApiRequestOutputPathFailure(result, durationMs, callArgs) ?? summarizeApiRequestResult(result, durationMs);
+  }
+  if (toolName === "resolve_object") {
+    return summarizeResolveObjectResult(result, durationMs);
+  }
+  if (toolName === "search_content") {
+    return summarizeSearchContentResult(result, durationMs);
+  }
+  if (toolName === "list_content") {
+    return summarizeListContentResult(result, durationMs);
+  }
+  if (toolName === "read_content") {
+    return summarizeReadContentResult(result, durationMs);
+  }
+  if (toolName === "write_content" || toolName === "create_content" || toolName === "delete_content") {
+    return summarizeAiwContentMutationResult(toolName, result, durationMs);
+  }
+  return summarizeGenericToolResult(result, toolName, durationMs);
+}
+function renderToolCall(view, mode) {
+  if (mode === "debug") {
+    return `
+[tool.call] ${view.name}${formatRawCallPayload(view.name, view.args)}`;
+  }
+  const lines = [`  \u21B3 ${view.name}${view.summary ? ` ${view.summary}` : ""}`];
+  if (mode === "verbose" && typeof view.args !== "undefined") {
+    lines.push(`    args: ${compactJsonPreview(view.args, MAX_VERBOSE_JSON_WIDTH)}`);
+  }
+  return `
+${lines.join("\n")}`;
+}
+function renderToolResult(view, mode) {
+  if (mode === "debug") {
+    return `
+[tool.result] ${view.name}${formatRawResultPayload(view.raw)}
+`;
+  }
+  const statusIcon = view.ok ? "\u2713" : "\u2717";
+  const parts = [];
+  if (typeof view.durationMs === "number" && Number.isFinite(view.durationMs)) {
+    parts.push(`${Math.round(view.durationMs)}ms`);
+  }
+  parts.push(view.summary || (view.ok ? "completed" : "failed"));
+  const lines = [`  ${statusIcon} ${view.name} ${parts.join(" \xB7 ")}`];
+  for (const previewLine of view.preview ?? []) {
+    lines.push(`    ${previewLine}`);
+  }
+  if (mode === "verbose" && typeof view.raw !== "undefined") {
+    lines.push(`    raw: ${compactJsonPreview(view.raw, MAX_VERBOSE_JSON_WIDTH)}`);
+  }
+  return `
+${lines.join("\n")}
+`;
+}
+function formatToolCallDiagnostic(toolCall, mode = "default") {
+  const view = summarizeToolCall(toolCall.name, toolCall.arguments);
+  return renderToolCall(view, mode);
+}
+function formatToolResultDiagnostic(toolResult, mode = "default") {
+  const view = summarizeToolResult(toolResult.name, toolResult.result, toolResult.durationMs, toolResult.arguments);
+  return renderToolResult(view, mode);
+}
+
 // cli/src/agent-world-cli.ts
 var VALUE_FLAGS = /* @__PURE__ */ new Set(["workspace", "project", "name", "provider", "model", "chat", "agent"]);
 var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["default", "queue", "help"]);
@@ -2899,7 +3658,42 @@ function requireValue(value, label) {
   }
   return normalized;
 }
-async function executeAgentWorldCommand(parsed, io, runtime) {
+async function sendMessageWithInteractiveDisplay(runtime, input, io) {
+  const pendingDisplay = createPendingDisplay(io.stdout);
+  pendingDisplay.start();
+  try {
+    const result = await runtime.messages.send({
+      ...input,
+      onStreamChunk: (chunk) => {
+        if (chunk.content) {
+          pendingDisplay.writeText(chunk.content);
+        }
+      },
+      onToolCall: (toolCall) => {
+        pendingDisplay.clear();
+        io.stderr.write(formatToolCallDiagnostic(toolCall));
+      },
+      onToolResult: (toolResult) => {
+        pendingDisplay.clear();
+        io.stderr.write(formatToolResultDiagnostic(toolResult));
+      }
+    });
+    if (pendingDisplay.hasWrittenText()) {
+      io.stdout.write("\n");
+    } else if (result.assistantText) {
+      pendingDisplay.clear();
+      io.stdout.write(`${result.assistantText}
+`);
+    } else {
+      pendingDisplay.clear();
+    }
+    return result;
+  } catch (error) {
+    pendingDisplay.clear();
+    throw error;
+  }
+}
+async function executeAgentWorldCommand(parsed, io, runtime, options = {}) {
   const [area, action, ...rest] = parsed.command;
   if (!area || area === "help" || flagBoolean(parsed.flags, "help")) {
     writeText(io, usageText());
@@ -2982,11 +3776,15 @@ async function executeAgentWorldCommand(parsed, io, runtime) {
       });
       return 0;
     }
-    writeJson(io, await runtime.messages.send({
+    const sendInput = {
       content,
       ...chatId ? { chatId } : {},
       ...flagString(parsed.flags, "agent") ? { agentId: flagString(parsed.flags, "agent") } : {}
-    }));
+    };
+    const result = options.renderSendEvents ? await sendMessageWithInteractiveDisplay(runtime, sendInput, io) : await runtime.messages.send(sendInput);
+    if (!options.suppressRenderedSendJson || !options.renderSendEvents) {
+      writeJson(io, result);
+    }
     return 0;
   }
   if (area === "queue") {
@@ -3080,7 +3878,12 @@ async function executeInteractiveLine(line, runtime, io) {
     return true;
   }
   try {
-    await executeAgentWorldCommand(parseArgs(argv), io, runtime);
+    const parsed = parseArgs(argv);
+    const isRenderedSend = parsed.command[0] === "send" && !flagBoolean(parsed.flags, "queue");
+    await executeAgentWorldCommand(parsed, io, runtime, {
+      renderSendEvents: isRenderedSend,
+      suppressRenderedSendJson: true
+    });
   } catch (error) {
     io.stderr.write(`${error instanceof Error ? error.message : String(error)}
 `);
@@ -3246,12 +4049,15 @@ async function runAgentWorldCli(argv = process.argv.slice(2), io = defaultIo()) 
     return 1;
   }
 }
-function isAgentWorldCliEntrypoint(argv = process.argv) {
-  const entrypoint = argv[1] ? path5.resolve(argv[1]) : "";
-  if (!entrypoint) {
+function isAgentWorldCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argvPath) {
     return false;
   }
-  return entrypoint === fileURLToPath(import.meta.url) || path5.basename(entrypoint) === "agent-world-cli.js";
+  try {
+    return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return pathToFileURL(path5.resolve(argvPath)).href === moduleUrl;
+  }
 }
 async function main() {
   const exitCode = await runAgentWorldCli();

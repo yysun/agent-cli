@@ -3162,7 +3162,7 @@ function formatToolResultDiagnostic(toolResult, mode = "default") {
   return renderToolResult(view, mode);
 }
 
-// cli/src/agent-runtime.ts
+// cli/src/turn-executor.ts
 function writeTypeTransitionSeparator(stdout, previousType, nextType) {
   if (previousType && previousType !== nextType) {
     stdout.write("\n");

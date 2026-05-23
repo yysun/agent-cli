@@ -12,7 +12,7 @@ Upgrade Agent CLI’s verbose streamed diagnostics to use structured trace rende
 
 ## Assumptions
 
-1. The owning display path for streamed diagnostics is `cli/src/agent-runtime.ts`, not `cli/src/agent-cli.ts`.
+1. The owning display path for streamed diagnostics is `cli/src/turn-executor.ts`, not `cli/src/agent-cli.ts`.
 2. The current runtime integration already provides enough streamed information to improve tool-call rendering immediately.
 3. Tool-result rendering requires a small runtime plumbing change because the current runtime callback surface exposes tool calls but not tool results.
 4. This story is an internal display improvement, so unit coverage is sufficient and no new E2E spec is needed.
@@ -20,7 +20,7 @@ Upgrade Agent CLI’s verbose streamed diagnostics to use structured trace rende
 
 ## Key Design Decisions
 
-1. Extract the display formatting into a dedicated CLI-local helper module rather than embedding long formatting branches directly into `agent-runtime.ts`.
+1. Extract the display formatting into a dedicated CLI-local helper module rather than embedding long formatting branches directly into `turn-executor.ts`.
 2. Port the bounded-summary approach from ai-workspace, but adapt it to Agent CLI’s event shapes and existing ASCII-first style.
 3. Keep default mode unchanged; only verbose diagnostics become structured.
 4. Preserve the stdout/stderr contract:
@@ -42,7 +42,7 @@ Upgrade Agent CLI’s verbose streamed diagnostics to use structured trace rende
 1. Add a trace-rendering helper under `cli/src/`.
    - Port the summarization helpers needed for shell, path, file, search, and generic tool payloads.
    - Keep output compact and terminal-friendly.
-2. Update `cli/src/agent-runtime.ts`.
+2. Update `cli/src/turn-executor.ts`.
    - Route verbose warning, reasoning, tool-call, and tool-result display through the new renderer.
    - Keep non-verbose behavior and stream trace persistence unchanged.
    - Add or update the required top comment block.

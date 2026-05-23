@@ -12,7 +12,7 @@ flowchart TD
   B --> E["core/runtime-client"]
   B --> F["generic tool-call handler hook"]
   F --> A
-  G["agent-cli shell"] --> H["cli/src/agent-runtime"]
+  G["agent-cli shell"] --> H["cli/src/turn-executor"]
   H --> C
   H --> E
 ```
