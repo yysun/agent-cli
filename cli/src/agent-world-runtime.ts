@@ -40,6 +40,7 @@ import {
   loadWorldSnapshot,
   persistCompletedChat,
   removeQueuedMessage,
+  replaceAgentMemory,
   setCurrentChat,
   setQueuePaused,
   stopQueuedMessages,
@@ -47,7 +48,6 @@ import {
   updateQueuedMessage,
   updateWorldMetadata,
 } from '../../core/world-store.js';
-
 export interface WorkspaceState {
   workspaceRoot: string;
   worldLoaded: boolean;
@@ -200,6 +200,7 @@ export type WorldRealtimeEvent =
   | { type: 'run_started' | 'run_completed' | 'run_failed'; chatId: string; agentId: string; error?: string; createdAt: string }
   | { type: 'chat_selected' | 'chat_created' | 'chat_deleted'; chatId: string; createdAt: string }
   | { type: 'agent_created' | 'agent_updated' | 'agent_deleted'; agentId: string; createdAt: string }
+  | { type: 'message_edited' | 'message_deleted'; chatId: string; messageId: string; createdAt: string }
   | { type: 'queue_added' | 'queue_updated' | 'queue_removed' | 'queue_paused' | 'queue_resumed' | 'queue_stopped' | 'queue_cleared' | 'queue_failed'; chatId: string; queueMessage?: QueuedMessage; error?: string; createdAt: string };
 
 export interface AgentWorldApi {
@@ -282,7 +283,17 @@ export interface AgentWorldApi {
 export interface AgentWorldRuntimeOptions {
   workspaceRoot?: string;
   autoResume?: boolean;
+  handleToolCall?: WorldToolCallHandler;
 }
+
+export type WorldToolCallHandler = (request: {
+  toolCall: any;
+  toolName: string;
+  arguments?: string;
+  parsedArguments: Record<string, unknown>;
+  context: Record<string, unknown>;
+  executeDefault: () => Promise<unknown>;
+}) => Promise<{ handled: boolean; result?: unknown } | undefined> | { handled: boolean; result?: unknown } | undefined;
 
 type ResolvedRoute = {
   agentIds: string[];
@@ -384,6 +395,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
   private queueProcessingChats = new Set<string>();
   private blockedQueueChats = new Set<string>();
   private workspaceRoot: string;
+  private handleToolCall?: WorldToolCallHandler;
 
   workspace: AgentWorldApi['workspace'];
   world: AgentWorldApi['world'];
@@ -397,6 +409,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
 
   constructor(options: AgentWorldRuntimeOptions = {}) {
     this.workspaceRoot = configureWorkspaceRoot(options.workspaceRoot);
+    this.handleToolCall = options.handleToolCall;
 
     this.workspace = {
       get: async () => ({ workspaceRoot: this.workspaceRoot, worldLoaded: true }),
@@ -485,12 +498,8 @@ export class AgentWorldRuntime implements AgentWorldApi {
         return (await loadChatById(targetChatId)).messages as ChatMessage[];
       },
       send: async (input: SendMessageInput) => this.sendMessage(input),
-      edit: async () => {
-        throw new Error('Message edit is not implemented in the lean world runtime.');
-      },
-      deleteFrom: async () => {
-        throw new Error('Message delete-from is not implemented in the lean world runtime.');
-      },
+      edit: async (chatId: string, messageId: string, content: string) => this.editMessage(chatId, messageId, content),
+      deleteFrom: async (chatId: string, messageId: string) => this.deleteMessageChain(chatId, messageId),
       stop: async (chatId?: string) => {
         const targetChatId = await this.resolveChatId(chatId);
         await stopQueuedMessages(targetChatId);
@@ -627,6 +636,10 @@ export class AgentWorldRuntime implements AgentWorldApi {
   private emit(event: WorldRealtimeEvent) {
     this.eventLog.push(event);
     this.eventEmitter.emit(EVENT_NAME, event);
+  }
+
+  setToolCallHandler(handler: WorldToolCallHandler | undefined) {
+    this.handleToolCall = handler;
   }
 
   private async loadSnapshot(): Promise<WorldSnapshot> {
@@ -769,6 +782,113 @@ export class AgentWorldRuntime implements AgentWorldApi {
     ].filter(Boolean).join('\n');
   }
 
+  private async replaceChatMemory(chatId: string, messages: ChatMessage[]) {
+    const agentIds = dedupe(
+      messages
+        .map((message) => String(message.agentId ?? '').trim())
+        .filter(Boolean),
+    );
+    const snapshot = await this.loadSnapshot();
+    const fallbackAgentId = String(snapshot.defaultAgentId ?? 'default').trim() || 'default';
+    const targetAgentIds = agentIds.length > 0 ? agentIds : [fallbackAgentId];
+
+    for (const agentId of targetAgentIds) {
+      await replaceAgentMemory({
+        agentId,
+        chatId,
+        messages: messages.filter((message) => String(message.agentId ?? agentId) === agentId),
+      });
+    }
+
+    const existingChat = await loadChatById(chatId).catch(() => ({ id: chatId, messages: [] }));
+    await persistCompletedChat({
+      chat: {
+        id: chatId,
+        createdAt: existingChat.createdAt,
+        updatedAt: new Date().toISOString(),
+      },
+      messages,
+      setCurrent: false,
+    });
+  }
+
+  private async truncateChatAtMessage(chatId: string, messageId: string) {
+    const targetChatId = await this.resolveChatId(chatId);
+    const normalizedMessageId = String(messageId ?? '').trim();
+
+    if (!normalizedMessageId) {
+      throw new Error('Missing message ID.');
+    }
+
+    const messages = await loadAgentMemory({ chatId: targetChatId }) as ChatMessage[];
+    const targetIndex = messages.findIndex((message) => String(message.messageId ?? '') === normalizedMessageId);
+
+    if (targetIndex < 0) {
+      throw new Error(`Missing message: ${normalizedMessageId}`);
+    }
+
+    const targetMessage = messages[targetIndex];
+    if (String(targetMessage.role ?? '') !== 'user') {
+      throw new Error('Only user message chains can be edited or deleted.');
+    }
+
+    const retainedMessages = messages.slice(0, targetIndex);
+    await this.replaceChatMemory(targetChatId, retainedMessages);
+
+    return {
+      chatId: targetChatId,
+      messageId: normalizedMessageId,
+      retainedMessages,
+      removedMessages: messages.slice(targetIndex),
+      targetMessage,
+    };
+  }
+
+  private async editMessage(chatId: string, messageId: string, content: string): Promise<MessageMutationResult> {
+    const normalizedContent = String(content ?? '').trim();
+    if (!normalizedContent) {
+      throw new Error('Missing message content.');
+    }
+
+    const truncated = await this.truncateChatAtMessage(chatId, messageId);
+    this.emit({
+      type: 'message_edited',
+      chatId: truncated.chatId,
+      messageId: truncated.messageId,
+      createdAt: nowIsoString(),
+    });
+    const result = await this.dispatchMessage({
+      chatId: truncated.chatId,
+      content: normalizedContent,
+      sender: String(truncated.targetMessage.sender ?? 'human'),
+    });
+
+    return {
+      ...result,
+      edited: true,
+      messageId: truncated.messageId,
+      removedCount: truncated.removedMessages.length,
+    };
+  }
+
+  private async deleteMessageChain(chatId: string, messageId: string): Promise<MessageMutationResult> {
+    const truncated = await this.truncateChatAtMessage(chatId, messageId);
+    this.emit({
+      type: 'message_deleted',
+      chatId: truncated.chatId,
+      messageId: truncated.messageId,
+      createdAt: nowIsoString(),
+    });
+
+    return {
+      chatId: truncated.chatId,
+      messageId: truncated.messageId,
+      deleted: true,
+      removedCount: truncated.removedMessages.length,
+      messages: truncated.retainedMessages,
+    };
+  }
+
   private async executeForAgent(params: {
     agentId: string;
     chatId: string;
@@ -836,6 +956,7 @@ export class AgentWorldRuntime implements AgentWorldApi {
           createdAt: nowIsoString(),
         });
       },
+      ...(this.handleToolCall ? { handleToolCall: this.handleToolCall } : {}),
     });
     const previousLength = contextMessages.length;
     const newMessages = result.messages.slice(previousLength);

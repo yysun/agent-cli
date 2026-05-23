@@ -24,6 +24,8 @@ At the same time, `agent-world-cli` is published in `package.json` but its sourc
   - `chats new`
   - `chats use <chatId>`
   - `messages list [chatId]`
+  - `messages edit <chatId> <messageId> <message...>`
+  - `messages delete-from <chatId> <messageId>`
   - `send [--chat <chatId>] [--agent <agentId>] [--queue] <message...>`
   - `queue list [chatId]`
   - `queue pause|resume|stop|clear [chatId]`
@@ -39,13 +41,14 @@ At the same time, `agent-world-cli` is published in `package.json` but its sourc
   - support `/help`, `/world`, `/agents`, `/chats`, `/new`, `/use <chatId>`, `/messages [chatId]`, `/queue [chatId]`, `/pause [chatId]`, `/resume [chatId]`, `/stop [chatId]`, `/clear [chatId]`, and `/exit`
   - treat non-slash input as a message send to the selected chat
   - preserve `@mention` routing and queued-send behavior through the world runtime
+  - handle `ask_user_input` / `ask_human_input` tool calls only in the final CLI UI layer; the world runtime may accept generic tool-call plumbing, but must not own human-input UI policy
   - keep queue inspection and control provider-free
   - exit cleanly on `/exit`, `/quit`, EOF, or `Ctrl+C`
   - avoid starting automatic queue resume merely because the interactive shell opened
 - The CLI should not introduce remote execution, provider-key movement, or new persistence locations.
 - Add focused tests for the CLI command parser/behavior and for the store rename where useful.
 - Add focused tests for interactive command handling, including scripted stdin/stdout behavior.
-- Add real-binary E2E for `agent-world-cli` modeled after `../agent-world` Electron E2E: isolated workspace, real built entrypoint, monitored stdin/stdout, durable state assertions, and queue lifecycle checks without mocks.
+- Add real-binary E2E for `agent-world-cli` modeled after `../agent-world` Electron E2E: isolated workspace, real built entrypoint, monitored stdin/stdout, durable state assertions, provider-free queue lifecycle checks, and live-provider flow-matrix coverage for non-queue send/edit/delete/HITL cases.
 
 ## Acceptance Criteria
 
@@ -63,6 +66,7 @@ At the same time, `agent-world-cli` is published in `package.json` but its sourc
 - Tests cover representative `agent-world-cli` commands without requiring live provider credentials.
 - E2E coverage runs the real `bin/agent-world-cli.js` against an isolated workspace and verifies queued-send lifecycle behavior.
 - E2E coverage includes both batch-scripted and stepwise monitored interactive sessions against the real `bin/agent-world-cli.js`.
+- Live E2E coverage includes a flow matrix for loaded-current, switched, and new chat send/edit/delete/HITL behavior, excluding queue cases.
 - Full project validation passes.
 
 ## Non-Goals

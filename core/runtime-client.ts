@@ -444,6 +444,7 @@ export async function runChatTurn({
         ...(agentConfig.webSearch !== undefined ? { webSearch: agentConfig.webSearch } : {}),
         builtIns: {
           load_skill: true,
+          ask_user_input: true,
         },
         context: executionContext,
       },

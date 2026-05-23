@@ -374,6 +374,7 @@ export async function runChatTurn({ chat, userMessage, stream = true, onStreamCh
                 ...(agentConfig.webSearch !== undefined ? { webSearch: agentConfig.webSearch } : {}),
                 builtIns: {
                     load_skill: true,
+                    ask_user_input: true,
                 },
                 context: executionContext,
             },

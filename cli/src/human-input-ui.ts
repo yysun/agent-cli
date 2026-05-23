@@ -66,6 +66,7 @@ type JsonRecord = Record<string, unknown>;
 const EXIT_HUMAN_INPUT_TOKEN = '0';
 const HUMAN_INPUT_TOOL_NAMES = new Set([
   'ask_user_input',
+  'ask_human_input',
   'human_intervention_request',
   'ask_user_question',
 ]);

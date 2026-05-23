@@ -593,6 +593,43 @@ export async function appendAgentMemory({ agentId, chatId, messages }) {
     return entries;
 }
 /**
+ * @param {{
+ *   agentId: string,
+ *   chatId?: string,
+ *   messages: any[],
+ * }} params
+ */
+export async function replaceAgentMemory({ agentId, chatId, messages }) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const normalizedChatId = String(chatId ?? '').trim();
+    await ensureWorldBootstrap();
+    await ensureDefaultAgentFiles(normalizedAgentId);
+    let retainedEntries = [];
+    const memoryPath = buildAgentMemoryLogPath(normalizedAgentId);
+    try {
+        retainedEntries = await readJsonl(memoryPath);
+    }
+    catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith('Missing chat session file: ')) {
+            throw error;
+        }
+    }
+    const fallbackTimestamp = new Date().toISOString();
+    const replacementEntries = messages.map((message) => normalizeAgentMemoryEntry(message, {
+        agentId: normalizedAgentId,
+        chatId: String(message.chatId ?? normalizedChatId).trim(),
+        fallbackTimestamp,
+    }));
+    const nextEntries = normalizedChatId
+        ? [
+            ...retainedEntries.filter((entry) => String(entry.chatId ?? '') !== normalizedChatId),
+            ...replacementEntries,
+        ]
+        : replacementEntries;
+    await writeJsonlAtomic(memoryPath, nextEntries);
+    return replacementEntries;
+}
+/**
  * @param {{ agentId?: string, chatId?: string }} [options]
  */
 export async function loadAgentMemory(options = {}) {

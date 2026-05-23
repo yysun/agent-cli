@@ -689,7 +689,8 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
         ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
         ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
         builtIns: {
-          load_skill: true
+          load_skill: true,
+          ask_user_input: true
         },
         context: executionContext
       },
@@ -1227,6 +1228,33 @@ async function appendAgentMemory({ agentId, chatId, messages }) {
   await appendJsonl(buildAgentMemoryLogPath(normalizedAgentId), entries);
   return entries;
 }
+async function replaceAgentMemory({ agentId, chatId, messages }) {
+  const normalizedAgentId = normalizeAgentId2(agentId);
+  const normalizedChatId = String(chatId ?? "").trim();
+  await ensureWorldBootstrap();
+  await ensureDefaultAgentFiles(normalizedAgentId);
+  let retainedEntries = [];
+  const memoryPath = buildAgentMemoryLogPath(normalizedAgentId);
+  try {
+    retainedEntries = await readJsonl(memoryPath);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith("Missing chat session file: ")) {
+      throw error;
+    }
+  }
+  const fallbackTimestamp = (/* @__PURE__ */ new Date()).toISOString();
+  const replacementEntries = messages.map((message) => normalizeAgentMemoryEntry(message, {
+    agentId: normalizedAgentId,
+    chatId: String(message.chatId ?? normalizedChatId).trim(),
+    fallbackTimestamp
+  }));
+  const nextEntries = normalizedChatId ? [
+    ...retainedEntries.filter((entry) => String(entry.chatId ?? "") !== normalizedChatId),
+    ...replacementEntries
+  ] : replacementEntries;
+  await writeJsonlAtomic(memoryPath, nextEntries);
+  return replacementEntries;
+}
 async function loadAgentMemory(options = {}) {
   await ensureWorldBootstrap();
   const normalizedAgentId = options.agentId ? normalizeAgentId2(options.agentId) : "";
@@ -1628,6 +1656,7 @@ var AgentWorldRuntime = class {
   queueProcessingChats = /* @__PURE__ */ new Set();
   blockedQueueChats = /* @__PURE__ */ new Set();
   workspaceRoot;
+  handleToolCall;
   workspace;
   world;
   agents;
@@ -1639,6 +1668,7 @@ var AgentWorldRuntime = class {
   events;
   constructor(options = {}) {
     this.workspaceRoot = configureWorkspaceRoot(options.workspaceRoot);
+    this.handleToolCall = options.handleToolCall;
     this.workspace = {
       get: async () => ({ workspaceRoot: this.workspaceRoot, worldLoaded: true }),
       open: async (nextPath) => {
@@ -1722,12 +1752,8 @@ var AgentWorldRuntime = class {
         return (await loadChatById(targetChatId)).messages;
       },
       send: async (input) => this.sendMessage(input),
-      edit: async () => {
-        throw new Error("Message edit is not implemented in the lean world runtime.");
-      },
-      deleteFrom: async () => {
-        throw new Error("Message delete-from is not implemented in the lean world runtime.");
-      },
+      edit: async (chatId, messageId, content) => this.editMessage(chatId, messageId, content),
+      deleteFrom: async (chatId, messageId) => this.deleteMessageChain(chatId, messageId),
       stop: async (chatId) => {
         const targetChatId = await this.resolveChatId(chatId);
         await stopQueuedMessages(targetChatId);
@@ -1860,6 +1886,9 @@ var AgentWorldRuntime = class {
     this.eventLog.push(event);
     this.eventEmitter.emit(EVENT_NAME, event);
   }
+  setToolCallHandler(handler) {
+    this.handleToolCall = handler;
+  }
   async loadSnapshot() {
     return await loadWorldSnapshot();
   }
@@ -1976,6 +2005,96 @@ var AgentWorldRuntime = class {
       "- taskPlan: none persisted for this agent"
     ].filter(Boolean).join("\n");
   }
+  async replaceChatMemory(chatId, messages) {
+    const agentIds = dedupe(
+      messages.map((message) => String(message.agentId ?? "").trim()).filter(Boolean)
+    );
+    const snapshot = await this.loadSnapshot();
+    const fallbackAgentId = String(snapshot.defaultAgentId ?? "default").trim() || "default";
+    const targetAgentIds = agentIds.length > 0 ? agentIds : [fallbackAgentId];
+    for (const agentId of targetAgentIds) {
+      await replaceAgentMemory({
+        agentId,
+        chatId,
+        messages: messages.filter((message) => String(message.agentId ?? agentId) === agentId)
+      });
+    }
+    const existingChat = await loadChatById(chatId).catch(() => ({ id: chatId, messages: [] }));
+    await persistCompletedChat({
+      chat: {
+        id: chatId,
+        createdAt: existingChat.createdAt,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      messages,
+      setCurrent: false
+    });
+  }
+  async truncateChatAtMessage(chatId, messageId) {
+    const targetChatId = await this.resolveChatId(chatId);
+    const normalizedMessageId = String(messageId ?? "").trim();
+    if (!normalizedMessageId) {
+      throw new Error("Missing message ID.");
+    }
+    const messages = await loadAgentMemory({ chatId: targetChatId });
+    const targetIndex = messages.findIndex((message) => String(message.messageId ?? "") === normalizedMessageId);
+    if (targetIndex < 0) {
+      throw new Error(`Missing message: ${normalizedMessageId}`);
+    }
+    const targetMessage = messages[targetIndex];
+    if (String(targetMessage.role ?? "") !== "user") {
+      throw new Error("Only user message chains can be edited or deleted.");
+    }
+    const retainedMessages = messages.slice(0, targetIndex);
+    await this.replaceChatMemory(targetChatId, retainedMessages);
+    return {
+      chatId: targetChatId,
+      messageId: normalizedMessageId,
+      retainedMessages,
+      removedMessages: messages.slice(targetIndex),
+      targetMessage
+    };
+  }
+  async editMessage(chatId, messageId, content) {
+    const normalizedContent = String(content ?? "").trim();
+    if (!normalizedContent) {
+      throw new Error("Missing message content.");
+    }
+    const truncated = await this.truncateChatAtMessage(chatId, messageId);
+    this.emit({
+      type: "message_edited",
+      chatId: truncated.chatId,
+      messageId: truncated.messageId,
+      createdAt: nowIsoString()
+    });
+    const result = await this.dispatchMessage({
+      chatId: truncated.chatId,
+      content: normalizedContent,
+      sender: String(truncated.targetMessage.sender ?? "human")
+    });
+    return {
+      ...result,
+      edited: true,
+      messageId: truncated.messageId,
+      removedCount: truncated.removedMessages.length
+    };
+  }
+  async deleteMessageChain(chatId, messageId) {
+    const truncated = await this.truncateChatAtMessage(chatId, messageId);
+    this.emit({
+      type: "message_deleted",
+      chatId: truncated.chatId,
+      messageId: truncated.messageId,
+      createdAt: nowIsoString()
+    });
+    return {
+      chatId: truncated.chatId,
+      messageId: truncated.messageId,
+      deleted: true,
+      removedCount: truncated.removedMessages.length,
+      messages: truncated.retainedMessages
+    };
+  }
   async executeForAgent(params) {
     const existingChat = await loadChatById(params.chatId).catch(async () => createPersistedChat());
     const contextMessages = await this.buildAgentContext(params.agentId, params.chatId);
@@ -2032,7 +2151,8 @@ var AgentWorldRuntime = class {
           toolResult,
           createdAt: nowIsoString()
         });
-      }
+      },
+      ...this.handleToolCall ? { handleToolCall: this.handleToolCall } : {}
     });
     const previousLength = contextMessages.length;
     const newMessages = result.messages.slice(previousLength);
@@ -2246,6 +2366,231 @@ function createAgentWorldRuntime(options = {}) {
   return new AgentWorldRuntime(options);
 }
 
+// cli/src/human-input-ui.ts
+var EXIT_HUMAN_INPUT_TOKEN = "0";
+var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
+  "ask_user_input",
+  "ask_human_input",
+  "human_intervention_request",
+  "ask_user_question"
+]);
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseJsonRecord(value) {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function readTrimmedString(record, fieldName) {
+  const value = record?.[fieldName];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function sanitizeDisplayText(value) {
+  return value.replace(/\s{2,}/g, " ").trim();
+}
+function parseHumanInputOption(value, index) {
+  if (typeof value === "string" && value.trim()) {
+    return {
+      id: String(index + 1),
+      label: sanitizeDisplayText(value)
+    };
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  const label = readTrimmedString(value, "label") ?? readTrimmedString(value, "text");
+  if (!label) {
+    return null;
+  }
+  return {
+    id: readTrimmedString(value, "id") ?? String(index + 1),
+    label: sanitizeDisplayText(label),
+    ...readTrimmedString(value, "description") ? { description: sanitizeDisplayText(readTrimmedString(value, "description") ?? "") } : {}
+  };
+}
+function parseHumanInputQuestion(value, index) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const question = readTrimmedString(value, "question") ?? readTrimmedString(value, "prompt");
+  if (!question) {
+    return null;
+  }
+  const rawOptions = Array.isArray(value.options) ? value.options : [];
+  const options = rawOptions.map(parseHumanInputOption).filter((option) => option !== null);
+  return {
+    header: readTrimmedString(value, "header") ?? "Input",
+    id: readTrimmedString(value, "id") ?? `question-${index + 1}`,
+    question: sanitizeDisplayText(question),
+    options,
+    ...value.allowFreeformInput === false ? { allowFreeformInput: false } : {}
+  };
+}
+function normalizeQuestions(record) {
+  if (Array.isArray(record.questions)) {
+    return record.questions.map(parseHumanInputQuestion).filter((question) => question !== null);
+  }
+  const singleQuestion = parseHumanInputQuestion(record, 0);
+  return singleQuestion ? [singleQuestion] : [];
+}
+function allowsFreeformInput(question) {
+  return question.allowFreeformInput !== false;
+}
+function parseHumanInputRequest(toolName, payload, fallbackRequestId = "") {
+  if (!HUMAN_INPUT_TOOL_NAMES.has(toolName)) {
+    return null;
+  }
+  const record = parseJsonRecord(payload);
+  if (!record) {
+    return null;
+  }
+  const rawType = record.type;
+  const type = rawType === "multiple-select" ? "multiple-select" : "single-select";
+  if (rawType !== void 0 && rawType !== "single-select" && rawType !== "multiple-select") {
+    return null;
+  }
+  const questions = normalizeQuestions(record);
+  if (questions.length === 0) {
+    return null;
+  }
+  return {
+    toolName,
+    requestId: readTrimmedString(record, "requestId") ?? fallbackRequestId,
+    type,
+    allowSkip: record.allowSkip === true,
+    questions
+  };
+}
+function resolveHumanInputOption(question, token) {
+  const index = Number(token);
+  if (Number.isInteger(index) && index >= 1 && index <= question.options.length) {
+    return question.options[index - 1] ?? null;
+  }
+  return question.options.find((option) => option.id === token) ?? null;
+}
+function parseSelection(question, selectionType, allowSkip, rawInput) {
+  const trimmedInput = rawInput.trim();
+  if (!trimmedInput) {
+    if (allowSkip) {
+      return {
+        questionId: question.id,
+        questionText: question.question,
+        skipped: true,
+        selectedOptions: []
+      };
+    }
+    return "Select an option before continuing.";
+  }
+  const tokens = trimmedInput.split(",").map((token) => token.trim()).filter(Boolean);
+  if (selectionType === "single-select" && tokens.length !== 1) {
+    if (allowsFreeformInput(question)) {
+      return {
+        questionId: question.id,
+        questionText: question.question,
+        skipped: false,
+        selectedOptions: [],
+        enteredText: trimmedInput
+      };
+    }
+    return "Select exactly one option.";
+  }
+  const selectedOptions = [];
+  for (const token of tokens) {
+    const option = resolveHumanInputOption(question, token);
+    if (!option) {
+      if (allowsFreeformInput(question)) {
+        return {
+          questionId: question.id,
+          questionText: question.question,
+          skipped: false,
+          selectedOptions: [],
+          enteredText: trimmedInput
+        };
+      }
+      return `Unknown option: ${token}`;
+    }
+    if (!selectedOptions.some((selectedOption) => selectedOption.id === option.id)) {
+      selectedOptions.push(option);
+    }
+  }
+  return {
+    questionId: question.id,
+    questionText: question.question,
+    skipped: false,
+    selectedOptions
+  };
+}
+function formatHumanInputCheckpoint(request, question) {
+  const lines = ["assistant needs input:", `  ${question.question}`, ""];
+  question.options.forEach((option, index) => {
+    const description = option.description ? ` - ${option.description}` : "";
+    lines.push(`  ${index + 1}. ${option.label}${description}`);
+  });
+  lines.push(`  ${EXIT_HUMAN_INPUT_TOKEN}. Exit UI`);
+  if (request.allowSkip) {
+    lines.push("", "  Press Enter to skip.");
+  }
+  return `${lines.join("\n")}
+`;
+}
+function createHumanInputPrompt(request, question) {
+  const selectionHint = question.options.length === 0 ? "Type your answer" : request.type === "multiple-select" ? "Select numbers or option ids separated by commas" : "Select a number or option id";
+  const freeformHint = allowsFreeformInput(question) ? ", or type a custom answer" : "";
+  const skipHint = request.allowSkip ? ", or press Enter to skip" : "";
+  return `${selectionHint}${freeformHint}${skipHint}. Enter ${EXIT_HUMAN_INPUT_TOKEN} to exit UI: `;
+}
+async function collectHumanInputAnswer(request, prompt, output) {
+  if (!prompt) {
+    return {
+      ok: false,
+      status: "unavailable",
+      requestId: request.requestId,
+      selections: [],
+      message: "Interactive input is unavailable for ask_user_input."
+    };
+  }
+  const selections = [];
+  for (const question of request.questions) {
+    output.write(`
+${formatHumanInputCheckpoint(request, question)}`);
+    while (true) {
+      const rawSelection = await prompt.question(createHumanInputPrompt(request, question));
+      if (rawSelection.trim() === EXIT_HUMAN_INPUT_TOKEN) {
+        return {
+          ok: false,
+          status: "cancelled",
+          requestId: request.requestId,
+          selections,
+          message: "User cancelled input."
+        };
+      }
+      const selection = parseSelection(question, request.type, request.allowSkip, rawSelection);
+      if (typeof selection !== "string") {
+        selections.push(selection);
+        break;
+      }
+      output.write(`${selection}
+`);
+    }
+  }
+  return {
+    ok: true,
+    status: selections.every((selection) => selection.skipped) ? "skipped" : "answered",
+    requestId: request.requestId,
+    selections
+  };
+}
+
 // cli/src/agent-world-cli.ts
 var VALUE_FLAGS = /* @__PURE__ */ new Set(["workspace", "name", "provider", "model", "chat", "agent"]);
 var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["default", "queue", "help"]);
@@ -2257,10 +2602,14 @@ function usageText() {
     "  world [--workspace <path>]",
     "  agents list",
     "  agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]",
+    "  agents delete <agentId>",
     "  chats list",
     "  chats new",
     "  chats use <chatId>",
+    "  chats delete <chatId>",
     "  messages list [chatId]",
+    "  messages edit <chatId> <messageId> <message...>",
+    "  messages delete-from <chatId> <messageId>",
     "  send [--chat <chatId>] [--agent <agentId>] [--queue] <message...>",
     "  queue list [chatId]",
     "  queue pause|resume|stop|clear [chatId]"
@@ -2273,10 +2622,14 @@ function interactiveHelpText() {
     "  /world",
     "  /agents list",
     "  /agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]",
+    "  /agents delete <agentId>",
     "  /chats list",
     "  /new",
     "  /use <chatId>",
+    "  /delete-chat <chatId>",
     "  /messages [chatId]",
+    "  /edit <chatId> <messageId> <message...>",
+    "  /delete <chatId> <messageId>",
     "  /send [--chat <chatId>] [--agent <agentId>] [--queue] <message...>",
     "  /queue [chatId]",
     "  /pause [chatId]",
@@ -2301,6 +2654,27 @@ function writeJson(io, value) {
 function writeText(io, value) {
   io.stdout.write(`${value}
 `);
+}
+function setRuntimeToolCallHandler(runtime, handler) {
+  const runtimeWithToolHandler = runtime;
+  runtimeWithToolHandler.setToolCallHandler?.(handler);
+}
+function createHumanInputToolHandler(prompt, io) {
+  return async ({ toolCall, toolName, arguments: toolArguments }) => {
+    const request = parseHumanInputRequest(toolName, toolArguments ?? "{}", String(toolCall.id ?? ""));
+    if (!request) {
+      return void 0;
+    }
+    const result = await collectHumanInputAnswer(request, prompt, {
+      write: (chunk) => {
+        io.stdout.write(chunk);
+      }
+    });
+    return {
+      handled: true,
+      result
+    };
+  };
 }
 function parseArgs(argv) {
   const command = [];
@@ -2427,6 +2801,10 @@ async function executeAgentWorldCommand(parsed, io, runtime) {
       writeJson(io, await runtime.agents.create(input));
       return 0;
     }
+    if (action === "delete") {
+      writeJson(io, await runtime.agents.delete(requireValue(rest[0], "agent ID")));
+      return 0;
+    }
   }
   if (area === "chats") {
     if (action === "list") {
@@ -2441,9 +2819,26 @@ async function executeAgentWorldCommand(parsed, io, runtime) {
       writeJson(io, await runtime.chats.select(requireValue(rest[0], "chat ID")));
       return 0;
     }
+    if (action === "delete") {
+      writeJson(io, await runtime.chats.delete(requireValue(rest[0], "chat ID")));
+      return 0;
+    }
   }
   if (area === "messages" && action === "list") {
     writeJson(io, await runtime.messages.list(rest[0]));
+    return 0;
+  }
+  if (area === "messages" && action === "edit") {
+    const chatId = requireValue(rest[0], "chat ID");
+    const messageId = requireValue(rest[1], "message ID");
+    const content = requireValue(rest.slice(2).join(" "), "message");
+    writeJson(io, await runtime.messages.edit(chatId, messageId, content));
+    return 0;
+  }
+  if (area === "messages" && action === "delete-from") {
+    const chatId = requireValue(rest[0], "chat ID");
+    const messageId = requireValue(rest[1], "message ID");
+    writeJson(io, await runtime.messages.deleteFrom(chatId, messageId));
     return 0;
   }
   if (area === "send") {
@@ -2519,8 +2914,14 @@ function toInteractiveArgv(line) {
       return ["chats", "new", ...rest];
     case "use":
       return ["chats", "use", ...rest];
+    case "delete-chat":
+      return ["chats", "delete", ...rest];
     case "messages":
       return ["messages", "list", ...rest];
+    case "edit":
+      return ["messages", "edit", ...rest];
+    case "delete":
+      return ["messages", "delete-from", ...rest];
     case "send":
       return ["send", ...rest];
     case "queue":
@@ -2564,7 +2965,17 @@ async function runScriptedInteractiveInput(input, runtime, io) {
     let processing = Promise.resolve();
     let stopped = false;
     let resolved = false;
+    let activeQuestionResolver = null;
+    setRuntimeToolCallHandler(runtime, createHumanInputToolHandler({
+      question: async (query) => {
+        io.stdout.write(query);
+        return await new Promise((questionResolve) => {
+          activeQuestionResolver = questionResolve;
+        });
+      }
+    }, io));
     const cleanup = () => {
+      setRuntimeToolCallHandler(runtime, void 0);
       input.off("data", handleData);
       input.off("end", handleEnd);
       input.off("error", handleError);
@@ -2605,10 +3016,22 @@ async function runScriptedInteractiveInput(input, runtime, io) {
       const lines = buffer.split(/\r?\n/u);
       buffer = lines.pop() ?? "";
       for (const line of lines) {
+        if (activeQuestionResolver) {
+          const resolveQuestion = activeQuestionResolver;
+          activeQuestionResolver = null;
+          resolveQuestion(line);
+          continue;
+        }
         enqueueLine(line);
       }
     };
     const handleEnd = () => {
+      if (activeQuestionResolver) {
+        const resolveQuestion = activeQuestionResolver;
+        activeQuestionResolver = null;
+        resolveQuestion(buffer);
+        buffer = "";
+      }
       if (buffer.trim()) {
         enqueueLine(buffer);
         buffer = "";
@@ -2646,6 +3069,9 @@ async function runAgentWorldInteractive(runtime, io = defaultIo()) {
     readline.close();
   });
   try {
+    setRuntimeToolCallHandler(runtime, createHumanInputToolHandler({
+      question: async (query) => await readline.question(query)
+    }, io));
     readline.setPrompt(await buildInteractivePrompt(runtime));
     readline.prompt();
     for await (const line of readline) {
@@ -2661,6 +3087,7 @@ async function runAgentWorldInteractive(runtime, io = defaultIo()) {
       readline.prompt();
     }
   } finally {
+    setRuntimeToolCallHandler(runtime, void 0);
     readline.close();
   }
   return 0;

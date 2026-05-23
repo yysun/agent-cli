@@ -34,16 +34,17 @@ flowchart TD
 - Implement interactive mode with Node `readline/promises`; no new dependency.
 - Reuse the one-shot command dispatcher from interactive mode. Slash commands should translate into the same argv shape used by one-shot commands.
 - Treat plain text in interactive mode as `send <text>` against the selected/current chat. Provider-free queueing remains available through `/send --queue ...` or `/queue` control commands.
+- Keep human-input tool handling in `agent-world-cli.ts`, the final terminal UI layer. `AgentWorldRuntime` can forward generic tool-call hooks into `runChatTurn`, but it must not parse `ask_user_input` / `ask_human_input` or decide how users answer prompts.
 - Start the runtime with `autoResume: false` in interactive mode as well as one-shot mode; opening a shell should not resume queued work by itself.
 - Keep prompts terse and stateful enough to show the current chat id when known.
 - Ensure the queue API has an enqueue-only path for `agent-world-cli send --queue`; direct sends can remain runtime-backed and may require provider credentials.
 - Add unit tests that invoke the CLI source in a temporary workspace and verify JSON output/state.
 - Add unit tests for interactive line handling where possible, and E2E coverage for scripted stdin/stdout through the real binary.
-- Add a real-binary E2E test inspired by `../agent-world/tests/electron-e2e`: launch the built entrypoint against an isolated workspace, use helper functions for command execution, monitor stdout after each stdin command, and assert durable queue state transitions.
+- Add real-binary E2E tests inspired by `../agent-world/tests/electron-e2e`: launch the built entrypoint against an isolated workspace, use helper functions for command execution, monitor stdout after each stdin command, assert durable queue state transitions, and run a live-provider flow matrix for non-queue send/edit/delete/HITL cases.
 
 ## E2E Coverage
 
-Needed. This story exposes a user-facing binary and changes a shared storage module name. Add a markdown E2E spec covering help/world inspection, local agent/chat operations, queued send, interactive mode, and existing CLI/relay compatibility. Also add executable Vitest E2E coverage for the real `bin/agent-world-cli.js`, following the Electron app E2E pattern of using a real built artifact and isolated workspace.
+Needed. This story exposes a user-facing binary and changes a shared storage module name. Add a markdown E2E spec covering help/world inspection, local agent/chat operations, queued send, interactive mode, live flow-matrix behavior, and existing CLI/relay compatibility. Also add executable Vitest E2E coverage for the real `bin/agent-world-cli.js`, following the Electron app E2E pattern of using a real built artifact and isolated workspace.
 
 ## Risks
 

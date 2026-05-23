@@ -1933,7 +1933,8 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
         ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
         ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
         builtIns: {
-          load_skill: true
+          load_skill: true,
+          ask_user_input: true
         },
         context: executionContext
       },
@@ -2057,6 +2058,7 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
 var EXIT_HUMAN_INPUT_TOKEN = "0";
 var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
   "ask_user_input",
+  "ask_human_input",
   "human_intervention_request",
   "ask_user_question"
 ]);

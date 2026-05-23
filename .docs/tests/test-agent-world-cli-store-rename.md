@@ -59,9 +59,21 @@
 6. Run a scripted interactive session through stdin/stdout against the built binary and verify the same queue lifecycle.
 7. Run a monitored interactive session that keeps the process open, sends one stdin command at a time, waits for the corresponding stdout transition, and then verifies durable queue state.
 
+## Scenario: Interactive Live Flow Matrix
+
+1. Build `agent-world-cli`.
+2. Run the built binary in an isolated temporary workspace with live provider credentials and a matching runtime config.
+3. For the loaded current chat, cover send success, send error, HITL prompt/answer, edit success, edit error, edit HITL, and delete chain.
+4. For a switched chat, cover the same core send/edit/delete/HITL scoping behavior except queue cases.
+5. For a new chat, cover create, send, edit, delete, HITL, and presentation clarification fallback.
+6. Confirm HITL tool prompts are answered by the CLI UI layer through stdin/stdout, not by runtime/server policy.
+7. Confirm edit/delete in one chat does not contaminate another chat.
+8. Confirm the presentation clarification fallback creates one assistant turn after the presentation user message.
+
 ## Execution Status
 
 - Automated unit coverage: `tests/unit/agent-world-cli.test.js`, `tests/unit/world-store.test.js`, and `tests/unit/agent-world-runtime.test.js`.
 - Automated E2E coverage: `tests/e2e/agent-world-cli.e2e.test.js` and `tests/e2e/agent-world-cli-interactive.e2e.test.js`, included in `npm run test:e2e:relay` and therefore `npm test`.
+- Live automated E2E coverage: `tests/e2e/agent-world-cli-flow-matrix.e2e.test.js`, included in `npm run test:e2e:live` because it intentionally calls a real LLM provider.
 - The E2E follows the Electron app pattern from `../agent-world/tests/electron-e2e`: real built entrypoint, isolated workspace, helper-based command execution, and durable state assertions.
 - Interactive mode is covered by scripted unit coverage, batch real-binary stdin/stdout coverage, and stepwise monitored real-binary stdin/stdout coverage.

@@ -21,8 +21,13 @@ import { fileURLToPath } from 'node:url';
 import {
   type AgentWorldRuntime,
   type CreateAgentInput,
+  type WorldToolCallHandler,
   createAgentWorldRuntime,
 } from './agent-world-runtime.js';
+import {
+  collectHumanInputAnswer,
+  parseHumanInputRequest,
+} from './human-input-ui.js';
 
 export interface AgentWorldCliIo {
   stdin?: NodeJS.ReadableStream;
@@ -33,6 +38,10 @@ export interface AgentWorldCliIo {
 type ParsedArgs = {
   command: string[];
   flags: Map<string, string | true>;
+};
+
+type AgentWorldRuntimeWithToolHandler = AgentWorldRuntime & {
+  setToolCallHandler?: (handler: WorldToolCallHandler | undefined) => void;
 };
 
 const VALUE_FLAGS = new Set(['workspace', 'name', 'provider', 'model', 'chat', 'agent']);
@@ -46,10 +55,14 @@ export function usageText(): string {
     '  world [--workspace <path>]',
     '  agents list',
     '  agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]',
+    '  agents delete <agentId>',
     '  chats list',
     '  chats new',
     '  chats use <chatId>',
+    '  chats delete <chatId>',
     '  messages list [chatId]',
+    '  messages edit <chatId> <messageId> <message...>',
+    '  messages delete-from <chatId> <messageId>',
     '  send [--chat <chatId>] [--agent <agentId>] [--queue] <message...>',
     '  queue list [chatId]',
     '  queue pause|resume|stop|clear [chatId]',
@@ -63,10 +76,14 @@ export function interactiveHelpText(): string {
     '  /world',
     '  /agents list',
     '  /agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]',
+    '  /agents delete <agentId>',
     '  /chats list',
     '  /new',
     '  /use <chatId>',
+    '  /delete-chat <chatId>',
     '  /messages [chatId]',
+    '  /edit <chatId> <messageId> <message...>',
+    '  /delete <chatId> <messageId>',
     '  /send [--chat <chatId>] [--agent <agentId>] [--queue] <message...>',
     '  /queue [chatId]',
     '  /pause [chatId]',
@@ -92,6 +109,36 @@ function writeJson(io: AgentWorldCliIo, value: unknown) {
 
 function writeText(io: AgentWorldCliIo, value: string) {
   io.stdout.write(`${value}\n`);
+}
+
+function setRuntimeToolCallHandler(
+  runtime: AgentWorldRuntime,
+  handler: WorldToolCallHandler | undefined,
+) {
+  const runtimeWithToolHandler = runtime as AgentWorldRuntimeWithToolHandler;
+  runtimeWithToolHandler.setToolCallHandler?.(handler);
+}
+
+function createHumanInputToolHandler(
+  prompt: { question(query: string): Promise<string> },
+  io: AgentWorldCliIo,
+): WorldToolCallHandler {
+  return async ({ toolCall, toolName, arguments: toolArguments }) => {
+    const request = parseHumanInputRequest(toolName, toolArguments ?? '{}', String(toolCall.id ?? ''));
+    if (!request) {
+      return undefined;
+    }
+
+    const result = await collectHumanInputAnswer(request, prompt, {
+      write: (chunk: string) => {
+        io.stdout.write(chunk);
+      },
+    });
+    return {
+      handled: true,
+      result,
+    };
+  };
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -254,6 +301,11 @@ async function executeAgentWorldCommand(
       writeJson(io, await runtime.agents.create(input));
       return 0;
     }
+
+    if (action === 'delete') {
+      writeJson(io, await runtime.agents.delete(requireValue(rest[0], 'agent ID')));
+      return 0;
+    }
   }
 
   if (area === 'chats') {
@@ -271,10 +323,30 @@ async function executeAgentWorldCommand(
       writeJson(io, await runtime.chats.select(requireValue(rest[0], 'chat ID')));
       return 0;
     }
+
+    if (action === 'delete') {
+      writeJson(io, await runtime.chats.delete(requireValue(rest[0], 'chat ID')));
+      return 0;
+    }
   }
 
   if (area === 'messages' && action === 'list') {
     writeJson(io, await runtime.messages.list(rest[0]));
+    return 0;
+  }
+
+  if (area === 'messages' && action === 'edit') {
+    const chatId = requireValue(rest[0], 'chat ID');
+    const messageId = requireValue(rest[1], 'message ID');
+    const content = requireValue(rest.slice(2).join(' '), 'message');
+    writeJson(io, await runtime.messages.edit(chatId, messageId, content));
+    return 0;
+  }
+
+  if (area === 'messages' && action === 'delete-from') {
+    const chatId = requireValue(rest[0], 'chat ID');
+    const messageId = requireValue(rest[1], 'message ID');
+    writeJson(io, await runtime.messages.deleteFrom(chatId, messageId));
     return 0;
   }
 
@@ -362,8 +434,14 @@ function toInteractiveArgv(line: string): string[] | null {
       return ['chats', 'new', ...rest];
     case 'use':
       return ['chats', 'use', ...rest];
+    case 'delete-chat':
+      return ['chats', 'delete', ...rest];
     case 'messages':
       return ['messages', 'list', ...rest];
+    case 'edit':
+      return ['messages', 'edit', ...rest];
+    case 'delete':
+      return ['messages', 'delete-from', ...rest];
     case 'send':
       return ['send', ...rest];
     case 'queue':
@@ -421,8 +499,19 @@ async function runScriptedInteractiveInput(
     let processing = Promise.resolve();
     let stopped = false;
     let resolved = false;
+    let activeQuestionResolver: ((answer: string) => void) | null = null;
+
+    setRuntimeToolCallHandler(runtime, createHumanInputToolHandler({
+      question: async (query: string) => {
+        io.stdout.write(query);
+        return await new Promise<string>((questionResolve) => {
+          activeQuestionResolver = questionResolve;
+        });
+      },
+    }, io));
 
     const cleanup = () => {
+      setRuntimeToolCallHandler(runtime, undefined);
       input.off('data', handleData);
       input.off('end', handleEnd);
       input.off('error', handleError);
@@ -471,11 +560,25 @@ async function runScriptedInteractiveInput(
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
+        if (activeQuestionResolver) {
+          const resolveQuestion = activeQuestionResolver;
+          activeQuestionResolver = null;
+          resolveQuestion(line);
+          continue;
+        }
+
         enqueueLine(line);
       }
     };
 
     const handleEnd = () => {
+      if (activeQuestionResolver) {
+        const resolveQuestion = activeQuestionResolver;
+        activeQuestionResolver = null;
+        resolveQuestion(buffer);
+        buffer = '';
+      }
+
       if (buffer.trim()) {
         enqueueLine(buffer);
         buffer = '';
@@ -525,6 +628,9 @@ export async function runAgentWorldInteractive(
   });
 
   try {
+    setRuntimeToolCallHandler(runtime, createHumanInputToolHandler({
+      question: async (query: string) => await readline.question(query),
+    }, io));
     readline.setPrompt(await buildInteractivePrompt(runtime));
     readline.prompt();
 
@@ -542,6 +648,7 @@ export async function runAgentWorldInteractive(
       readline.prompt();
     }
   } finally {
+    setRuntimeToolCallHandler(runtime, undefined);
     readline.close();
   }
 

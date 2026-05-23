@@ -43,6 +43,10 @@ const RUNTIME_ENVIRONMENT_KEYS = [
   'AZURE_OPENAI_DEPLOYMENT_NAME',
   'AZURE_OPENAI_API_VERSION',
 ];
+const WORKSPACE_ENVIRONMENT_KEYS = [
+  'AGENT_CLI_WORKSPACE',
+  'AGENT_CLI_ROOT',
+];
 
 /** @type {string[]} */
 const rootsToClean = [];
@@ -57,6 +61,7 @@ const LIVE_E2E_TIMEOUT_MS = 30000;
 const originalCwd = process.cwd();
 
 const originalRuntimeEnvironment = captureRuntimeEnvironment();
+const originalWorkspaceEnvironment = Object.fromEntries(WORKSPACE_ENVIRONMENT_KEYS.map((key) => [key, process.env[key]]));
 const liveRuntimeConfig = resolveRequiredLiveRuntimeConfig(originalRuntimeEnvironment);
 
 function captureRuntimeEnvironment() {
@@ -141,6 +146,20 @@ function applyLiveRuntimeEnvironment() {
   restoreRuntimeEnvironment(originalRuntimeEnvironment);
 }
 
+/** @param {Record<string, string | undefined>} snapshot */
+function restoreWorkspaceEnvironment(snapshot) {
+  for (const key of WORKSPACE_ENVIRONMENT_KEYS) {
+    const value = snapshot[key];
+
+    if (typeof value === 'undefined') {
+      delete process.env[key];
+      continue;
+    }
+
+    process.env[key] = value;
+  }
+}
+
 /** @param {string} rootPath */
 async function writeLiveRuntimeConfig(rootPath) {
   await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
@@ -211,6 +230,8 @@ function extractAssistantTextFromCliStdout(stdout) {
 
 /** @param {string} rootPath */
 async function loadCli(rootPath) {
+  process.env.AGENT_CLI_WORKSPACE = rootPath;
+  delete process.env.AGENT_CLI_ROOT;
   process.chdir(rootPath);
   vi.resetModules();
   return await import('../../bin/agent-cli.js');
@@ -219,6 +240,7 @@ async function loadCli(rootPath) {
 afterEach(async () => {
   process.chdir(originalCwd);
   restoreRuntimeEnvironment(originalRuntimeEnvironment);
+  restoreWorkspaceEnvironment(originalWorkspaceEnvironment);
 
   while (rootsToClean.length > 0) {
     const rootPath = rootsToClean.pop();

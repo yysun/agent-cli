@@ -232,6 +232,7 @@ describe('runtime-client', () => {
         },
         builtIns: {
           load_skill: true,
+          ask_user_input: true,
         },
         context: expect.objectContaining({
           workingDirectory: expect.any(String),
