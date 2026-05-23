@@ -32,6 +32,23 @@
 2. Confirm `/new`, `/chats`, `/use <chatId>`, and `/messages <chatId>` behavior still uses `.agent-world`.
 3. Confirm no runtime import still references `core/session-store.js`.
 
+## Scenario: Interactive Mode
+
+1. Run `agent-world-cli` with no subcommand in an isolated workspace.
+2. Confirm it prints an interactive prompt and does not auto-resume queued work on startup.
+3. Type `/help`.
+4. Confirm interactive help lists slash commands and plain-text send behavior.
+5. Type `/new`.
+6. Confirm a chat is created and the prompt updates or subsequent commands use that chat.
+7. Type `/send --queue @reviewer check this`.
+8. Confirm a durable queued row is created without provider credentials.
+9. Type `/queue`.
+10. Confirm the queued row is visible.
+11. Type `/clear`.
+12. Confirm the queue is empty.
+13. Type `/exit`.
+14. Confirm the process exits with code 0.
+
 ## Scenario: Agent World CLI Real Binary E2E
 
 1. Build `agent-world-cli`.
@@ -39,9 +56,11 @@
 3. Confirm help and world snapshot commands work.
 4. Confirm agent and chat operations persist to `.agent-world`.
 5. Confirm queued send, queue stop, and queue clear expose durable queue status transitions without provider credentials.
+6. Run a scripted interactive session through stdin/stdout against the built binary and verify the same queue lifecycle.
 
 ## Execution Status
 
 - Automated unit coverage: `tests/unit/agent-world-cli.test.js`, `tests/unit/world-store.test.js`, and `tests/unit/agent-world-runtime.test.js`.
 - Automated E2E coverage: `tests/e2e/agent-world-cli.e2e.test.js`, included in `npm run test:e2e:relay` and therefore `npm test`.
 - The E2E follows the Electron app pattern from `../agent-world/tests/electron-e2e`: real built entrypoint, isolated workspace, helper-based command execution, and durable state assertions.
+- Interactive mode is covered by both scripted unit coverage and real-binary E2E stdin/stdout coverage.

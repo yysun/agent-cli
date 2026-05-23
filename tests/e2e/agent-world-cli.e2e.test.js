@@ -11,10 +11,12 @@
  * - Keeps the suite provider-free by using queued sends rather than direct LLM dispatch.
  *
  * Recent changes:
+ * - 2026-05-23: Added scripted interactive-mode coverage against the real binary.
  * - 2026-05-23: Added real binary E2E coverage for `agent-world-cli`.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +58,47 @@ async function runAgentWorldCli(rootPath, args) {
     stdout: String(result.stdout ?? ''),
     stderr: String(result.stderr ?? ''),
   };
+}
+
+/**
+ * @param {string} rootPath
+ * @param {string[]} lines
+ */
+async function runAgentWorldCliInteractive(rootPath, lines) {
+  const childProcess = spawn(process.execPath, [agentWorldCliBin], {
+    cwd: rootPath,
+    env: {
+      ...process.env,
+      OPENAI_API_KEY: '',
+      ANTHROPIC_API_KEY: '',
+      GOOGLE_API_KEY: '',
+      XAI_API_KEY: '',
+      AZURE_OPENAI_API_KEY: '',
+      OPENAI_COMPATIBLE_API_KEY: '',
+      OLLAMA_BASE_URL: '',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  let stdout = '';
+  let stderr = '';
+  childProcess.stdout.setEncoding('utf8');
+  childProcess.stderr.setEncoding('utf8');
+  childProcess.stdout.on('data', (chunk) => {
+    stdout += String(chunk);
+  });
+  childProcess.stderr.on('data', (chunk) => {
+    stderr += String(chunk);
+  });
+
+  for (const line of lines) {
+    childProcess.stdin.write(`${line}\n`);
+  }
+  childProcess.stdin.end();
+
+  const [code, signal] = /** @type {[number | null, NodeJS.Signals | null]} */ (await once(childProcess, 'exit'));
+
+  return { code, signal, stdout, stderr };
 }
 
 /** @param {string} output */
@@ -154,5 +197,34 @@ describe('agent-world-cli binary', () => {
     const cleared = parseJsonOutput((await runAgentWorldCli(rootPath, ['queue', 'clear', chatId])).stdout);
     expect(cleared).toEqual({ cleared: true, chatId });
     expect(parseJsonOutput((await runAgentWorldCli(rootPath, ['queue', 'list', chatId])).stdout)).toEqual([]);
+  });
+
+  it('runs a scripted interactive session through the real binary', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const result = await runAgentWorldCliInteractive(rootPath, [
+      '/help',
+      '/agents create reviewer --name Reviewer',
+      '/new',
+      '/send --queue @reviewer interactive token',
+      '/queue',
+      '/clear',
+      '/queue',
+      '/exit',
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('agent-world-cli interactive');
+    expect(result.stdout).toContain('/queue [chatId]');
+    expect(result.stdout).toContain('"id": "reviewer"');
+    expect(result.stdout).toContain('"content": "@reviewer interactive token"');
+    expect(result.stdout).toContain('"cleared": true');
+
+    const world = await readJson(path.join(rootPath, '.agent-world', 'world.json'));
+    const queue = await readJson(path.join(rootPath, '.agent-world', 'queues', `${world.currentChatId}.json`));
+    expect(queue.rows).toEqual([]);
   });
 });

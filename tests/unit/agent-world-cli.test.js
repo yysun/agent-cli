@@ -10,9 +10,11 @@
  * - Exercises the same runtime-backed paths as the published `agent-world-cli` binary.
  *
  * Recent changes:
+ * - 2026-05-23: Added scripted interactive-mode coverage.
  * - 2026-05-23: Added initial command dispatcher coverage for `agent-world-cli`.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Readable } from 'node:stream';
 
 import { createTestRoot, removeTestRoot } from '../helpers/test-root.js';
 
@@ -26,6 +28,7 @@ function createIoCapture() {
 
   return {
     io: {
+      stdin: undefined,
       stdout: { write: (chunk) => { stdout += String(chunk); return true; } },
       stderr: { write: (chunk) => { stderr += String(chunk); return true; } },
     },
@@ -128,5 +131,32 @@ describe('agent-world-cli', () => {
     expect(parseJsonOutput(queueCapture.getStdout())).toEqual([
       expect.objectContaining({ content: '@reviewer check this', status: 'queued' }),
     ]);
+  });
+
+  it('runs scripted interactive commands over the shared dispatcher', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    const { runAgentWorldCli } = await loadAgentWorldCli(rootPath);
+    const capture = createIoCapture();
+    capture.io.stdin = Readable.from([
+      '/help\n',
+      '/agents create reviewer --name Reviewer\n',
+      '/new\n',
+      '/send --queue @reviewer interactive token\n',
+      '/queue\n',
+      '/clear\n',
+      '/queue\n',
+      '/exit\n',
+    ]);
+
+    const exitCode = await runAgentWorldCli([], capture.io);
+
+    expect(exitCode).toBe(0);
+    expect(capture.getStdout()).toContain('agent-world-cli interactive');
+    expect(capture.getStdout()).toContain('/send [--chat <chatId>]');
+    expect(capture.getStdout()).toContain('"id": "reviewer"');
+    expect(capture.getStdout()).toContain('"content": "@reviewer interactive token"');
+    expect(capture.getStdout()).toContain('"cleared": true');
+    expect(capture.getStderr()).toBe('');
   });
 });

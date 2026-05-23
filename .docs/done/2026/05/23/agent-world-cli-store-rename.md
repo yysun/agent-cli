@@ -7,6 +7,7 @@
 - Made runtime queue `add` enqueue-only so `agent-world-cli send --queue` can persist durable queue rows without triggering provider calls.
 - Added unit coverage for the CLI dispatcher and renamed store tests.
 - Added a real-binary E2E for `agent-world-cli`, modeled after `../agent-world` Electron E2E style: built entrypoint, isolated workspace, durable state assertions, and queue lifecycle checks.
+- Added `agent-world-cli` interactive mode for no-arg and `interactive` launches, with slash commands sharing the one-shot dispatcher and scripted stdin support.
 
 ## Verification
 
@@ -14,11 +15,11 @@
 - `npx vitest run tests/e2e/agent-world-cli.e2e.test.js`
 - `npm test`
 - `git diff --check`
-- CR: no blocking code issues remained after fixing CLI startup auto-resume behavior.
+- CR: no blocking code issues remained after fixing CLI startup auto-resume behavior and the piped-stdin readline path.
 - VR: requirement, plan, E2E spec, implementation, and tests all align.
 
 ## Notes
 
-- `agent-world-cli` is intentionally local-only and non-interactive in this story.
+- `agent-world-cli` remains local-only; interactive mode is terminal/stdin based, not remote relay mode.
 - Direct `agent-world-cli send` still uses the real runtime and can require provider credentials; `send --queue` is the provider-free path.
 - The store was not split into smaller modules; this story only renamed the ownership boundary.
