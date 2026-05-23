@@ -8,15 +8,13 @@ var __export = (target, all) => {
 // cli/src/agent-cli.ts
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import path4 from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { config as loadDotEnvConfig } from "dotenv";
 
 // core/agent-config.ts
 import { promises as fs } from "node:fs";
 
 // core/paths.ts
-import path from "node:path";
+import path2 from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
 function resolveWorkspaceRoot(workspaceRoot) {
@@ -25,7 +23,7 @@ function resolveWorkspaceRoot(workspaceRoot) {
     process.env[WORKSPACE_ROOT_ENV_KEY],
     process.env[LEGACY_PROJECT_ROOT_ENV_KEY]
   ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
-  return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
+  return configuredRoot ? path2.resolve(configuredRoot) : process.cwd();
 }
 var WORKSPACE_ROOT = "";
 var REPO_ROOT = "";
@@ -41,53 +39,53 @@ var REMOTE_HOST_LOCK_PATH = "";
 function configureWorkspaceRoot(workspaceRoot) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
   REPO_ROOT = WORKSPACE_ROOT;
-  SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
-  ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, "runtime.json");
-  AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
-  SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
-  WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
-  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
-  AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
-  AGENT_WORLD_QUEUES_ROOT = path.join(AGENT_WORLD_ROOT, "queues");
-  REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
+  SYSTEM_PROMPT_PATH = path2.join(WORKSPACE_ROOT, "AGENTS.md");
+  ROOT_RUNTIME_CONFIG_PATH = path2.join(WORKSPACE_ROOT, "runtime.json");
+  AGENT_WORLD_ROOT = path2.join(WORKSPACE_ROOT, ".agent-world");
+  SKILLS_ROOT = path2.join(AGENT_WORLD_ROOT, "skills");
+  WORLD_STATE_PATH = path2.join(AGENT_WORLD_ROOT, "world.json");
+  AGENT_WORLD_CHATS_ROOT = path2.join(AGENT_WORLD_ROOT, "chats");
+  AGENT_WORLD_AGENTS_ROOT = path2.join(AGENT_WORLD_ROOT, "agents");
+  AGENT_WORLD_QUEUES_ROOT = path2.join(AGENT_WORLD_ROOT, "queues");
+  REMOTE_HOST_LOCK_PATH = path2.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
   return WORKSPACE_ROOT;
 }
 configureWorkspaceRoot();
 function buildWorldChatDirectoryPath(chatId) {
-  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
+  return path2.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
 function buildWorldChatMetadataPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), "chat.json");
+  return path2.join(buildWorldChatDirectoryPath(chatId), "chat.json");
 }
 function buildWorldChatMessagesPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
+  return path2.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
 }
 function buildWorldChatSummaryPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), "summary.md");
+  return path2.join(buildWorldChatDirectoryPath(chatId), "summary.md");
 }
 function buildAgentDirectoryPath(agentId) {
-  return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
+  return path2.join(AGENT_WORLD_AGENTS_ROOT, agentId);
 }
 function buildAgentMetadataPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "agent.json");
+  return path2.join(buildAgentDirectoryPath(agentId), "agent.json");
 }
 function buildAgentInboxPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "inbox.jsonl");
+  return path2.join(buildAgentDirectoryPath(agentId), "inbox.jsonl");
 }
 function buildAgentStatePath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "state.json");
+  return path2.join(buildAgentDirectoryPath(agentId), "state.json");
 }
 function buildAgentEventsPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "events.jsonl");
+  return path2.join(buildAgentDirectoryPath(agentId), "events.jsonl");
 }
 function buildAgentMemoryPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "memory.md");
+  return path2.join(buildAgentDirectoryPath(agentId), "memory.md");
 }
 function buildAgentMemoryLogPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
+  return path2.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
 }
 function buildAgentRuntimeConfigPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
+  return path2.join(buildAgentDirectoryPath(agentId), "runtime.json");
 }
 
 // core/agent-config.ts
@@ -349,7 +347,7 @@ async function loadPersistedRuntimeConfig(options = {}) {
 
 // core/agent-files.ts
 import { promises as fs2 } from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 var DEFAULT_SYSTEM_PROMPT = [
   "You are Agent CLI.",
   "Be concise, factual, and action-oriented.",
@@ -425,7 +423,7 @@ async function collectSkillFilePaths(rootPath) {
     const entries = await fs2.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const entryPath = path2.join(currentPath, entry.name);
+      const entryPath = path3.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         queue.push(entryPath);
         continue;
@@ -490,13 +488,70 @@ function buildSkillInventoryMessage(skills) {
   ].join("\n");
 }
 
+// core/workspace-environment.ts
+import path4 from "node:path";
+import { config as loadDotEnvConfig } from "dotenv";
+var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_API_KEY",
+  "XAI_API_KEY",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "OLLAMA_BASE_URL",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_RESOURCE_NAME",
+  "AZURE_OPENAI_DEPLOYMENT_NAME",
+  "AZURE_OPENAI_API_VERSION",
+  "AGENT_CLI_RELAY_SERVER_URL"
+]);
+var loadedDotEnvRoots = /* @__PURE__ */ new Set();
+function loadAllowedDotEnvEnvironment() {
+  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
+    return;
+  }
+  loadedDotEnvRoots.add(WORKSPACE_ROOT);
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path4.join(WORKSPACE_ROOT, ".env"),
+    quiet: true
+  }).parsed ?? {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
+      continue;
+    }
+    if (typeof process.env[key] === "string" && process.env[key].trim()) {
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+function readWorkspaceRootDotEnvFallback() {
+  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim() || String(process.env[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
+    return void 0;
+  }
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path4.join(process.cwd(), ".env"),
+    quiet: true
+  }).parsed ?? {};
+  const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
+  const legacyProjectRoot = String(parsed[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim();
+  return workspaceRoot || legacyProjectRoot || void 0;
+}
+function prepareWorkspaceEnvironment(workspaceRoot) {
+  const resolvedRoot = configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
+  loadAllowedDotEnvEnvironment();
+  return resolvedRoot;
+}
+
 // core/world-store.ts
 import { randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
-import path3 from "node:path";
+import path5 from "node:path";
 var DEFAULT_AGENT_ID = "default";
 function defaultWorldName() {
-  return path3.basename(WORKSPACE_ROOT) || "agent-world";
+  return path5.basename(WORKSPACE_ROOT) || "agent-world";
 }
 function normalizeAgentId2(agentId) {
   const normalizedAgentId = String(agentId ?? "").trim();
@@ -562,18 +617,18 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
   };
 }
 async function writeJsonAtomic(filePath, value) {
-  const directoryPath = path3.dirname(filePath);
-  const fileName = path3.basename(filePath);
-  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const directoryPath = path5.dirname(filePath);
+  const fileName = path5.basename(filePath);
+  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs3.mkdir(directoryPath, { recursive: true });
   await fs3.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
   await fs3.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
-  const directoryPath = path3.dirname(filePath);
-  const fileName = path3.basename(filePath);
-  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const directoryPath = path5.dirname(filePath);
+  const fileName = path5.basename(filePath);
+  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs3.mkdir(directoryPath, { recursive: true });
   await fs3.writeFile(temporaryPath, text, "utf8");
   await fs3.rename(temporaryPath, filePath);
@@ -587,7 +642,7 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs3.mkdir(path3.dirname(filePath), { recursive: true });
+  await fs3.mkdir(path5.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
   await fs3.appendFile(filePath, serialized, "utf8");
@@ -647,7 +702,7 @@ async function readJsonl(filePath) {
   }
 }
 async function ensureRemoteHostLockDirectory() {
-  await fs3.mkdir(path3.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
+  await fs3.mkdir(path5.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
 }
 async function ensureAgentWorldDirectories() {
   await Promise.all([
@@ -2721,10 +2776,10 @@ function summarizePathExistsResult(result, forcedDurationMs) {
   const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const exists = readFirstBoolean(record, "exists");
-  const path5 = readFirstString(record, "path", "filePath");
+  const path6 = readFirstString(record, "path", "filePath");
   const type = readFirstString(record, "type", "kind");
   const preview = [
-    path5 ? truncateOneLine(`path: ${path5}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    path6 ? truncateOneLine(`path: ${path6}`, MAX_PREVIEW_LINE_WIDTH) : null,
     type ? `type: ${type}` : null
   ].filter((line) => line !== null);
   return {
@@ -2879,7 +2934,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
   const data = parseJsonRecord2(readDataField(result));
   const contentType = readFirstString(data, "contentType") ?? "content";
   const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
-  const path5 = readFirstString(data, "path");
+  const path6 = readFirstString(data, "path");
   const content = readFirstString(data, "content");
   const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
   const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
@@ -2888,7 +2943,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
     ok: true,
     durationMs,
     summary,
-    preview: path5 ? [`path: ${truncateOneLine(path5, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    preview: path6 ? [`path: ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
     raw: result
   };
 }
@@ -2900,13 +2955,13 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
   const data = isRecord2(record?.data) ? record.data : null;
-  const path5 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const path6 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
     name: toolName,
     ok: true,
     durationMs,
-    summary: path5 ? `${summary} \xB7 ${truncateOneLine(path5, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    summary: path6 ? `${summary} \xB7 ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH)}` : summary,
     raw: result
   };
 }
@@ -3320,57 +3375,6 @@ var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
 var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
 var PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
 var DEFAULT_AGENT_ID2 = "default";
-var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "GOOGLE_API_KEY",
-  "XAI_API_KEY",
-  "OPENAI_COMPATIBLE_API_KEY",
-  "OPENAI_COMPATIBLE_BASE_URL",
-  "OLLAMA_BASE_URL",
-  "AZURE_OPENAI_API_KEY",
-  "AZURE_OPENAI_RESOURCE_NAME",
-  "AZURE_OPENAI_DEPLOYMENT_NAME",
-  "AZURE_OPENAI_API_VERSION"
-]);
-var loadedDotEnvRoots = /* @__PURE__ */ new Set();
-function loadAllowedDotEnvEnvironment() {
-  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
-    return;
-  }
-  loadedDotEnvRoots.add(WORKSPACE_ROOT);
-  const parsed = loadDotEnvConfig({
-    processEnv: {},
-    path: path4.join(WORKSPACE_ROOT, ".env"),
-    quiet: true
-  }).parsed ?? {};
-  for (const [key, value] of Object.entries(parsed)) {
-    if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
-      continue;
-    }
-    if (typeof process.env[key] === "string" && process.env[key].trim()) {
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
-function readWorkspaceRootDotEnvFallback() {
-  if (String(process.env[WORKSPACE_ENV_KEY] ?? "").trim() || String(process.env[PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
-    return void 0;
-  }
-  const parsed = loadDotEnvConfig({
-    processEnv: {},
-    path: path4.join(process.cwd(), ".env"),
-    quiet: true
-  }).parsed ?? {};
-  const workspaceRoot = String(parsed[WORKSPACE_ENV_KEY] ?? "").trim();
-  const legacyProjectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? "").trim();
-  return workspaceRoot || legacyProjectRoot || void 0;
-}
-function prepareWorkspaceEnvironment(workspaceRoot) {
-  configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
-  loadAllowedDotEnvEnvironment();
-}
 function usageText() {
   return [
     "Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
@@ -3432,7 +3436,7 @@ function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url
   try {
     return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
   } catch {
-    return pathToFileURL(path4.resolve(argvPath)).href === moduleUrl;
+    return pathToFileURL(path.resolve(argvPath)).href === moduleUrl;
   }
 }
 function parseArguments(argv) {

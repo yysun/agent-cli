@@ -11,6 +11,7 @@
  * - Prints startup diagnostics for workspace root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
  * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
  * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
  * - 2026-05-20: Added startup agent-id output.
@@ -19,18 +20,16 @@
  */
 import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { config as loadDotEnvConfig } from 'dotenv';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
 import { loadSkillInventory, loadWorkspaceSystemPrompt } from '../../core/agent-files.js';
 import {
-  configureWorkspaceRoot,
   LEGACY_PROJECT_ROOT_ENV_KEY,
   WORKSPACE_ROOT,
   WORKSPACE_ROOT_ENV_KEY,
 } from '../../core/paths.js';
+import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
 import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
@@ -59,21 +58,6 @@ export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
 export const PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
 const DEFAULT_AGENT_ID = 'default';
 
-const DOTENV_ALLOWED_ENV_KEYS = new Set([
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'GOOGLE_API_KEY',
-  'XAI_API_KEY',
-  'OPENAI_COMPATIBLE_API_KEY',
-  'OPENAI_COMPATIBLE_BASE_URL',
-  'OLLAMA_BASE_URL',
-  'AZURE_OPENAI_API_KEY',
-  'AZURE_OPENAI_RESOURCE_NAME',
-  'AZURE_OPENAI_DEPLOYMENT_NAME',
-  'AZURE_OPENAI_API_VERSION',
-]);
-const loadedDotEnvRoots = new Set<string>();
-
 export interface ParsedArguments {
   help: boolean;
   agentId?: string;
@@ -98,56 +82,6 @@ export interface MainOptions {
 export interface InteractivePrompt {
   question(query: string): Promise<string>;
   close?(): void;
-}
-
-function loadAllowedDotEnvEnvironment(): void {
-  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
-    return;
-  }
-
-  loadedDotEnvRoots.add(WORKSPACE_ROOT);
-
-  const parsed = loadDotEnvConfig({
-    processEnv: {},
-    path: path.join(WORKSPACE_ROOT, '.env'),
-    quiet: true,
-  }).parsed ?? {};
-
-  for (const [key, value] of Object.entries(parsed)) {
-    if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
-      continue;
-    }
-
-    if (typeof process.env[key] === 'string' && process.env[key].trim()) {
-      continue;
-    }
-
-    process.env[key] = value;
-  }
-}
-
-function readWorkspaceRootDotEnvFallback(): string | undefined {
-  if (
-    String(process.env[WORKSPACE_ENV_KEY] ?? '').trim()
-    || String(process.env[PROJECT_ROOT_ENV_KEY] ?? '').trim()
-  ) {
-    return undefined;
-  }
-
-  const parsed = loadDotEnvConfig({
-    processEnv: {},
-    path: path.join(process.cwd(), '.env'),
-    quiet: true,
-  }).parsed ?? {};
-  const workspaceRoot = String(parsed[WORKSPACE_ENV_KEY] ?? '').trim();
-  const legacyProjectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? '').trim();
-
-  return workspaceRoot || legacyProjectRoot || undefined;
-}
-
-function prepareWorkspaceEnvironment(workspaceRoot?: string): void {
-  configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
-  loadAllowedDotEnvEnvironment();
 }
 
 export function usageText(): string {

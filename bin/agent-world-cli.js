@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // cli/src/agent-world-cli.ts
-import path4 from "node:path";
+import path5 from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
@@ -2427,6 +2427,63 @@ function createAgentWorldRuntime(options = {}) {
   return new AgentWorldRuntime(options);
 }
 
+// core/workspace-environment.ts
+import path4 from "node:path";
+import { config as loadDotEnvConfig } from "dotenv";
+var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_API_KEY",
+  "XAI_API_KEY",
+  "OPENAI_COMPATIBLE_API_KEY",
+  "OPENAI_COMPATIBLE_BASE_URL",
+  "OLLAMA_BASE_URL",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_RESOURCE_NAME",
+  "AZURE_OPENAI_DEPLOYMENT_NAME",
+  "AZURE_OPENAI_API_VERSION",
+  "AGENT_CLI_RELAY_SERVER_URL"
+]);
+var loadedDotEnvRoots = /* @__PURE__ */ new Set();
+function loadAllowedDotEnvEnvironment() {
+  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
+    return;
+  }
+  loadedDotEnvRoots.add(WORKSPACE_ROOT);
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path4.join(WORKSPACE_ROOT, ".env"),
+    quiet: true
+  }).parsed ?? {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
+      continue;
+    }
+    if (typeof process.env[key] === "string" && process.env[key].trim()) {
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+function readWorkspaceRootDotEnvFallback() {
+  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim() || String(process.env[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
+    return void 0;
+  }
+  const parsed = loadDotEnvConfig({
+    processEnv: {},
+    path: path4.join(process.cwd(), ".env"),
+    quiet: true
+  }).parsed ?? {};
+  const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
+  const legacyProjectRoot = String(parsed[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim();
+  return workspaceRoot || legacyProjectRoot || void 0;
+}
+function prepareWorkspaceEnvironment(workspaceRoot) {
+  const resolvedRoot = configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
+  loadAllowedDotEnvEnvironment();
+  return resolvedRoot;
+}
+
 // cli/src/human-input-ui.ts
 var EXIT_HUMAN_INPUT_TOKEN = "0";
 var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
@@ -2653,14 +2710,16 @@ ${formatHumanInputCheckpoint(request, question)}`);
 }
 
 // cli/src/agent-world-cli.ts
-var VALUE_FLAGS = /* @__PURE__ */ new Set(["workspace", "name", "provider", "model", "chat", "agent"]);
+var VALUE_FLAGS = /* @__PURE__ */ new Set(["workspace", "project", "name", "provider", "model", "chat", "agent"]);
 var BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["default", "queue", "help"]);
 function usageText() {
   return [
     "agent-world-cli commands:",
+    "  agent-world-cli [--workspace <path>] <command>",
+    "  agent-world-cli [--project <path>] <command>",
     "  help",
     "  interactive",
-    "  world [--workspace <path>]",
+    "  world",
     "  agents list",
     "  agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]",
     "  agents delete <agentId>",
@@ -2751,20 +2810,28 @@ function parseArgs(argv) {
       continue;
     }
     if (token.startsWith("--")) {
-      const flag = token.slice(2);
+      const flagBody = token.slice(2);
+      const equalsIndex = flagBody.indexOf("=");
+      const flag = equalsIndex >= 0 ? flagBody.slice(0, equalsIndex) : flagBody;
+      const inlineValue = equalsIndex >= 0 ? flagBody.slice(equalsIndex + 1) : void 0;
       if (BOOLEAN_FLAGS.has(flag)) {
+        if (inlineValue !== void 0) {
+          throw new Error(`Option --${flag} does not accept a value`);
+        }
         flags.set(flag, true);
         continue;
       }
       if (!VALUE_FLAGS.has(flag)) {
         throw new Error(`Unknown option: --${flag}`);
       }
-      const value = argv[index + 1];
+      const value = inlineValue ?? argv[index + 1];
       if (!value || value.startsWith("--")) {
         throw new Error(`Missing value for --${flag}`);
       }
       flags.set(flag, value);
-      index += 1;
+      if (inlineValue === void 0) {
+        index += 1;
+      }
       continue;
     }
     command.push(token);
@@ -3161,8 +3228,11 @@ async function runAgentWorldCli(argv = process.argv.slice(2), io = defaultIo()) 
       writeText(io, usageText());
       return 0;
     }
+    const workspaceRoot = prepareWorkspaceEnvironment(
+      flagString(parsed.flags, "workspace") ?? flagString(parsed.flags, "project")
+    );
     const runtime = createAgentWorldRuntime({
-      workspaceRoot: flagString(parsed.flags, "workspace"),
+      workspaceRoot,
       autoResume: false
     });
     if (!area || area === "interactive") {
@@ -3177,11 +3247,11 @@ async function runAgentWorldCli(argv = process.argv.slice(2), io = defaultIo()) 
   }
 }
 function isAgentWorldCliEntrypoint(argv = process.argv) {
-  const entrypoint = argv[1] ? path4.resolve(argv[1]) : "";
+  const entrypoint = argv[1] ? path5.resolve(argv[1]) : "";
   if (!entrypoint) {
     return false;
   }
-  return entrypoint === fileURLToPath(import.meta.url) || path4.basename(entrypoint) === "agent-world-cli.js";
+  return entrypoint === fileURLToPath(import.meta.url) || path5.basename(entrypoint) === "agent-world-cli.js";
 }
 async function main() {
   const exitCode = await runAgentWorldCli();

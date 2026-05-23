@@ -11,6 +11,7 @@
  * - Keeps queued sends provider-free by enqueueing without dispatching.
  *
  * Recent changes:
+ * - 2026-05-23: Aligned workspace flag aliases and `.env` preparation with `agent-cli`.
  * - 2026-05-23: Imports the world runtime from core and keeps HITL prompt handling in this shell layer.
  * - 2026-05-23: Added interactive mode for `agent-world-cli`.
  * - 2026-05-23: Implemented the published `agent-world-cli` binary over the world runtime.
@@ -25,6 +26,7 @@ import {
   type WorldToolCallHandler,
   createAgentWorldRuntime,
 } from '../../core/agent-world-runtime.js';
+import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
 import {
   collectHumanInputAnswer,
   parseHumanInputRequest,
@@ -45,15 +47,17 @@ type AgentWorldRuntimeWithToolHandler = AgentWorldRuntime & {
   setToolCallHandler?: (handler: WorldToolCallHandler | undefined) => void;
 };
 
-const VALUE_FLAGS = new Set(['workspace', 'name', 'provider', 'model', 'chat', 'agent']);
+const VALUE_FLAGS = new Set(['workspace', 'project', 'name', 'provider', 'model', 'chat', 'agent']);
 const BOOLEAN_FLAGS = new Set(['default', 'queue', 'help']);
 
 export function usageText(): string {
   return [
     'agent-world-cli commands:',
+    '  agent-world-cli [--workspace <path>] <command>',
+    '  agent-world-cli [--project <path>] <command>',
     '  help',
     '  interactive',
-    '  world [--workspace <path>]',
+    '  world',
     '  agents list',
     '  agents create <agentId> [--name <name>] [--provider <provider>] [--model <model>] [--default]',
     '  agents delete <agentId>',
@@ -160,9 +164,15 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
 
     if (token.startsWith('--')) {
-      const flag = token.slice(2);
+      const flagBody = token.slice(2);
+      const equalsIndex = flagBody.indexOf('=');
+      const flag = equalsIndex >= 0 ? flagBody.slice(0, equalsIndex) : flagBody;
+      const inlineValue = equalsIndex >= 0 ? flagBody.slice(equalsIndex + 1) : undefined;
 
       if (BOOLEAN_FLAGS.has(flag)) {
+        if (inlineValue !== undefined) {
+          throw new Error(`Option --${flag} does not accept a value`);
+        }
         flags.set(flag, true);
         continue;
       }
@@ -171,13 +181,15 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new Error(`Unknown option: --${flag}`);
       }
 
-      const value = argv[index + 1];
+      const value = inlineValue ?? argv[index + 1];
       if (!value || value.startsWith('--')) {
         throw new Error(`Missing value for --${flag}`);
       }
 
       flags.set(flag, value);
-      index += 1;
+      if (inlineValue === undefined) {
+        index += 1;
+      }
       continue;
     }
 
@@ -666,8 +678,12 @@ export async function runAgentWorldCli(argv = process.argv.slice(2), io = defaul
       return 0;
     }
 
+    const workspaceRoot = prepareWorkspaceEnvironment(
+      flagString(parsed.flags, 'workspace') ?? flagString(parsed.flags, 'project'),
+    );
+
     const runtime = createAgentWorldRuntime({
-      workspaceRoot: flagString(parsed.flags, 'workspace'),
+      workspaceRoot,
       autoResume: false,
     });
 
