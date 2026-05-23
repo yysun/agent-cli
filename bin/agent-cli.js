@@ -36,6 +36,7 @@ var AGENT_WORLD_ROOT = "";
 var WORLD_STATE_PATH = "";
 var AGENT_WORLD_CHATS_ROOT = "";
 var AGENT_WORLD_AGENTS_ROOT = "";
+var AGENT_WORLD_QUEUES_ROOT = "";
 var REMOTE_HOST_LOCK_PATH = "";
 function configureWorkspaceRoot(workspaceRoot) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
@@ -47,6 +48,7 @@ function configureWorkspaceRoot(workspaceRoot) {
   WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
   AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
+  AGENT_WORLD_QUEUES_ROOT = path.join(AGENT_WORLD_ROOT, "queues");
   REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
   return WORKSPACE_ROOT;
 }
@@ -80,6 +82,9 @@ function buildAgentEventsPath(agentId) {
 }
 function buildAgentMemoryPath(agentId) {
   return path.join(buildAgentDirectoryPath(agentId), "memory.md");
+}
+function buildAgentMemoryLogPath(agentId) {
+  return path.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
 }
 function buildAgentRuntimeConfigPath(agentId) {
   return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
@@ -533,7 +538,7 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
 async function writeJsonAtomic(filePath, value) {
   const directoryPath = path3.dirname(filePath);
   const fileName = path3.basename(filePath);
-  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.tmp`);
+  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs3.mkdir(directoryPath, { recursive: true });
   await fs3.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
@@ -542,7 +547,7 @@ async function writeJsonAtomic(filePath, value) {
 async function writeTextAtomic(filePath, text) {
   const directoryPath = path3.dirname(filePath);
   const fileName = path3.basename(filePath);
-  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.tmp`);
+  const temporaryPath = path3.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs3.mkdir(directoryPath, { recursive: true });
   await fs3.writeFile(temporaryPath, text, "utf8");
   await fs3.rename(temporaryPath, filePath);
@@ -622,7 +627,8 @@ async function ensureAgentWorldDirectories() {
   await Promise.all([
     fs3.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
     fs3.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs3.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true })
+    fs3.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
+    fs3.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
   ]);
 }
 function isProcessRunning(pid) {
@@ -710,6 +716,7 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   await ensureTextFile(buildAgentEventsPath(agentId));
   await ensureTextFile(buildAgentInboxPath(agentId));
   await ensureTextFile(buildAgentMemoryPath(agentId));
+  await ensureTextFile(buildAgentMemoryLogPath(agentId));
 }
 async function readWorldState() {
   const world = await readJsonIfPresent(WORLD_STATE_PATH);
@@ -965,14 +972,15 @@ async function loadRequestedChat({ newChat, agentId }) {
     throw error;
   }
 }
-async function persistCompletedChat({ chat, messages, setCurrent = true }) {
+async function persistCompletedChat({ chat, messages, setCurrent = true, agentId }) {
   const world = await ensureWorldBootstrap();
+  const selectedAgentId = normalizeAgentId2(agentId ?? world.defaultAgentId);
   const persistedChat = await persistWorldChat({
     id: chat.id,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     messages
-  }, String(world.defaultAgentId));
+  }, selectedAgentId);
   if (setCurrent) {
     await writeWorldState({
       world,

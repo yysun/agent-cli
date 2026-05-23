@@ -9,8 +9,10 @@
  * - Bootstraps `world.json`, default-agent records, and chat directories on demand.
  * - Creates and selects named agents under `.agent-world/agents/{agentId}`.
  * - Keeps the exported chat-store API stable for the CLI and remote host.
+ * - Provides structured agent memory and per-chat queue helpers for the world runtime API.
  *
  * Recent changes:
+ * - 2026-05-23: Added agent-level memory JSONL and durable per-chat queue persistence.
  * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
  * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.
  * - 2026-05-07: Added file-backed chat persistence for the CLI.
@@ -25,9 +27,11 @@ import { loadPersistedRuntimeConfig } from './agent-config.js';
 import {
   AGENT_WORLD_AGENTS_ROOT,
   AGENT_WORLD_CHATS_ROOT,
+  AGENT_WORLD_QUEUES_ROOT,
   AGENT_WORLD_ROOT,
   buildAgentEventsPath,
   buildAgentInboxPath,
+  buildAgentMemoryLogPath,
   buildAgentMemoryPath,
   buildAgentMetadataPath,
   buildAgentRuntimeConfigPath,
@@ -35,6 +39,7 @@ import {
   buildWorldChatMessagesPath,
   buildWorldChatMetadataPath,
   buildWorldChatSummaryPath,
+  buildWorldQueuePath,
   REMOTE_HOST_LOCK_PATH,
   WORKSPACE_ROOT,
   WORLD_STATE_PATH,
@@ -155,7 +160,7 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
 async function writeJsonAtomic(filePath, value) {
   const directoryPath = path.dirname(filePath);
   const fileName = path.basename(filePath);
-  const temporaryPath = path.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.tmp`);
+  const temporaryPath = path.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
 
   await fs.mkdir(directoryPath, { recursive: true });
   await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
@@ -169,7 +174,7 @@ async function writeJsonAtomic(filePath, value) {
 async function writeTextAtomic(filePath, text) {
   const directoryPath = path.dirname(filePath);
   const fileName = path.basename(filePath);
-  const temporaryPath = path.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.tmp`);
+  const temporaryPath = path.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
 
   await fs.mkdir(directoryPath, { recursive: true });
   await fs.writeFile(temporaryPath, text, 'utf8');
@@ -289,6 +294,7 @@ async function ensureAgentWorldDirectories() {
     fs.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
     fs.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
     fs.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
+    fs.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true }),
   ]);
 }
 
@@ -367,6 +373,10 @@ function createEmptyChat() {
   };
 }
 
+function createMessageId() {
+  return `msg-${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
 /** @param {string} agentId */
 async function inferDefaultAgentRuntime(agentId) {
   const runtimeConfig = await loadPersistedRuntimeConfig({ agentId });
@@ -421,6 +431,7 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   await ensureTextFile(buildAgentEventsPath(agentId));
   await ensureTextFile(buildAgentInboxPath(agentId));
   await ensureTextFile(buildAgentMemoryPath(agentId));
+  await ensureTextFile(buildAgentMemoryLogPath(agentId));
 }
 
 async function readWorldState() {
@@ -517,6 +528,101 @@ export async function loadAgentMetadata(agentId) {
   return metadata && typeof metadata === 'object' ? metadata : null;
 }
 
+export async function loadWorldSnapshot() {
+  const world = await ensureWorldBootstrap();
+
+  return {
+    ...world,
+    agents: await listAgentMetadata(),
+    chats: await listPersistedChats(),
+  };
+}
+
+/** @param {Record<string, unknown>} updates */
+export async function updateWorldMetadata(updates) {
+  const world = await ensureWorldBootstrap();
+  return await writeWorldState({ world, updates });
+}
+
+export async function listAgentMetadata() {
+  await ensureWorldBootstrap();
+  const entries = await fs.readdir(AGENT_WORLD_AGENTS_ROOT, { withFileTypes: true });
+  const agents = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const metadata = await readJsonIfPresent(buildAgentMetadataPath(entry.name));
+    if (metadata && typeof metadata === 'object') {
+      agents.push(metadata);
+    }
+  }
+
+  return agents.sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')));
+}
+
+/**
+ * @param {{
+ *   agentId?: string,
+ *   name?: string,
+ *   provider?: string,
+ *   model?: string,
+ *   setDefault?: boolean,
+ * }} [options]
+ */
+export async function createAgentMetadata(options = {}) {
+  return await ensureAgentSelection(options);
+}
+
+/**
+ * @param {string} agentId
+ * @param {Record<string, unknown>} updates
+ */
+export async function updateAgentMetadata(agentId, updates) {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  await ensureWorldBootstrap();
+  const existingAgentMetadata = await readJsonIfPresent(buildAgentMetadataPath(normalizedAgentId));
+
+  if (!existingAgentMetadata || typeof existingAgentMetadata !== 'object') {
+    throw new Error(`Missing agent: ${normalizedAgentId}`);
+  }
+
+  const nextMetadata = {
+    ...existingAgentMetadata,
+    ...updates,
+    id: normalizedAgentId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await writeJsonAtomic(buildAgentMetadataPath(normalizedAgentId), nextMetadata);
+
+  if (updates.provider || updates.model) {
+    const existingRuntime = await readJsonIfPresent(buildAgentRuntimeConfigPath(normalizedAgentId));
+    await writeJsonAtomic(buildAgentRuntimeConfigPath(normalizedAgentId), {
+      ...(existingRuntime && typeof existingRuntime === 'object' ? existingRuntime : { schemaVersion: 1 }),
+      ...(updates.provider ? { provider: updates.provider } : {}),
+      ...(updates.model ? { model: updates.model } : {}),
+    });
+  }
+
+  return nextMetadata;
+}
+
+/** @param {string} agentId */
+export async function deleteAgentMetadata(agentId) {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const world = await ensureWorldBootstrap();
+
+  if (String(world.defaultAgentId ?? '') === normalizedAgentId) {
+    throw new Error('Cannot delete the default agent.');
+  }
+
+  await fs.rm(path.join(AGENT_WORLD_AGENTS_ROOT, normalizedAgentId), { recursive: true, force: true });
+  return true;
+}
+
 /**
  * @param {{
  *   agentId?: string,
@@ -576,6 +682,100 @@ async function loadWorldChatById(chatId) {
     updatedAt: String(metadata.updatedAt ?? ''),
     messages,
   };
+}
+
+/**
+ * @param {any} message
+ * @param {{ agentId: string, chatId: string, fallbackTimestamp: string }} context
+ */
+function normalizeAgentMemoryEntry(message, context) {
+  const normalizedMessage = normalizePersistedMessage(message, context.fallbackTimestamp);
+
+  return {
+    ...normalizedMessage,
+    messageId: String(message.messageId ?? message.id ?? '').trim() || createMessageId(),
+    agentId: context.agentId,
+    chatId: context.chatId,
+    sender: typeof message.sender === 'string' ? message.sender : (
+      normalizedMessage.role === 'assistant' ? context.agentId : normalizedMessage.role
+    ),
+  };
+}
+
+/**
+ * @param {{
+ *   agentId: string,
+ *   chatId: string,
+ *   messages: any[],
+ * }} params
+ */
+export async function appendAgentMemory({ agentId, chatId, messages }) {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  await ensureWorldBootstrap();
+  await ensureDefaultAgentFiles(normalizedAgentId);
+
+  const fallbackTimestamp = new Date().toISOString();
+  const entries = messages.map((message) => normalizeAgentMemoryEntry(message, {
+    agentId: normalizedAgentId,
+    chatId: normalizedChatId,
+    fallbackTimestamp,
+  }));
+
+  await appendJsonl(buildAgentMemoryLogPath(normalizedAgentId), entries);
+  return entries;
+}
+
+/**
+ * @param {{ agentId?: string, chatId?: string }} [options]
+ */
+export async function loadAgentMemory(options = {}) {
+  await ensureWorldBootstrap();
+  const normalizedAgentId = options.agentId ? normalizeAgentId(options.agentId) : '';
+  const normalizedChatId = String(options.chatId ?? '').trim();
+  const agentIds = normalizedAgentId
+    ? [normalizedAgentId]
+    : (await listAgentMetadata()).map((agent) => String(agent.id ?? '')).filter(Boolean);
+  const entries = [];
+
+  for (const agentId of agentIds) {
+    const memoryPath = buildAgentMemoryLogPath(agentId);
+    let memoryEntries;
+
+    try {
+      memoryEntries = await readJsonl(memoryPath);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Missing chat session file: ')) {
+        continue;
+      }
+
+      throw error;
+    }
+
+    for (const entry of memoryEntries) {
+      if (normalizedChatId && String(entry.chatId ?? '') !== normalizedChatId) {
+        continue;
+      }
+
+      entries.push(entry);
+    }
+  }
+
+  return entries.sort((left, right) => {
+    const leftTime = Date.parse(String(left.createdAt ?? ''));
+    const rightTime = Date.parse(String(right.createdAt ?? ''));
+
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return String(left.messageId ?? '').localeCompare(String(right.messageId ?? ''));
+  });
 }
 
 export async function assertNoActiveRemoteHost() {
@@ -677,6 +877,13 @@ export async function loadChatById(chatId) {
   return await loadWorldChatById(normalizedChatId);
 }
 
+/**
+ * @param {string} chatId
+ */
+export async function loadChatMessages(chatId) {
+  return (await loadChatById(chatId)).messages;
+}
+
 export async function listPersistedChats() {
   const world = await ensureWorldBootstrap();
   const currentChatId = String(world.currentChatId ?? '').trim();
@@ -736,6 +943,33 @@ export async function createPersistedChat(options = {}) {
   return chat;
 }
 
+/** @param {string} chatId */
+export async function deletePersistedChat(chatId) {
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  const world = await ensureWorldBootstrap();
+  await fs.rm(path.join(AGENT_WORLD_CHATS_ROOT, normalizedChatId), { recursive: true, force: true });
+  await fs.rm(buildWorldQueuePath(normalizedChatId), { force: true });
+
+  if (String(world.currentChatId ?? '') === normalizedChatId) {
+    await writeWorldState({
+      world,
+      updates: {
+        currentChatId: '',
+      },
+    });
+  }
+
+  return {
+    chatId: normalizedChatId,
+    deleted: true,
+  };
+}
+
 /**
  * @param {string} chatId
  */
@@ -788,16 +1022,17 @@ export async function loadRequestedChat({ newChat, agentId }) {
 }
 
 /**
- * @param {{ chat: { id: string, createdAt?: string, updatedAt?: string }, messages: any[], setCurrent?: boolean }} params
+ * @param {{ chat: { id: string, createdAt?: string, updatedAt?: string }, messages: any[], setCurrent?: boolean, agentId?: string }} params
  */
-export async function persistCompletedChat({ chat, messages, setCurrent = true }) {
+export async function persistCompletedChat({ chat, messages, setCurrent = true, agentId }) {
   const world = await ensureWorldBootstrap();
+  const selectedAgentId = normalizeAgentId(agentId ?? world.defaultAgentId);
   const persistedChat = await persistWorldChat({
     id: chat.id,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     messages,
-  }, String(world.defaultAgentId));
+  }, selectedAgentId);
 
   if (setCurrent) {
     await writeWorldState({
@@ -857,4 +1092,282 @@ export async function persistRemoteSessionState({ chatId, remoteSession }) {
   });
 
   return statePath;
+}
+
+function createEmptyQueueState() {
+  return {
+    paused: false,
+    rows: [],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** @param {unknown} value */
+function normalizeQueueState(value) {
+  if (!value || typeof value !== 'object') {
+    return createEmptyQueueState();
+  }
+
+  return {
+    paused: value.paused === true,
+    rows: Array.isArray(value.rows) ? value.rows : [],
+    updatedAt: String(value.updatedAt ?? new Date().toISOString()),
+  };
+}
+
+/** @param {string} chatId */
+async function readQueueState(chatId) {
+  const existingState = await readJsonIfPresent(buildWorldQueuePath(chatId));
+  return normalizeQueueState(existingState);
+}
+
+/**
+ * @param {string} chatId
+ * @param {{ paused: boolean, rows: any[], updatedAt?: string }} state
+ */
+async function writeQueueState(chatId, state) {
+  const nextState = {
+    paused: state.paused === true,
+    rows: state.rows,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await writeJsonAtomic(buildWorldQueuePath(chatId), nextState);
+  return nextState;
+}
+
+/**
+ * @param {string | undefined} chatId
+ */
+async function listQueueChatIds(chatId) {
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (normalizedChatId) {
+    return [normalizedChatId];
+  }
+
+  try {
+    const entries = await fs.readdir(AGENT_WORLD_QUEUES_ROOT, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+      .map((entry) => entry.name.replace(/\.json$/u, ''))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * @param {string} chatId
+ * @param {any} row
+ */
+function normalizeQueueRow(chatId, row) {
+  const now = new Date().toISOString();
+
+  return {
+    messageId: String(row.messageId ?? '').trim() || createMessageId(),
+    chatId,
+    content: String(row.content ?? ''),
+    sender: String(row.sender ?? 'human').trim() || 'human',
+    status: ['queued', 'sending', 'error', 'cancelled'].includes(String(row.status ?? ''))
+      ? String(row.status)
+      : 'queued',
+    retryCount: Number.isInteger(Number(row.retryCount)) ? Number(row.retryCount) : 0,
+    createdAt: normalizeTimestamp(row.createdAt, now),
+    updatedAt: normalizeTimestamp(row.updatedAt, now),
+  };
+}
+
+/**
+ * @param {{ chatId?: string }} [options]
+ */
+export async function listQueuedMessages(options = {}) {
+  await ensureWorldBootstrap();
+  const chatIds = await listQueueChatIds(options.chatId);
+  const rows = [];
+
+  for (const chatId of chatIds) {
+    const queueState = await readQueueState(chatId);
+    rows.push(...queueState.rows.map((row) => normalizeQueueRow(chatId, row)));
+  }
+
+  return rows.sort((left, right) => {
+    const leftTime = Date.parse(String(left.createdAt ?? ''));
+    const rightTime = Date.parse(String(right.createdAt ?? ''));
+
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return String(left.messageId).localeCompare(String(right.messageId));
+  });
+}
+
+/**
+ * @param {{ chatId: string, content: string, sender?: string, messageId?: string, status?: string }} params
+ */
+export async function addQueuedMessage({ chatId, content, sender = 'human', messageId, status = 'queued' }) {
+  await ensureWorldBootstrap();
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  const queueState = await readQueueState(normalizedChatId);
+  const row = normalizeQueueRow(normalizedChatId, {
+    messageId,
+    content,
+    sender,
+    status,
+    retryCount: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  await writeQueueState(normalizedChatId, {
+    ...queueState,
+    rows: [...queueState.rows, row],
+  });
+
+  return row;
+}
+
+/**
+ * @param {string} messageId
+ * @param {Record<string, unknown>} updates
+ */
+export async function updateQueuedMessage(messageId, updates) {
+  await ensureWorldBootstrap();
+  const normalizedMessageId = String(messageId ?? '').trim();
+
+  if (!normalizedMessageId) {
+    throw new Error('Missing queue message ID.');
+  }
+
+  const chatIds = await listQueueChatIds();
+  for (const chatId of chatIds) {
+    const queueState = await readQueueState(chatId);
+    const rowIndex = queueState.rows.findIndex((row) => String(row.messageId ?? '') === normalizedMessageId);
+
+    if (rowIndex < 0) {
+      continue;
+    }
+
+    const nextRow = normalizeQueueRow(chatId, {
+      ...queueState.rows[rowIndex],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    });
+    const nextRows = [...queueState.rows];
+    nextRows[rowIndex] = nextRow;
+    await writeQueueState(chatId, {
+      ...queueState,
+      rows: nextRows,
+    });
+
+    return nextRow;
+  }
+
+  throw new Error(`Missing queue message: ${normalizedMessageId}`);
+}
+
+/** @param {string} messageId */
+export async function removeQueuedMessage(messageId) {
+  await ensureWorldBootstrap();
+  const normalizedMessageId = String(messageId ?? '').trim();
+  const chatIds = await listQueueChatIds();
+
+  for (const chatId of chatIds) {
+    const queueState = await readQueueState(chatId);
+    const nextRows = queueState.rows.filter((row) => String(row.messageId ?? '') !== normalizedMessageId);
+
+    if (nextRows.length === queueState.rows.length) {
+      continue;
+    }
+
+    await writeQueueState(chatId, {
+      ...queueState,
+      rows: nextRows,
+    });
+    return true;
+  }
+
+  return false;
+}
+
+/** @param {string} chatId */
+export async function clearQueuedMessages(chatId) {
+  await ensureWorldBootstrap();
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  await writeQueueState(normalizedChatId, {
+    paused: false,
+    rows: [],
+  });
+}
+
+/**
+ * @param {string} chatId
+ * @param {boolean} paused
+ */
+export async function setQueuePaused(chatId, paused) {
+  await ensureWorldBootstrap();
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  const queueState = await readQueueState(normalizedChatId);
+  await writeQueueState(normalizedChatId, {
+    ...queueState,
+    paused: paused === true,
+  });
+}
+
+/** @param {string} chatId */
+export async function stopQueuedMessages(chatId) {
+  await ensureWorldBootstrap();
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  const queueState = await readQueueState(normalizedChatId);
+  await writeQueueState(normalizedChatId, {
+    paused: true,
+    rows: queueState.rows.map((row) => normalizeQueueRow(normalizedChatId, {
+      ...row,
+      status: String(row.status ?? '') === 'queued' ? 'cancelled' : row.status,
+      updatedAt: new Date().toISOString(),
+    })),
+  });
+}
+
+/**
+ * @param {string} chatId
+ */
+export async function loadQueueState(chatId) {
+  await ensureWorldBootstrap();
+  const normalizedChatId = String(chatId ?? '').trim();
+
+  if (!normalizedChatId) {
+    throw new Error('Missing chat ID.');
+  }
+
+  const queueState = await readQueueState(normalizedChatId);
+  return {
+    ...queueState,
+    rows: queueState.rows.map((row) => normalizeQueueRow(normalizedChatId, row)),
+  };
 }

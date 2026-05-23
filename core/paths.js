@@ -17,6 +17,7 @@
  * - 2026-05-14: Added `.agent-world` runtime-config paths for root and agent overrides.
  * - 2026-05-14: Added `.agent-world` chat and agent persistence paths.
  * - 2026-05-23: Moved skills under `.agent-world/skills`.
+ * - 2026-05-23: Added agent memory and per-chat queue paths for the world runtime API.
  */
 import path from 'node:path';
 export const WORKSPACE_ROOT_ENV_KEY = 'AGENT_CLI_WORKSPACE';
@@ -42,6 +43,7 @@ export let AGENT_WORLD_ROOT = '';
 export let WORLD_STATE_PATH = '';
 export let AGENT_WORLD_CHATS_ROOT = '';
 export let AGENT_WORLD_AGENTS_ROOT = '';
+export let AGENT_WORLD_QUEUES_ROOT = '';
 export let REMOTE_HOST_LOCK_PATH = '';
 export function configureWorkspaceRoot(workspaceRoot) {
     WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
@@ -53,6 +55,7 @@ export function configureWorkspaceRoot(workspaceRoot) {
     WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, 'world.json');
     AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, 'chats');
     AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, 'agents');
+    AGENT_WORLD_QUEUES_ROOT = path.join(AGENT_WORLD_ROOT, 'queues');
     REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, 'remote-host.lock.json');
     return WORKSPACE_ROOT;
 }
@@ -101,6 +104,14 @@ export function buildAgentMemoryPath(agentId) {
     return path.join(buildAgentDirectoryPath(agentId), 'memory.md');
 }
 /** @param {string} agentId */
+export function buildAgentMemoryLogPath(agentId) {
+    return path.join(buildAgentDirectoryPath(agentId), 'memory.jsonl');
+}
+/** @param {string} agentId */
 export function buildAgentRuntimeConfigPath(agentId) {
     return path.join(buildAgentDirectoryPath(agentId), 'runtime.json');
+}
+/** @param {string} chatId */
+export function buildWorldQueuePath(chatId) {
+    return path.join(AGENT_WORLD_QUEUES_ROOT, `${chatId}.json`);
 }
