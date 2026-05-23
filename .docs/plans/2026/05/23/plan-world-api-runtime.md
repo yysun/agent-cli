@@ -35,7 +35,7 @@ flowchart TD
 
 ## Implementation Notes
 
-- Add concrete world-runtime types and implementation in `cli/src/agent-world-runtime.ts`.
+- Add concrete world-runtime types and implementation in `core/agent-world-runtime.ts`.
 - Extend core storage helpers minimally rather than introducing a new backend.
 - Add an agent-memory structured file without removing existing `memory.md` compatibility files.
 - Keep event payloads stable and typed enough for tests: message, assistant chunk, tool call/result, run lifecycle, chat/agent changes, and queue lifecycle.

@@ -10,19 +10,20 @@
  * - Persists per-agent memory and durable per-chat queue rows without replacing agent-runtime.
  *
  * Recent changes:
+ * - 2026-05-23: Moved from CLI source into core while keeping HITL UI in shell layers.
  * - 2026-05-23: Made queue API add enqueue-only so CLI queued sends do not auto-dispatch.
  * - 2026-05-23: Implemented the world API runtime, event emitter, mention routing, agent memory, and queue dispatch.
  */
 import { EventEmitter } from 'node:events';
 
-import { loadPersistedRuntimeConfig } from '../../core/agent-config.js';
+import { loadPersistedRuntimeConfig } from './agent-config.js';
 import {
   getBuiltInSystemPrompt,
   loadSkillInventory,
   loadWorkspaceSystemPrompt,
-} from '../../core/agent-files.js';
-import { configureWorkspaceRoot } from '../../core/paths.js';
-import { runChatTurn } from '../../core/runtime-client.js';
+} from './agent-files.js';
+import { configureWorkspaceRoot } from './paths.js';
+import { runChatTurn } from './runtime-client.js';
 import {
   addQueuedMessage,
   appendAgentMemory,
@@ -47,7 +48,8 @@ import {
   updateAgentMetadata,
   updateQueuedMessage,
   updateWorldMetadata,
-} from '../../core/world-store.js';
+} from './world-store.js';
+
 export interface WorkspaceState {
   workspaceRoot: string;
   worldLoaded: boolean;

@@ -5,7 +5,7 @@ import path4 from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
-// cli/src/agent-world-runtime.ts
+// core/agent-world-runtime.js
 import { EventEmitter } from "node:events";
 
 // core/agent-config.js
@@ -1585,7 +1585,7 @@ async function loadQueueState(chatId) {
   };
 }
 
-// cli/src/agent-world-runtime.ts
+// core/agent-world-runtime.js
 var EVENT_NAME = "world-event";
 function nowIsoString() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -2006,9 +2006,7 @@ var AgentWorldRuntime = class {
     ].filter(Boolean).join("\n");
   }
   async replaceChatMemory(chatId, messages) {
-    const agentIds = dedupe(
-      messages.map((message) => String(message.agentId ?? "").trim()).filter(Boolean)
-    );
+    const agentIds = dedupe(messages.map((message) => String(message.agentId ?? "").trim()).filter(Boolean));
     const snapshot = await this.loadSnapshot();
     const fallbackAgentId = String(snapshot.defaultAgentId ?? "default").trim() || "default";
     const targetAgentIds = agentIds.length > 0 ? agentIds : [fallbackAgentId];
@@ -2335,16 +2333,12 @@ var AgentWorldRuntime = class {
     try {
       const chat = await loadChatById(row.chatId);
       const messages = Array.isArray(chat.messages) ? chat.messages : [];
-      const userMessageIndex = messages.findIndex(
-        (message) => String(message?.role ?? "") === "user" && String(message?.content ?? "") === row.content
-      );
+      const userMessageIndex = messages.findIndex((message) => String(message?.role ?? "") === "user" && String(message?.content ?? "") === row.content);
       if (userMessageIndex < 0) {
         return "retry";
       }
       const afterUser = messages.slice(userMessageIndex + 1);
-      const assistantMessageIndex = afterUser.findIndex(
-        (message) => String(message?.role ?? "") === "assistant"
-      );
+      const assistantMessageIndex = afterUser.findIndex((message) => String(message?.role ?? "") === "assistant");
       if (assistantMessageIndex < 0) {
         return "retry";
       }
@@ -2353,9 +2347,7 @@ var AgentWorldRuntime = class {
       if (toolCallIds.length === 0) {
         return "completed";
       }
-      const answeredToolCallIds = new Set(
-        afterUser.slice(assistantMessageIndex + 1).filter((message) => String(message?.role ?? "") === "tool").map((message) => String(message?.tool_call_id ?? "").trim()).filter(Boolean)
-      );
+      const answeredToolCallIds = new Set(afterUser.slice(assistantMessageIndex + 1).filter((message) => String(message?.role ?? "") === "tool").map((message) => String(message?.tool_call_id ?? "").trim()).filter(Boolean));
       return toolCallIds.every((toolCallId) => answeredToolCallIds.has(toolCallId)) ? "completed" : "blocked";
     } catch {
       return "retry";

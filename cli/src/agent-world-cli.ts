@@ -11,6 +11,7 @@
  * - Keeps queued sends provider-free by enqueueing without dispatching.
  *
  * Recent changes:
+ * - 2026-05-23: Imports the world runtime from core and keeps HITL prompt handling in this shell layer.
  * - 2026-05-23: Added interactive mode for `agent-world-cli`.
  * - 2026-05-23: Implemented the published `agent-world-cli` binary over the world runtime.
  */
@@ -23,7 +24,7 @@ import {
   type CreateAgentInput,
   type WorldToolCallHandler,
   createAgentWorldRuntime,
-} from './agent-world-runtime.js';
+} from '../../core/agent-world-runtime.js';
 import {
   collectHumanInputAnswer,
   parseHumanInputRequest,

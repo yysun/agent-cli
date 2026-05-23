@@ -3859,6 +3859,9 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
     process.exitCode = 1;
   }
 }
+if (isCliEntrypoint()) {
+  await runCli();
+}
 export {
   PROJECT_ROOT_ENV_KEY,
   REMOTE_RELAY_SERVER_ENV_KEY,

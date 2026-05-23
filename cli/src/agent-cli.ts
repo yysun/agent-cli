@@ -873,3 +873,7 @@ export async function runCli(
     process.exitCode = 1;
   }
 }
+
+if (isCliEntrypoint()) {
+  await runCli();
+}

@@ -65,7 +65,7 @@ async function loadRuntime(rootPath, runChatTurn) {
       runChatTurn,
     };
   });
-  return await import('../../cli/src/agent-world-runtime.ts');
+  return await import('../../core/agent-world-runtime.ts');
 }
 
 afterEach(async () => {
