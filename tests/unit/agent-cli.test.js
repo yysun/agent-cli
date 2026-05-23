@@ -149,7 +149,7 @@ async function loadCliModule(rootPath, moduleOverrides = {}) {
     vi.doUnmock('../../core/remote-control.js');
   }
 
-  return await import('../../cli/src/index.ts');
+  return await import('../../cli/src/agent-cli.ts');
 }
 
 afterEach(async () => {

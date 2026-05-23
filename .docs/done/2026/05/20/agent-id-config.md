@@ -13,7 +13,7 @@ Added CLI-level named-agent support:
 
 ## Files
 
-- `cli/src/cli-shell.ts`
+- `cli/src/agent-cli.ts`
 - `core/session-store.ts`
 - `core/agent-config.ts`
 - `README.md`

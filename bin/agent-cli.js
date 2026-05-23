@@ -5,7 +5,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// cli/src/cli-shell.ts
+// cli/src/agent-cli.ts
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import path4 from "node:path";
@@ -3229,7 +3229,7 @@ function createTurnExecutor(options) {
   };
 }
 
-// cli/src/cli-shell.ts
+// cli/src/agent-cli.ts
 var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
 var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
 var PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
@@ -3859,13 +3859,10 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
     process.exitCode = 1;
   }
 }
-
-// cli/src/index.ts
-if (isCliEntrypoint()) {
-  await runCli();
-}
 export {
+  PROJECT_ROOT_ENV_KEY,
   REMOTE_RELAY_SERVER_ENV_KEY,
+  WORKSPACE_ENV_KEY,
   isCliEntrypoint,
   main,
   parseArguments,

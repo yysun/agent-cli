@@ -13,7 +13,7 @@ Turn the current no-message error path into a terminal prompt loop while preserv
 
 ## Design
 
-Interactive mode belongs in `cli/src/cli-shell.ts` because it is CLI orchestration, not runtime execution. It should reuse `resolveEffectiveAgentConfig`, workspace prompt loading, `loadSkillInventory`, `createTurnExecutor`, and session-store helpers so prompt turns behave like normal CLI turns.
+Interactive mode belongs in `cli/src/agent-cli.ts` because it is CLI orchestration, not runtime execution. It should reuse `resolveEffectiveAgentConfig`, workspace prompt loading, `loadSkillInventory`, `createTurnExecutor`, and session-store helpers so prompt turns behave like normal CLI turns.
 
 ```mermaid
 flowchart TD

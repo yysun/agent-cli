@@ -1,5 +1,5 @@
 /**
- * Agent CLI Shell
+ * Agent CLI
  *
  * Purpose:
  * - Parse CLI arguments and route execution into one-shot, remote, or interactive chat modes.

@@ -1,4 +1,4 @@
-import { isCliEntrypoint, runCli } from './cli-shell.js';
+import { isCliEntrypoint, runCli } from './agent-cli.js';
 
 export {
   REMOTE_RELAY_SERVER_ENV_KEY,
@@ -10,7 +10,7 @@ export {
   runtimeSelectionText,
   startupText,
   usageText,
-} from './cli-shell.js';
+} from './agent-cli.js';
 
 if (isCliEntrypoint()) {
   await runCli();

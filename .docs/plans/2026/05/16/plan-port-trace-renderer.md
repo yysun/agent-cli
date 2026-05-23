@@ -12,7 +12,7 @@ Upgrade Agent CLI’s verbose streamed diagnostics to use structured trace rende
 
 ## Assumptions
 
-1. The owning display path for streamed diagnostics is `cli/src/agent-runtime.ts`, not `cli/src/cli-shell.ts`.
+1. The owning display path for streamed diagnostics is `cli/src/agent-runtime.ts`, not `cli/src/agent-cli.ts`.
 2. The current runtime integration already provides enough streamed information to improve tool-call rendering immediately.
 3. Tool-result rendering requires a small runtime plumbing change because the current runtime callback surface exposes tool calls but not tool results.
 4. This story is an internal display improvement, so unit coverage is sufficient and no new E2E spec is needed.
