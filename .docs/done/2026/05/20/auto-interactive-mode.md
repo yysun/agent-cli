@@ -6,7 +6,7 @@
 - One-shot messages, `--help`, and `--remote` keep their existing behavior.
 - Interactive mode supports `/new`, `/clear`, `/chats`, `/use <chatId>`, `/exit`, and `/quit`.
 - Interactive turns reuse the existing persisted chat and runtime execution path.
-- Project `.env` loading is now quiet and idempotent per project root, avoiding duplicate dotenv banners.
+- Workspace `.env` loading is now quiet and idempotent per workspace root, avoiding duplicate dotenv banners.
 
 ## Verification
 

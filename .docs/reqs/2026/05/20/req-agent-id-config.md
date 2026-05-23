@@ -2,7 +2,7 @@
 
 ## Story
 
-Users need to choose and create named agents from the CLI, with each agent carrying its own metadata and runtime provider/model configuration under the project-local `.agent-world/agents/{agentId}` directory.
+Users need to choose and create named agents from the CLI, with each agent carrying its own metadata and runtime provider/model configuration under the workspace-local `.agent-world/agents/{agentId}` directory.
 
 ## Acceptance Criteria
 
@@ -21,5 +21,5 @@ Users need to choose and create named agents from the CLI, with each agent carry
 
 - Do not move storage out of `.agent-world/agents/{agentId}`.
 - Do not support `.agent-world/{agentId}` as a second layout.
-- Do not store provider credentials in `agent.json` or `runtime.json`; credentials still come from environment or project `.env`.
+- Do not store provider credentials in `agent.json` or `runtime.json`; credentials still come from environment or workspace `.env`.
 - Do not remove existing repo-root `runtime.json` support.

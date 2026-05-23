@@ -1,6 +1,6 @@
 # Agent CLI
 
-Project: Agent CLI
+Workspace: Agent CLI
 Repo: yysun/agent-cli
 CLI: agent-cli
 Core objects:
@@ -46,12 +46,12 @@ One remote host session can now serve multiple paired clients at the same time. 
 
 Paired browsers observe the same shared remote session over SSE. Shared assistant output, run status, approvals, completion, failure, disconnect, and session snapshots fan out to every authorized paired browser, while requester-specific slash-command results and command errors stay targeted to the requesting client.
 
-`agent-cli --remote` is a long-running host process. It stays alive after startup, keeps the local project root locked for that remote session, and continues serving relay commands until the host exits, a client disconnect ends the session, or you press `Ctrl+C`.
+`agent-cli --remote` is a long-running host process. It stays alive after startup, keeps the local workspace root locked for that remote session, and continues serving relay commands until the host exits, a client disconnect ends the session, or you press `Ctrl+C`.
 
 Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
 
 Runtime settings can be supplied through `runtime.json` and overridden on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
-Use `--project <path>` to run against a specific project folder without changing your shell's current directory.
+Use `--workspace <path>` to run against a specific Agent CLI workspace without changing your shell's current directory. `--project <path>` remains as a compatibility alias.
 Use `--agent-id <id>` to select an agent, or `--new-agent <id>` to create/select one.
 
 Remote hosting uses:
@@ -131,14 +131,14 @@ Agent runtime config can live in `./.agent-world/agents/{agentId}/agent.json` an
 
 Remote host coordination also lives under `./.agent-world/remote-host.lock.json` while a `--remote` host session is active. Agent CLI now treats `./.agent-world/` as the only supported local storage contract for world, chat, agent, and remote-host state.
 
-While a CLI process is running in `--remote` mode for a project root, other CLI invocations from that same root are rejected until the remote host exits. A stale lock from a dead process is cleared automatically on the next start.
+While a CLI process is running in `--remote` mode for a workspace root, other CLI invocations from that same root are rejected until the remote host exits. A stale lock from a dead process is cleared automatically on the next start.
 
 The CLI always includes a built-in default system prompt.
 If `./AGENTS.md` is present and non-empty, its content is added after the built-in prompt and before tools/skills guidance.
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agent-world/skills/` is missing, the CLI continues with an empty skill inventory.
 
-The CLI uses `--project <path>` as the project root when provided, otherwise `AGENT_CLI_ROOT` when that environment variable is set, otherwise `AGENT_CLI_ROOT` from the current working directory's `.env`, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
+The CLI uses `--workspace <path>` as the workspace root when provided, otherwise legacy `--project <path>`, otherwise `AGENT_CLI_WORKSPACE`, otherwise legacy `AGENT_CLI_ROOT`, otherwise either value from the current working directory's `.env`, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that workspace root.
 
 Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agent-world/skills/`.
 
@@ -175,7 +175,7 @@ The runtime file schema currently supports:
 
 The CLI parser accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
-Provider credentials still come from environment variables. When a local `.env` file is present at the resolved project root, Agent CLI only loads provider credential keys and relay configuration from it.
+Provider credentials still come from environment variables. When a local `.env` file is present at the resolved workspace root, Agent CLI only loads provider credential keys and relay configuration from it.
 
 Non-credential runtime defaults such as provider selection, model, temperature, tool mode, search mode, history depth, streaming, and stream tracing should be set in `runtime.json` or on the command line rather than in `.env`.
 

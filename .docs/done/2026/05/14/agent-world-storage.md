@@ -40,7 +40,7 @@ The shipped behavior now includes:
 
 4. Remote behavior
 - Preserved prompt loading from `AGENTS.md` and skill loading from `./.agents/skills/` unchanged.
-- Moved the project-root remote host lock into `./.agent-world/remote-host.lock.json`.
+- Moved the workspace-root remote host lock into `./.agent-world/remote-host.lock.json`.
 - Fixed remote chat switching so agent `state.json.currentChatId` follows `/new` and `/use` as well as startup.
 - Preserved remote chat list, message load, chat creation, and chat selection against the new storage layout.
 

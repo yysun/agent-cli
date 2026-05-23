@@ -13,7 +13,7 @@ Extend the existing relay-backed remote host so one local `agent-cli --remote` p
 ## Assumptions
 
 1. The local CLI host remains the only authority for chat persistence, active-chat selection, runtime execution, tool execution, and permission gating.
-2. The remote feature still represents one hosted project-root session, not multiple independent remote host sessions inside the same process.
+2. The remote feature still represents one hosted workspace-root session, not multiple independent remote host sessions inside the same process.
 3. Existing assistant-output, approval, cancel, resume, and disconnect flows must remain compatible for already-paired single-client consumers.
 4. Multi-client support must not weaken the earlier short-lived one-time invite safety model; instead, the relay should support multiple one-time pairing invites per host session rather than one reusable global pairing token.
 5. Initial remote chat browsing can return full local message history for one requested chat; pagination can remain a follow-up concern if the payload envelope leaves room for cursors later.
@@ -43,9 +43,9 @@ Extend the existing relay-backed remote host so one local `agent-cli --remote` p
    - Add helpers to create and persist an empty chat and to switch the `current.json` pointer intentionally.
    - Keep the current file layout under `./.chats/<chatId>/` unchanged.
 5. Update remote-session metadata handling in [lib/session-store.js](lib/session-store.js) and the host lock flow:
-   - Preserve the project-root remote-host lock so only one remote host runs at once.
+   - Preserve the workspace-root remote-host lock so only one remote host runs at once.
    - Update lock and optional `remote.json` metadata to tolerate active-chat changes during a long-lived remote session.
-   - Treat the hosted remote session as project-root scoped even though each turn still runs against one selected chat at a time.
+   - Treat the hosted remote session as workspace-root scoped even though each turn still runs against one selected chat at a time.
 6. Extend the web client in [web/src/App.tsx](web/src/App.tsx) and [web/src/relay-session.ts](web/src/relay-session.ts):
    - Keep the existing transcript view for shared assistant output and approvals.
    - Add a chat picker panel, chat-history loading flow, create-chat action, and active-chat indicator.

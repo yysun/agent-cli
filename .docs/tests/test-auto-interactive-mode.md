@@ -3,7 +3,7 @@
 ## Scenario: No-argument CLI starts a prompt
 
 1. Build the CLI.
-2. Run `agent-cli` from a test project with valid runtime credentials or mocked runtime.
+2. Run `agent-cli` from a test workspace with valid runtime credentials or mocked runtime.
 3. Confirm stdout shows an interactive prompt instead of `Missing user message`.
 4. Enter `/exit`.
 5. Confirm the process exits successfully.

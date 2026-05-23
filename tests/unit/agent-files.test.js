@@ -10,8 +10,9 @@
  * - Verifies the helper text exposed to the runtime.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed AGENTS.md prompt tests from project to workspace terminology.
  * - 2026-05-07: Added targeted Vitest coverage for agent file loading.
- * - 2026-05-11: Added coverage for separate built-in and project prompt sources.
+ * - 2026-05-11: Added coverage for separate built-in and workspace prompt sources.
  * - 2026-05-16: Added assertions for the stronger built-in workspace guidance.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -41,7 +42,7 @@ afterEach(async () => {
 });
 
 describe('agent-files', () => {
-  it('loads the project system prompt and skill inventory in lexical path order', async () => {
+  it('loads the workspace system prompt and skill inventory in lexical path order', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -61,9 +62,9 @@ describe('agent-files', () => {
       'utf8',
     );
 
-    const { loadProjectSystemPrompt, loadSkillInventory } = await loadAgentFiles(rootPath);
+    const { loadWorkspaceSystemPrompt, loadSkillInventory } = await loadAgentFiles(rootPath);
 
-    await expect(loadProjectSystemPrompt()).resolves.toBe('Agent CLI system prompt');
+    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('Agent CLI system prompt');
     await expect(loadSkillInventory()).resolves.toEqual([
       expect.objectContaining({
         skillId: 'alpha-skill',
@@ -89,23 +90,23 @@ describe('agent-files', () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain('Do not reveal secret values by default');
   });
 
-  it('returns an empty project prompt when AGENTS.md is missing', async () => {
+  it('returns an empty workspace prompt when AGENTS.md is missing', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadProjectSystemPrompt } = await loadAgentFiles(rootPath);
+    const { loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
 
-    await expect(loadProjectSystemPrompt()).resolves.toBe('');
+    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('');
   });
 
-  it('returns an empty project prompt when AGENTS.md is empty', async () => {
+  it('returns an empty workspace prompt when AGENTS.md is empty', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, '   ');
 
-    const { loadProjectSystemPrompt } = await loadAgentFiles(rootPath);
+    const { loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
 
-    await expect(loadProjectSystemPrompt()).resolves.toBe('');
+    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('');
   });
 
   it('preserves non-missing filesystem errors when loading AGENTS.md', async () => {
@@ -134,9 +135,9 @@ describe('agent-files', () => {
       };
     });
 
-    const { loadProjectSystemPrompt } = await loadAgentFiles(rootPath);
+    const { loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
 
-    await expect(loadProjectSystemPrompt()).rejects.toThrow('Permission denied');
+    await expect(loadWorkspaceSystemPrompt()).rejects.toThrow('Permission denied');
   });
 
   it('builds a load_skill inventory hint only when skills are available', async () => {

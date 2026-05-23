@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed workspace root and AGENTS.md prompt parameters while preserving compatibility aliases.
  * - 2026-05-07: Added `llm-runtime` orchestration for the CLI.
  * - 2026-05-11: Layered built-in prompt, AGENTS.md, and skill inventory in explicit order.
  * - 2026-05-20: Added tool-result duration and argument context for richer CLI trace rendering.
@@ -25,7 +26,7 @@ import {
 } from 'llm-runtime';
 
 import { buildSkillInventoryMessage } from './agent-files.js';
-import { REPO_ROOT, SKILLS_ROOT } from './paths.js';
+import { SKILLS_ROOT, WORKSPACE_ROOT } from './paths.js';
 
 /** @typedef {import('llm-runtime').LLMChatMessage} LLMChatMessage */
 /** @typedef {import('llm-runtime').LLMEnvironmentOptions} LLMEnvironmentOptions */
@@ -114,7 +115,7 @@ function buildEnvironmentDefaults(agentConfig = {}) {
 function buildExecutionContext(agentConfig = {}) {
   /** @type {LLMToolExecutionContext} */
   const context = {
-    workingDirectory: REPO_ROOT,
+    workingDirectory: WORKSPACE_ROOT,
   };
 
   if (agentConfig.reasoningEffort) {
@@ -250,14 +251,14 @@ export function validateRuntimeEnvironment(environment = process.env, agentConfi
 
 /**
  * @param {string} builtInSystemPrompt
- * @param {string | undefined} projectSystemPrompt
+ * @param {string | undefined} workspaceSystemPrompt
  * @param {Array<{ skillId: string, description?: string }>} skillInventory
  */
-function buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory) {
+function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, skillInventory) {
   const layers = [builtInSystemPrompt.trim()];
 
-  if (String(projectSystemPrompt ?? '').trim()) {
-    layers.push(String(projectSystemPrompt).trim());
+  if (String(workspaceSystemPrompt ?? '').trim()) {
+    layers.push(String(workspaceSystemPrompt).trim());
   }
 
   const skillInventoryMessage = buildSkillInventoryMessage(skillInventory);
@@ -378,6 +379,7 @@ function selectContextMessages(messages, historyMessageLimit) {
  *   handleToolCall?: RuntimeToolCallHandler,
  *   historyMessageLimit?: number,
  *   builtInSystemPrompt: string,
+ *   workspaceSystemPrompt?: string,
  *   projectSystemPrompt?: string,
  *   skillInventory: Array<{ skillId: string, description?: string }>,
  *   agentConfig?: RuntimeAgentConfig,
@@ -395,6 +397,7 @@ export async function runChatTurn({
   handleToolCall,
   historyMessageLimit,
   builtInSystemPrompt,
+  workspaceSystemPrompt,
   projectSystemPrompt,
   skillInventory,
   approvalGate,
@@ -447,7 +450,11 @@ export async function runChatTurn({
       ...(abortSignal ? { abortSignal } : {}),
       buildMessages: async ({ state, transientInstruction }) => {
         const baseMessages = [
-          ...buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory),
+          ...buildBaseSystemMessages(
+            builtInSystemPrompt,
+            workspaceSystemPrompt ?? projectSystemPrompt,
+            skillInventory,
+          ),
           ...state.conversationMessages,
         ];
 

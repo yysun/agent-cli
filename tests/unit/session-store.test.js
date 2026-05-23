@@ -456,7 +456,7 @@ describe('session-store', () => {
     );
 
     await expect(assertNoActiveRemoteHost()).rejects.toThrow(
-      `Remote mode already active for this project root (chat chat-remote-1, pid ${process.pid}).`,
+      `Remote mode already active for this workspace root (chat chat-remote-1, pid ${process.pid}).`,
     );
   });
 

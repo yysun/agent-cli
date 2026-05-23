@@ -11,6 +11,7 @@
  * - Keeps the exported chat-store API stable for the CLI and remote host.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
  * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.
  * - 2026-05-07: Added file-backed chat persistence for the CLI.
  * - 2026-05-13: Added chat listing and explicit selection helpers for remote multi-client flows.
@@ -35,14 +36,14 @@ import {
   buildWorldChatMetadataPath,
   buildWorldChatSummaryPath,
   REMOTE_HOST_LOCK_PATH,
-  REPO_ROOT,
+  WORKSPACE_ROOT,
   WORLD_STATE_PATH,
 } from './paths.js';
 
 const DEFAULT_AGENT_ID = 'default';
 
 function defaultWorldName() {
-  return path.basename(REPO_ROOT) || 'agent-world';
+  return path.basename(WORKSPACE_ROOT) || 'agent-world';
 }
 
 /** @param {string | undefined | null} agentId */
@@ -338,8 +339,8 @@ function buildRemoteHostConflictError(remoteLock) {
 
   return new Error(
     details
-      ? `Remote mode already active for this project root (${details}).`
-      : 'Remote mode already active for this project root.',
+      ? `Remote mode already active for this workspace root (${details}).`
+      : 'Remote mode already active for this workspace root.',
   );
 }
 
@@ -629,7 +630,7 @@ export async function acquireRemoteHostLock({ chat }) {
     }
   }
 
-  throw new Error('Failed to acquire the remote host lock for this project root.');
+  throw new Error('Failed to acquire the remote host lock for this workspace root.');
 }
 
 export async function releaseRemoteHostLock() {

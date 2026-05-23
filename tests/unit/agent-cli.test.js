@@ -11,6 +11,7 @@
  * - Confirms env remains limited to provider credentials and relay configuration.
  *
  * Recent changes:
+ * - 2026-05-23: Added workspace terminology coverage while preserving project aliases.
  * - 2026-05-20: Added coverage for automatic interactive mode when no message is provided.
  * - 2026-05-23: Added coverage for TTY pending display and ask_user_input prompts.
  */
@@ -35,6 +36,7 @@ const tempPathsToClean = [];
 const rootsToClean = [];
 const originalCwd = process.cwd();
 const CLI_ENVIRONMENT_KEYS = [
+  'AGENT_CLI_WORKSPACE',
   'AGENT_CLI_ROOT',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
@@ -226,9 +228,20 @@ describe('agent-cli entrypoint', () => {
       verbose: false,
       message: '',
     });
+    expect(parseArguments(['--workspace', '/tmp/workspace-a', 'Inspect', 'status'])).toEqual({
+      help: false,
+      newChat: false,
+      workspaceRoot: '/tmp/workspace-a',
+      remoteControl: false,
+      runtimeOverrides: {},
+      streamOff: false,
+      verbose: false,
+      message: 'Inspect status',
+    });
     expect(parseArguments(['--project', '/tmp/project-a', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
+      workspaceRoot: '/tmp/project-a',
       projectRoot: '/tmp/project-a',
       remoteControl: false,
       runtimeOverrides: {},
@@ -383,7 +396,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = undefined;
     await runCli(['Inspect', 'status'], io);
 
-    expect(io.getStderr()).toContain('Remote mode already active for this project root');
+    expect(io.getStderr()).toContain('Remote mode already active for this workspace root');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
@@ -508,7 +521,7 @@ describe('agent-cli entrypoint', () => {
     const io = createIoCapture();
 
     await expect(main(['--help'], io)).resolves.toBeNull();
-    expect(io.getStdout()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+    expect(io.getStdout()).toContain('Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
   });
 
   it('validates runtime config before starting automatic interactive mode', async () => {
@@ -619,7 +632,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('logs project root, agent id, provider, and model on startup', async () => {
+  it('logs workspace root, agent id, provider, and model on startup', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -717,7 +730,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('logs the project root for non-verbose CLI startup', async () => {
+  it('logs the workspace root for non-verbose CLI startup', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -745,7 +758,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('loads .env from --project and uses that root in startup diagnostics', async () => {
+  it('loads .env from --workspace and uses that root in startup diagnostics', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
@@ -753,18 +766,34 @@ describe('agent-cli entrypoint', () => {
     delete process.env.GOOGLE_API_KEY;
 
     const { main, startupText } = await loadCliModule();
-    await main(['--project', rootPath, '--help'], createIoCapture());
+    await main(['--workspace', rootPath, '--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
   });
 
-  it('still honors AGENT_CLI_ROOT when --project is absent', async () => {
+  it('honors AGENT_CLI_WORKSPACE when --workspace is absent', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
 
     delete process.env.GOOGLE_API_KEY;
+    process.env.AGENT_CLI_WORKSPACE = rootPath;
+
+    const { main, startupText } = await loadCliModule();
+    await main(['--help'], createIoCapture());
+
+    expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
+    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
+  });
+
+  it('still honors AGENT_CLI_ROOT when --workspace and AGENT_CLI_WORKSPACE are absent', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.AGENT_CLI_WORKSPACE;
     process.env.AGENT_CLI_ROOT = rootPath;
 
     const { main, startupText } = await loadCliModule();
@@ -774,14 +803,15 @@ describe('agent-cli entrypoint', () => {
     expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
   });
 
-  it('falls back to AGENT_CLI_ROOT from cwd .env when no project flag or environment variable is set', async () => {
+  it('falls back to AGENT_CLI_WORKSPACE from cwd .env when no workspace flag or environment variable is set', async () => {
     const cwdRoot = await createTestRoot();
-    const projectRoot = path.join(cwdRoot, 'project-from-dotenv');
+    const workspaceRoot = path.join(cwdRoot, 'workspace-from-dotenv');
     rootsToClean.push(cwdRoot);
-    await mkdir(projectRoot, { recursive: true });
-    await writeFile(path.join(cwdRoot, '.env'), 'AGENT_CLI_ROOT=project-from-dotenv\n', 'utf8');
-    await writeFile(path.join(projectRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(path.join(cwdRoot, '.env'), 'AGENT_CLI_WORKSPACE=workspace-from-dotenv\n', 'utf8');
+    await writeFile(path.join(workspaceRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
 
+    delete process.env.AGENT_CLI_WORKSPACE;
     delete process.env.AGENT_CLI_ROOT;
     delete process.env.GOOGLE_API_KEY;
 
@@ -790,17 +820,17 @@ describe('agent-cli entrypoint', () => {
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(startupText()).toBe(
-      `Agent CLI starting in ${path.resolve('project-from-dotenv')}\nAgent CLI agent id: default`,
+      `Agent CLI starting in ${path.resolve('workspace-from-dotenv')}\nAgent CLI agent id: default`,
     );
   });
 
-  it('stores project state under --project instead of the process cwd', async () => {
+  it('stores workspace state under --workspace instead of the process cwd', async () => {
     const rootPath = await createTestRoot();
     const cwdRoot = await createTestRoot();
     rootsToClean.push(rootPath, cwdRoot);
     await writeSystemPrompt(rootPath, 'Prompt');
     await ensureSkillsRoot(rootPath);
-    process.env.AGENT_CLI_ROOT = cwdRoot;
+    process.env.AGENT_CLI_WORKSPACE = cwdRoot;
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
     const runChatTurn = vi.fn().mockResolvedValue({
@@ -818,7 +848,7 @@ describe('agent-cli entrypoint', () => {
       },
     });
 
-    await main(['--project', rootPath, '--new-chat', 'hello'], createIoCapture());
+    await main(['--workspace', rootPath, '--new-chat', 'hello'], createIoCapture());
 
     expect(await readdir(path.join(rootPath, '.agent-world'))).toContain('world.json');
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
@@ -1348,7 +1378,7 @@ describe('agent-cli entrypoint', () => {
 
     await runCli(['--help'], io);
 
-    expect(io.getStdout()).toContain('Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
+    expect(io.getStdout()).toContain('Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>');
     expect(io.getStderr()).toBe('');
   });
 });

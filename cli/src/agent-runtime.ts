@@ -10,6 +10,7 @@
  * - Formats verbose tool activity through a dedicated trace renderer.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed root prompt option from project to workspace terminology.
  * - 2026-05-16: Added structured verbose tool-call and tool-result rendering.
  * - 2026-05-23: Added TTY pending animation and ask_user_input terminal prompts.
  */
@@ -82,6 +83,7 @@ export interface CreateTurnExecutorOptions {
   verbose: boolean;
   streamOff: boolean;
   agentConfig: Record<string, unknown>;
+  workspaceSystemPrompt?: string;
   projectSystemPrompt?: string;
   skillInventory: SkillInventoryItem[];
 }
@@ -300,7 +302,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           };
         },
         builtInSystemPrompt,
-        projectSystemPrompt: options.projectSystemPrompt,
+        workspaceSystemPrompt: options.workspaceSystemPrompt ?? options.projectSystemPrompt,
         skillInventory: options.skillInventory,
         agentConfig: options.agentConfig,
       });

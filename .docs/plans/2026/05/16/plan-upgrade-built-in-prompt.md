@@ -21,7 +21,7 @@ Upgrade Agent CLI's built-in prompt content using the stronger operational guida
 
 1. Keep the current layering model unchanged:
    - built-in prompt from `getBuiltInSystemPrompt()`
-   - optional project prompt from `AGENTS.md`
+   - optional workspace prompt from `AGENTS.md`
    - optional skill inventory hint
 2. Port instruction themes from ai-workspace, not a verbatim prompt copy.
 3. Keep the built-in prompt concise enough for Agent CLI, but materially stronger than the current three-line prompt.
@@ -41,7 +41,7 @@ Upgrade Agent CLI's built-in prompt content using the stronger operational guida
    - Preserve the file's existing exports and layering responsibilities.
 2. Update `tests/unit/agent-files.test.js`.
    - Add assertions that the built-in prompt contains the intended stronger guidance.
-   - Preserve existing tests that built-in and project prompt sources remain separate.
+   - Preserve existing tests that built-in and workspace prompt sources remain separate.
 3. Update docs/status.
    - Mark the plan complete after implementation and verification.
    - Add a done doc after verification succeeds.

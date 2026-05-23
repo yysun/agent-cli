@@ -19,7 +19,7 @@ Validate that Agent CLI assembles model messages in the required prompt/context 
 - And its content is the built-in Agent CLI prompt
 
 2. AGENTS.md layers after the built-in prompt
-- Given the project root contains a readable, non-empty `AGENTS.md`
+- Given the workspace root contains a readable, non-empty `AGENTS.md`
 - When model messages are built
 - Then the next `system` message contains the contents of `AGENTS.md`
 - And `AGENTS.md` content does not replace the built-in prompt

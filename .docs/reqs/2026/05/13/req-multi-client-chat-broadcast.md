@@ -18,7 +18,7 @@ The current remote supervision flow is centered on one active local chat and one
 2. The relay-backed remote session must broadcast normalized session events to every currently authorized paired client for that local host.
 3. A newly paired client must be able to catch up to the current active session state without requiring the local CLI host to restart.
 4. Multiple paired clients must be able to observe assistant output, run status, approval requests, completion, failure, and disconnect events for the active chat.
-5. Remote clients must be able to request the list of chats available to the current local project root or local host scope exposed by Agent CLI.
+5. Remote clients must be able to request the list of chats available to the current local workspace root or local host scope exposed by Agent CLI.
 6. The remote chat list must include enough metadata for a client to distinguish chats and choose one to open, including at minimum chat identity and recency information.
 7. A remote client must be able to request the persisted message history for a specific chat it is authorized to access.
 8. A remote client must be able to create a new chat through the remote session.

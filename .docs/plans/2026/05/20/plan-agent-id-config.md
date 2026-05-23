@@ -13,11 +13,11 @@ Add agent selection and creation to the CLI while keeping the existing `.agent-w
 
 ## Design
 
-The CLI should parse `--agent-id` and `--new-agent`, resolve the project root, then ensure/select the requested agent before runtime config is resolved. Session-store functions need an active agent context so chat persistence and trace/state files write to the selected agent, not always `world.defaultAgentId`.
+The CLI should parse `--agent-id` and `--new-agent`, resolve the workspace root, then ensure/select the requested agent before runtime config is resolved. Session-store functions need an active agent context so chat persistence and trace/state files write to the selected agent, not always `world.defaultAgentId`.
 
 ```mermaid
 flowchart TD
-  A[parse argv] --> B[prepare project root]
+  A[parse argv] --> B[prepare workspace root]
   B --> C{--new-agent?}
   C -- yes --> D[create/select agent]
   C -- no --> E[select --agent-id or default]
@@ -41,14 +41,14 @@ flowchart TD
 
 ## E2E Coverage
 
-Create `.docs/tests/test-agent-id-config.md` because this changes user-visible CLI flags and persistent project state.
+Create `.docs/tests/test-agent-id-config.md` because this changes user-visible CLI flags and persistent workspace state.
 
 ## Validation
 
 - Run `npm run test:syntax`.
 - Run targeted unit tests for agent config, session store, and CLI parsing/selection.
 - Run `npm run test:unit`.
-- Manually smoke test `--new-agent` and `--agent-id` against a temporary project where feasible.
+- Manually smoke test `--new-agent` and `--agent-id` against a temporary workspace where feasible.
 
 ## Result
 
@@ -62,4 +62,4 @@ Create `.docs/tests/test-agent-id-config.md` because this changes user-visible C
 
 - `npx vitest run tests/unit/agent-cli.test.js tests/unit/agent-config.test.js tests/unit/session-store.test.js` passed: 58 tests.
 - `npm run test:syntax && npm run test:unit` passed: 102 unit tests.
-- Temporary-project smoke for `--new-agent research --provider ollama --model gemma4:e4b --help` passed.
+- Temporary-workspace smoke for `--new-agent research --provider ollama --model gemma4:e4b --help` passed.

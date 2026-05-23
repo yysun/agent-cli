@@ -13,7 +13,7 @@ Validate that Agent CLI uses `.agent-world` as the single supported local storag
 ## Scenarios
 
 1. Fresh world bootstrap creates the required durable structure
-- Given a clean project root with no `.agent-world`
+- Given a clean workspace root with no `.agent-world`
 - When the CLI initializes storage for a new chat or follow-up flow
 - Then it creates `.agent-world/world.json`
 - And it creates `.agent-world/chats/` and `.agent-world/agents/`
@@ -33,7 +33,7 @@ Validate that Agent CLI uses `.agent-world` as the single supported local storag
 - And the next follow-up turn runs against that selected chat
 
 4. Legacy `.chats` data is not imported into the new store
-- Given a project root still contains an old `.chats` directory
+- Given a workspace root still contains an old `.chats` directory
 - When the CLI initializes the new storage layer
 - Then Agent CLI starts from the `.agent-world` contract only
 - And no legacy chat is auto-imported into `.agent-world/chats/`
@@ -72,7 +72,7 @@ Validate that Agent CLI uses `.agent-world` as the single supported local storag
 
 10. Remote host locking stays inside `.agent-world`
 - Given a `--remote` host is active
-- When another CLI process starts in the same project root
+- When another CLI process starts in the same workspace root
 - Then the active lock is enforced from `.agent-world/remote-host.lock.json`
 - And a stale lock from a dead process is cleared automatically
 

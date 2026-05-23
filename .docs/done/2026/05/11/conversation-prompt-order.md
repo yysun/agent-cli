@@ -20,11 +20,11 @@ Made Agent CLI prompt assembly deterministic:
 
 1. Prompt-source split
 - Added a dedicated built-in prompt accessor in `lib/agent-files.js`.
-- Changed `AGENTS.md` loading to return optional project prompt content instead of replacing the built-in prompt.
+- Changed `AGENTS.md` loading to return optional workspace prompt content instead of replacing the built-in prompt.
 - Preserved missing and empty `AGENTS.md` behavior without failing runtime startup.
 
 2. Runtime message ordering
-- Updated `lib/runtime-client.js` to assemble base system messages in explicit order: built-in prompt, project prompt, then combined skill inventory guidance.
+- Updated `lib/runtime-client.js` to assemble base system messages in explicit order: built-in prompt, workspace prompt, then combined skill inventory guidance.
 - Kept conversation history and persisted messages unchanged outside prompt assembly.
 
 3. CLI integration
@@ -46,7 +46,7 @@ Made Agent CLI prompt assembly deterministic:
 - REQ 1 and 7 satisfied by always injecting the built-in prompt and continuing when `AGENTS.md` is missing or empty.
 
 2. `AGENTS.md` layering
-- REQ 2 and 3 satisfied by loading project prompt content separately and appending it after the built-in prompt when present.
+- REQ 2 and 3 satisfied by loading workspace prompt content separately and appending it after the built-in prompt when present.
 
 3. Tools/skills placement
 - REQ 4 and 5 satisfied by appending the combined tools/skills guidance after prompt content as `system` role context.
@@ -60,7 +60,7 @@ Made Agent CLI prompt assembly deterministic:
 ## Plan Coverage (AP)
 
 1. Phase 1: Split prompt source responsibilities
-- Completed by separating built-in prompt access from optional project prompt loading.
+- Completed by separating built-in prompt access from optional workspace prompt loading.
 
 2. Phase 2: Update runtime message assembly
 - Completed by enforcing explicit base message ordering in the runtime client.

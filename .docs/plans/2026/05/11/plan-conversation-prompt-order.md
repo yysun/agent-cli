@@ -21,7 +21,7 @@ Make prompt assembly deterministic so every turn sends the built-in system promp
 
 1. Separate prompt-source loading from prompt-message assembly:
    - Keep the built-in prompt available independently of filesystem state.
-   - Load `AGENTS.md` as optional project prompt content instead of collapsing it into a fallback string.
+   - Load `AGENTS.md` as optional workspace prompt content instead of collapsing it into a fallback string.
 2. Build base system messages in explicit order:
    - Built-in system prompt
    - Project `AGENTS.md` content when present and non-empty
@@ -31,14 +31,14 @@ Make prompt assembly deterministic so every turn sends the built-in system promp
    - The pending user message remains the last pre-response conversation message
    - Persisted messages continue to exclude system prompt material
 4. Validate ordering at two levels:
-   - Agent-file tests verify built-in and project prompt sources are exposed distinctly
+   - Agent-file tests verify built-in and workspace prompt sources are exposed distinctly
    - Runtime-client tests verify the built message order passed into `respondWithTools(...)`
 
 ## Implementation Phases
 
 - [x] Phase 1: Split prompt source responsibilities.
   - Add a helper that returns built-in prompt content without depending on `AGENTS.md`.
-  - Change project prompt loading so `AGENTS.md` is optional supplemental content.
+  - Change workspace prompt loading so `AGENTS.md` is optional supplemental content.
   - Preserve the current missing-or-empty behavior without throwing.
 
 - [x] Phase 2: Update runtime message assembly.
@@ -74,8 +74,8 @@ Observed result:
 flowchart TD
     A[Start turn] --> B[Get built-in prompt]
     B --> C{AGENTS.md exists and non-empty?}
-    C -- Yes --> D[Load project prompt]
-    C -- No --> E[Skip project prompt]
+    C -- Yes --> D[Load workspace prompt]
+    C -- No --> E[Skip workspace prompt]
     D --> F[Build tools and skills context]
     E --> F
     F --> G[Select prior conversation messages]
@@ -96,7 +96,7 @@ flowchart TD
 
 ### Outcome
 
-The plan is sound with one important constraint: do not overload `loadSystemPrompt()` with two responsibilities. Keep built-in prompt content and project `AGENTS.md` content as distinct sources, then compose them in the runtime layer.
+The plan is sound with one important constraint: do not overload `loadSystemPrompt()` with two responsibilities. Keep built-in prompt content and workspace `AGENTS.md` content as distinct sources, then compose them in the runtime layer.
 
 ### Checks
 

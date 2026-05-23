@@ -5,16 +5,17 @@
  * - Parse CLI arguments and route execution into one-shot, remote, or interactive chat modes.
  *
  * Key features:
- * - Applies project-root and runtime overrides before loading project-local resources.
+ * - Applies workspace-root and runtime overrides before loading workspace-local resources.
  * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
  * - Selects and initializes named agents before resolving runtime config.
- * - Prints startup diagnostics for project root and selected agent id.
+ * - Prints startup diagnostics for workspace root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
  * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
  * - 2026-05-20: Added startup agent-id output.
  * - 2026-05-20: Added --agent-id and --new-agent agent selection.
- * - 2026-05-20: Added startup project-root output and cwd .env fallback for AGENT_CLI_ROOT.
+ * - 2026-05-20: Added startup root output and cwd .env fallback.
  */
 import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
@@ -23,8 +24,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { config as loadDotEnvConfig } from 'dotenv';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
-import { loadProjectSystemPrompt, loadSkillInventory } from '../../core/agent-files.js';
-import { configureProjectRoot, REPO_ROOT } from '../../core/paths.js';
+import { loadSkillInventory, loadWorkspaceSystemPrompt } from '../../core/agent-files.js';
+import {
+  configureWorkspaceRoot,
+  LEGACY_PROJECT_ROOT_ENV_KEY,
+  WORKSPACE_ROOT,
+  WORKSPACE_ROOT_ENV_KEY,
+} from '../../core/paths.js';
 import {
   acquireRemoteHostLock,
   assertNoActiveRemoteHost,
@@ -49,7 +55,8 @@ import {
 } from './agent-runtime.js';
 
 export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
-export const PROJECT_ROOT_ENV_KEY = 'AGENT_CLI_ROOT';
+export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
+export const PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
 const DEFAULT_AGENT_ID = 'default';
 
 const DOTENV_ALLOWED_ENV_KEYS = new Set([
@@ -74,6 +81,7 @@ export interface ParsedArguments {
   newAgentId?: string;
   remoteControl: boolean;
   runtimeOverrides: Record<string, unknown>;
+  workspaceRoot?: string;
   projectRoot?: string;
   streamOff: boolean;
   verbose: boolean;
@@ -93,15 +101,15 @@ export interface InteractivePrompt {
 }
 
 function loadAllowedDotEnvEnvironment(): void {
-  if (loadedDotEnvRoots.has(REPO_ROOT)) {
+  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
     return;
   }
 
-  loadedDotEnvRoots.add(REPO_ROOT);
+  loadedDotEnvRoots.add(WORKSPACE_ROOT);
 
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path.join(REPO_ROOT, '.env'),
+    path: path.join(WORKSPACE_ROOT, '.env'),
     quiet: true,
   }).parsed ?? {};
 
@@ -118,8 +126,11 @@ function loadAllowedDotEnvEnvironment(): void {
   }
 }
 
-function readProjectRootDotEnvFallback(): string | undefined {
-  if (String(process.env[PROJECT_ROOT_ENV_KEY] ?? '').trim()) {
+function readWorkspaceRootDotEnvFallback(): string | undefined {
+  if (
+    String(process.env[WORKSPACE_ENV_KEY] ?? '').trim()
+    || String(process.env[PROJECT_ROOT_ENV_KEY] ?? '').trim()
+  ) {
     return undefined;
   }
 
@@ -128,20 +139,21 @@ function readProjectRootDotEnvFallback(): string | undefined {
     path: path.join(process.cwd(), '.env'),
     quiet: true,
   }).parsed ?? {};
-  const projectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? '').trim();
+  const workspaceRoot = String(parsed[WORKSPACE_ENV_KEY] ?? '').trim();
+  const legacyProjectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? '').trim();
 
-  return projectRoot || undefined;
+  return workspaceRoot || legacyProjectRoot || undefined;
 }
 
-function prepareProjectEnvironment(projectRoot?: string): void {
-  configureProjectRoot(projectRoot ?? readProjectRootDotEnvFallback());
+function prepareWorkspaceEnvironment(workspaceRoot?: string): void {
+  configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
   loadAllowedDotEnvEnvironment();
 }
 
 export function usageText(): string {
   return [
-    'Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
-    '       agent-cli [--project <path>] --remote [--new-chat] [initial message]',
+    'Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
+    '       agent-cli [--workspace <path>] --remote [--new-chat] [initial message]',
     '',
     'Runtime options override runtime.json defaults when provided:',
     '  --provider <name>                 --model <name>',
@@ -150,7 +162,7 @@ export function usageText(): string {
     '  --past-messages <count>           --stream-trace <true|false>',
     '  --web-search <true|false|low|medium|high>',
     '  --agent-id <id>                  --new-agent <id>',
-    '  --project <path>',
+    '  --workspace <path>',
     '  --remote',
     '',
     `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
@@ -160,7 +172,7 @@ export function usageText(): string {
     '  agent-cli "What should I do first?"',
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
-    '  agent-cli --project /path/to/project "Summarize this repo"',
+    '  agent-cli --workspace /path/to/workspace "Summarize this repo"',
     '  agent-cli --new-agent research --provider ollama --model gemma4:e4b',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
     '  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote',
@@ -168,7 +180,7 @@ export function usageText(): string {
 }
 
 export function startupText(
-  cwd = REPO_ROOT,
+  cwd = WORKSPACE_ROOT,
   agentId = DEFAULT_AGENT_ID,
   runtimeSettings?: { provider: string; model: string },
 ): string {
@@ -230,6 +242,7 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let verbose = false;
   let agentId: string | undefined;
   let newAgentId: string | undefined;
+  let workspaceRoot: string | undefined;
   let projectRoot: string | undefined;
   const messageParts: string[] = [];
   const runtimeOverrides: Record<string, unknown> = {};
@@ -361,9 +374,12 @@ export function parseArguments(argv: string[]): ParsedArguments {
         continue;
       }
 
-      if (flagName === 'project') {
+      if (flagName === 'workspace' || flagName === 'project') {
         const result = readFlagValue(argv, index, inlineValue, flagName);
-        projectRoot = String(result.value);
+        workspaceRoot = String(result.value);
+        if (flagName === 'project') {
+          projectRoot = String(result.value);
+        }
         index = result.nextIndex;
         continue;
       }
@@ -445,6 +461,7 @@ export function parseArguments(argv: string[]): ParsedArguments {
     ...(agentId !== undefined ? { agentId } : {}),
     newChat,
     ...(newAgentId !== undefined ? { newAgentId } : {}),
+    ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
@@ -677,6 +694,7 @@ export async function main(
     agentId,
     newChat,
     newAgentId,
+    workspaceRoot,
     projectRoot,
     remoteControl,
     runtimeOverrides,
@@ -684,12 +702,13 @@ export async function main(
     verbose,
     message,
   } = parseArguments(argv);
-  prepareProjectEnvironment(projectRoot);
+  prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
   const parsedArguments = {
     help,
     ...(agentId !== undefined ? { agentId } : {}),
     newChat,
     ...(newAgentId !== undefined ? { newAgentId } : {}),
+    ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
     remoteControl,
     runtimeOverrides,
@@ -731,7 +750,7 @@ export async function main(
 
   if (options.startupDiagnostics) {
     (io.stderr ?? process.stderr).write(
-      `${startupText(REPO_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}\n`,
+      `${startupText(WORKSPACE_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}\n`,
     );
   }
 
@@ -747,8 +766,8 @@ export async function main(
     await assertNoActiveRemoteHost();
   }
 
-  const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
-    loadProjectSystemPrompt(),
+  const [workspaceSystemPrompt, skillInventory, chat] = await Promise.all([
+    loadWorkspaceSystemPrompt(),
     loadSkillInventory(),
     loadRequestedChat({ newChat, agentId: selectedAgentId }),
   ]);
@@ -757,7 +776,7 @@ export async function main(
     verbose,
     streamOff: effectiveStreamOff,
     agentConfig,
-    projectSystemPrompt,
+    workspaceSystemPrompt,
     skillInventory,
   });
 
@@ -845,7 +864,7 @@ export async function runCli(
 ): Promise<void> {
   try {
     const parsed = parseArguments(argv);
-    prepareProjectEnvironment(parsed.projectRoot);
+    prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
 
     await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {

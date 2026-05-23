@@ -2,8 +2,8 @@
 
 ## Scenario: Create a new agent from the CLI
 
-1. Start from a temporary project root with no `.agent-world`.
-2. Run `agent-cli --project <root> --new-agent research --provider ollama --model gemma4:e4b --help`.
+1. Start from a temporary workspace root with no `.agent-world`.
+2. Run `agent-cli --workspace <root> --new-agent research --provider ollama --model gemma4:e4b --help`.
 3. Confirm `.agent-world/world.json` exists and has `defaultAgentId: "research"`.
 4. Confirm `.agent-world/agents/research/agent.json` exists with `id`, `name`, `provider`, and `model`.
 5. Confirm `.agent-world/agents/research/runtime.json` exists with provider/model runtime fields.
@@ -11,7 +11,7 @@
 ## Scenario: Select an existing agent
 
 1. Create two agent folders under `.agent-world/agents`.
-2. Run `agent-cli --project <root> --agent-id analyst --help`.
+2. Run `agent-cli --workspace <root> --agent-id analyst --help`.
 3. Confirm `world.json.defaultAgentId` is `analyst`.
 4. Confirm no files are written under `.agent-world/analyst`.
 

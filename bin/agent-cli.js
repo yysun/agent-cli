@@ -17,10 +17,17 @@ import { promises as fs } from "node:fs";
 
 // core/paths.js
 import path from "node:path";
-function resolveProjectRoot(projectRoot) {
-  const configuredRoot = String(projectRoot ?? process.env.AGENT_CLI_ROOT ?? "").trim();
+var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
+var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
+function resolveWorkspaceRoot(workspaceRoot) {
+  const configuredRoot = [
+    workspaceRoot,
+    process.env[WORKSPACE_ROOT_ENV_KEY],
+    process.env[LEGACY_PROJECT_ROOT_ENV_KEY]
+  ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
   return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
 }
+var WORKSPACE_ROOT = "";
 var REPO_ROOT = "";
 var SYSTEM_PROMPT_PATH = "";
 var ROOT_RUNTIME_CONFIG_PATH = "";
@@ -30,19 +37,20 @@ var WORLD_STATE_PATH = "";
 var AGENT_WORLD_CHATS_ROOT = "";
 var AGENT_WORLD_AGENTS_ROOT = "";
 var REMOTE_HOST_LOCK_PATH = "";
-function configureProjectRoot(projectRoot) {
-  REPO_ROOT = resolveProjectRoot(projectRoot);
-  SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, "AGENTS.md");
-  ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, "runtime.json");
-  AGENT_WORLD_ROOT = path.join(REPO_ROOT, ".agent-world");
+function configureWorkspaceRoot(workspaceRoot) {
+  WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
+  REPO_ROOT = WORKSPACE_ROOT;
+  SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
+  ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, "runtime.json");
+  AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
   WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
   AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
   REMOTE_HOST_LOCK_PATH = path.join(AGENT_WORLD_ROOT, "remote-host.lock.json");
-  return REPO_ROOT;
+  return WORKSPACE_ROOT;
 }
-configureProjectRoot();
+configureWorkspaceRoot();
 function buildWorldChatDirectoryPath(chatId) {
   return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
@@ -398,7 +406,7 @@ async function collectSkillFilePaths(rootPath) {
   }
   return discoveredPaths.sort((left, right) => left.localeCompare(right));
 }
-async function loadProjectSystemPrompt() {
+async function loadWorkspaceSystemPrompt() {
   try {
     await assertReadableFile(SYSTEM_PROMPT_PATH, "system prompt");
   } catch (error) {
@@ -457,7 +465,7 @@ import { promises as fs3 } from "node:fs";
 import path3 from "node:path";
 var DEFAULT_AGENT_ID = "default";
 function defaultWorldName() {
-  return path3.basename(REPO_ROOT) || "agent-world";
+  return path3.basename(WORKSPACE_ROOT) || "agent-world";
 }
 function normalizeAgentId2(agentId) {
   const normalizedAgentId = String(agentId ?? "").trim();
@@ -641,7 +649,7 @@ function buildRemoteHostConflictError(remoteLock) {
     chatId ? `chat ${chatId}` : null,
     Number.isInteger(pid) && pid > 0 ? `pid ${pid}` : null
   ].filter(Boolean).join(", ");
-  return new Error(details ? `Remote mode already active for this project root (${details}).` : "Remote mode already active for this project root.");
+  return new Error(details ? `Remote mode already active for this workspace root (${details}).` : "Remote mode already active for this workspace root.");
 }
 async function readRemoteHostLock() {
   try {
@@ -849,7 +857,7 @@ async function acquireRemoteHostLock({ chat }) {
       await fs3.rm(REMOTE_HOST_LOCK_PATH, { force: true });
     }
   }
-  throw new Error("Failed to acquire the remote host lock for this project root.");
+  throw new Error("Failed to acquire the remote host lock for this workspace root.");
 }
 async function releaseRemoteHostLock() {
   const remoteLock = await readRemoteHostLock();
@@ -1717,7 +1725,7 @@ function buildEnvironmentDefaults(agentConfig = {}) {
 }
 function buildExecutionContext(agentConfig = {}) {
   const context = {
-    workingDirectory: REPO_ROOT
+    workingDirectory: WORKSPACE_ROOT
   };
   if (agentConfig.reasoningEffort) {
     context.reasoningEffort = agentConfig.reasoningEffort;
@@ -1806,10 +1814,10 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
     providers
   };
 }
-function buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory) {
+function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, skillInventory) {
   const layers = [builtInSystemPrompt.trim()];
-  if (String(projectSystemPrompt ?? "").trim()) {
-    layers.push(String(projectSystemPrompt).trim());
+  if (String(workspaceSystemPrompt ?? "").trim()) {
+    layers.push(String(workspaceSystemPrompt).trim());
   }
   const skillInventoryMessage = buildSkillInventoryMessage(skillInventory);
   if (skillInventoryMessage) {
@@ -1879,7 +1887,7 @@ function selectContextMessages(messages, historyMessageLimit) {
   }
   return messages.slice(-historyMessageLimit);
 }
-async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, handleToolCall, historyMessageLimit, builtInSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
+async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, onToolCall, onToolResult, handleToolCall, historyMessageLimit, builtInSystemPrompt, workspaceSystemPrompt, projectSystemPrompt, skillInventory, approvalGate, agentConfig = {}, abortSignal }) {
   const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
   const environmentDefaults = buildEnvironmentDefaults(agentConfig);
   const executionContext = buildExecutionContext({
@@ -1924,7 +1932,7 @@ async function runChatTurn({ chat, userMessage, stream = true, onStreamChunk, on
       ...abortSignal ? { abortSignal } : {},
       buildMessages: async ({ state, transientInstruction }) => {
         const baseMessages = [
-          ...buildBaseSystemMessages(builtInSystemPrompt, projectSystemPrompt, skillInventory),
+          ...buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt ?? projectSystemPrompt, skillInventory),
           ...state.conversationMessages
         ];
         if (!transientInstruction) {
@@ -3167,7 +3175,7 @@ function createTurnExecutor(options) {
           };
         },
         builtInSystemPrompt,
-        projectSystemPrompt: options.projectSystemPrompt,
+        workspaceSystemPrompt: options.workspaceSystemPrompt ?? options.projectSystemPrompt,
         skillInventory: options.skillInventory,
         agentConfig: options.agentConfig
       });
@@ -3213,7 +3221,8 @@ function createTurnExecutor(options) {
 
 // cli/src/cli-shell.ts
 var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
-var PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
+var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
+var PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
 var DEFAULT_AGENT_ID2 = "default";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
@@ -3230,13 +3239,13 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
 ]);
 var loadedDotEnvRoots = /* @__PURE__ */ new Set();
 function loadAllowedDotEnvEnvironment() {
-  if (loadedDotEnvRoots.has(REPO_ROOT)) {
+  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
     return;
   }
-  loadedDotEnvRoots.add(REPO_ROOT);
+  loadedDotEnvRoots.add(WORKSPACE_ROOT);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(REPO_ROOT, ".env"),
+    path: path4.join(WORKSPACE_ROOT, ".env"),
     quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -3249,8 +3258,8 @@ function loadAllowedDotEnvEnvironment() {
     process.env[key] = value;
   }
 }
-function readProjectRootDotEnvFallback() {
-  if (String(process.env[PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
+function readWorkspaceRootDotEnvFallback() {
+  if (String(process.env[WORKSPACE_ENV_KEY] ?? "").trim() || String(process.env[PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
     return void 0;
   }
   const parsed = loadDotEnvConfig({
@@ -3258,17 +3267,18 @@ function readProjectRootDotEnvFallback() {
     path: path4.join(process.cwd(), ".env"),
     quiet: true
   }).parsed ?? {};
-  const projectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? "").trim();
-  return projectRoot || void 0;
+  const workspaceRoot = String(parsed[WORKSPACE_ENV_KEY] ?? "").trim();
+  const legacyProjectRoot = String(parsed[PROJECT_ROOT_ENV_KEY] ?? "").trim();
+  return workspaceRoot || legacyProjectRoot || void 0;
 }
-function prepareProjectEnvironment(projectRoot) {
-  configureProjectRoot(projectRoot ?? readProjectRootDotEnvFallback());
+function prepareWorkspaceEnvironment(workspaceRoot) {
+  configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
   loadAllowedDotEnvEnvironment();
 }
 function usageText() {
   return [
-    "Usage: agent-cli [--project <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
-    "       agent-cli [--project <path>] --remote [--new-chat] [initial message]",
+    "Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
+    "       agent-cli [--workspace <path>] --remote [--new-chat] [initial message]",
     "",
     "Runtime options override runtime.json defaults when provided:",
     "  --provider <name>                 --model <name>",
@@ -3277,7 +3287,7 @@ function usageText() {
     "  --past-messages <count>           --stream-trace <true|false>",
     "  --web-search <true|false|low|medium|high>",
     "  --agent-id <id>                  --new-agent <id>",
-    "  --project <path>",
+    "  --workspace <path>",
     "  --remote",
     "",
     `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
@@ -3287,13 +3297,13 @@ function usageText() {
     '  agent-cli "What should I do first?"',
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
-    '  agent-cli --project /path/to/project "Summarize this repo"',
+    '  agent-cli --workspace /path/to/workspace "Summarize this repo"',
     "  agent-cli --new-agent research --provider ollama --model gemma4:e4b",
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
     "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
   ].join("\n");
 }
-function startupText(cwd = REPO_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings) {
+function startupText(cwd = WORKSPACE_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings) {
   const lines = [
     `Agent CLI starting in ${cwd}`,
     `Agent CLI agent id: ${agentId}`
@@ -3337,6 +3347,7 @@ function parseArguments(argv) {
   let verbose = false;
   let agentId;
   let newAgentId;
+  let workspaceRoot;
   let projectRoot;
   const messageParts = [];
   const runtimeOverrides = {};
@@ -3433,9 +3444,12 @@ function parseArguments(argv) {
         index = result.nextIndex;
         continue;
       }
-      if (flagName === "project") {
+      if (flagName === "workspace" || flagName === "project") {
         const result = readFlagValue(argv, index, inlineValue, flagName);
-        projectRoot = String(result.value);
+        workspaceRoot = String(result.value);
+        if (flagName === "project") {
+          projectRoot = String(result.value);
+        }
         index = result.nextIndex;
         continue;
       }
@@ -3504,6 +3518,7 @@ function parseArguments(argv) {
     ...agentId !== void 0 ? { agentId } : {},
     newChat,
     ...newAgentId !== void 0 ? { newAgentId } : {},
+    ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
     remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
@@ -3681,6 +3696,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     agentId,
     newChat,
     newAgentId,
+    workspaceRoot,
     projectRoot,
     remoteControl,
     runtimeOverrides,
@@ -3688,12 +3704,13 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     verbose,
     message
   } = parseArguments(argv);
-  prepareProjectEnvironment(projectRoot);
+  prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
   const parsedArguments = {
     help,
     ...agentId !== void 0 ? { agentId } : {},
     newChat,
     ...newAgentId !== void 0 ? { newAgentId } : {},
+    ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
     remoteControl,
     runtimeOverrides,
@@ -3729,7 +3746,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
   if (options.startupDiagnostics) {
     (io.stderr ?? process.stderr).write(
-      `${startupText(REPO_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}
+      `${startupText(WORKSPACE_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}
 `
     );
   }
@@ -3743,8 +3760,8 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
   if (!remoteControl) {
     await assertNoActiveRemoteHost();
   }
-  const [projectSystemPrompt, skillInventory, chat] = await Promise.all([
-    loadProjectSystemPrompt(),
+  const [workspaceSystemPrompt, skillInventory, chat] = await Promise.all([
+    loadWorkspaceSystemPrompt(),
     loadSkillInventory(),
     loadRequestedChat({ newChat, agentId: selectedAgentId })
   ]);
@@ -3753,7 +3770,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     verbose,
     streamOff: effectiveStreamOff,
     agentConfig,
-    projectSystemPrompt,
+    workspaceSystemPrompt,
     skillInventory
   });
   if (remoteControl) {
@@ -3823,7 +3840,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
 async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
   try {
     const parsed = parseArguments(argv);
-    prepareProjectEnvironment(parsed.projectRoot);
+    prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
     await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

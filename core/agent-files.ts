@@ -3,7 +3,7 @@
  * Agent CLI Agent File Loading
  *
  * Purpose:
- * - Load the built-in prompt, optional project prompt, and inventory `llm-runtime` skills.
+ * - Load the built-in prompt, optional workspace prompt, and inventory `llm-runtime` skills.
  *
  * Key features:
  * - Reads optional `./AGENTS.md` prompt content without replacing the built-in prompt.
@@ -11,6 +11,7 @@
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed AGENTS.md prompt loading terminology from project to workspace.
  * - 2026-05-07: Added agent prompt and skill inventory helpers for the CLI.
  * - 2026-05-07: Switched prompt and skills loading to AGENTS/.agents conventions.
  * - 2026-05-11: Split built-in prompt loading from optional AGENTS.md prompt loading.
@@ -151,7 +152,7 @@ async function collectSkillFilePaths(rootPath) {
   return discoveredPaths.sort((left, right) => left.localeCompare(right));
 }
 
-export async function loadProjectSystemPrompt() {
+export async function loadWorkspaceSystemPrompt() {
   try {
     await assertReadableFile(SYSTEM_PROMPT_PATH, 'system prompt');
   } catch (error) {
@@ -164,6 +165,10 @@ export async function loadProjectSystemPrompt() {
 
   const content = (await fs.readFile(SYSTEM_PROMPT_PATH, 'utf8')).trim();
   return content;
+}
+
+export async function loadProjectSystemPrompt() {
+  return loadWorkspaceSystemPrompt();
 }
 
 export async function loadSkillInventory() {

@@ -40,9 +40,9 @@ The current implementation needs a single world-centric local storage contract i
 24. Runtime provider credentials may still come from `.env` or process environment variables, but `.env` must not be the source of non-credential runtime defaults such as model selection, temperature, search mode, or history depth.
 25. Chat creation, chat listing, chat selection, chat loading, and follow-up turns must operate against the `.agent-world/chats/` layout.
 26. Agent lookup and agent-scoped persistence must operate against the `.agent-world/agents/` layout.
-27. Existing project prompt and skill discovery behavior must continue to use `./AGENTS.md` and `./.agents/skills/`; moving durable state into `.agent-world` must not repurpose the existing skills directory.
+27. Existing workspace prompt and skill discovery behavior must continue to use `./AGENTS.md` and `./.agents/skills/`; moving durable state into `.agent-world` must not repurpose the existing skills directory.
 28. Remote-mode features that depend on persisted local chat state must continue to work against the new durable layout.
-29. Remote host locking for a project root must be stored under `./.agent-world/remote-host.lock.json` while a remote host session is active.
+29. Remote host locking for a workspace root must be stored under `./.agent-world/remote-host.lock.json` while a remote host session is active.
 30. Local durable persistence must remain on the local machine; relay infrastructure must not become the source of truth for world, chat, or agent files.
 
 ## Non-Goals
@@ -56,7 +56,7 @@ The current implementation needs a single world-centric local storage contract i
 
 ## Acceptance Criteria
 
-1. Given a project root using Agent CLI, when durable state is initialized, the CLI creates `./.agent-world/world.json`, `./.agent-world/chats/`, and `./.agent-world/agents/`.
+1. Given a workspace root using Agent CLI, when durable state is initialized, the CLI creates `./.agent-world/world.json`, `./.agent-world/chats/`, and `./.agent-world/agents/`.
 2. Given a newly initialized world, `world.json` contains non-empty `id` and valid fields for `name`, `defaultAgentId`, and `currentChatId`.
 3. Given a new chat is created, the CLI persists that chat under `./.agent-world/chats/{chatId}/` and writes `chat.json`, `messages.jsonl`, and `summary.md` for it.
 4. Given a chat receives messages across multiple turns, the CLI can reload the same message history from `messages.jsonl` in the original order.
@@ -67,7 +67,7 @@ The current implementation needs a single world-centric local storage contract i
 9. Given `./runtime.json` exists, the CLI loads those runtime defaults when the same keys are not provided by CLI flags.
 10. Given `world.json.defaultAgentId` points at an agent directory with `runtime.json`, the agent runtime file overrides matching keys from the repo-root `runtime.json`.
 11. Given runtime provider credentials are present in `.env` or the process environment, the CLI still uses those credentials without requiring them to be duplicated into `runtime.json`.
-12. Given an existing project root still contains an old `.chats` directory, the CLI does not depend on it and initializes the new `.agent-world` contract independently.
+12. Given an existing workspace root still contains an old `.chats` directory, the CLI does not depend on it and initializes the new `.agent-world` contract independently.
 13. Given `agent-cli --remote` depends on local persisted chat state, remote chat operations continue to work after the durable storage root moves to `.agent-world`.
 14. Given a `--remote` host is active, the host lock is enforced from `./.agent-world/remote-host.lock.json`.
 15. Given prompt and skill loading, the CLI continues to read `./AGENTS.md` and `./.agents/skills/` unchanged.
@@ -75,6 +75,6 @@ The current implementation needs a single world-centric local storage contract i
 ## Open Questions
 
 1. The requested structure defines required filenames, but it does not yet fix the exact schema for `chat.json`, `state.json`, or the JSONL record shapes for messages, inbox items, and events.
-2. The requirement introduces agent-scoped files, but it does not yet define whether one project may host multiple durable agents simultaneously or how the default agent is created when none exists.
+2. The requirement introduces agent-scoped files, but it does not yet define whether one workspace may host multiple durable agents simultaneously or how the default agent is created when none exists.
 3. The runtime-file requirement defines precedence, but it does not yet define whether non-default agents should ever be selectable for a single invocation without changing `world.json.defaultAgentId`.
 4. The requirement removes non-credential runtime defaults from `.env`, but it does not yet define whether legacy `LLM_*` runtime env keys should be ignored silently or rejected with a clear startup error.

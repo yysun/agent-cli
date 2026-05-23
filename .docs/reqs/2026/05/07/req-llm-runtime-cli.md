@@ -17,7 +17,7 @@ Create a Node.js CLI for the Agent CLI project that uses `llm-runtime` to send u
 
 ## Problem
 
-The repository does not currently provide a command-line entry point for invoking an LLM with persistent chat state, project prompt files, and project skills. A user should be able to run one CLI command, pass a message as an argument, have that message appended to the current chat, and receive the model response in the terminal while chat history is persisted on disk.
+The repository does not currently provide a command-line entry point for invoking an LLM with persistent chat state, workspace prompt files, and workspace skills. A user should be able to run one CLI command, pass a message as an argument, have that message appended to the current chat, and receive the model response in the terminal while chat history is persisted on disk.
 
 ## Requirements
 

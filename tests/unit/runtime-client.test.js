@@ -188,7 +188,7 @@ describe('runtime-client', () => {
       stream: true,
       historyMessageLimit: 4,
       builtInSystemPrompt: 'System prompt',
-      projectSystemPrompt: 'Project prompt',
+      workspaceSystemPrompt: 'Workspace prompt',
       skillInventory: [
         { skillId: 'agent-cli-core', description: 'Core skill' },
       ],

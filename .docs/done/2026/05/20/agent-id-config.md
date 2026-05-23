@@ -26,6 +26,6 @@ Generated outputs were rebuilt in `bin/agent-cli.js`, `core/session-store.js`, a
 ## Validation
 
 - `npm run test:syntax && npm run test:unit`: 102 unit tests passed.
-- Temporary-project smoke: `node ./bin/agent-cli.js --project <tmp> --new-agent research --provider ollama --model gemma4:e4b --help`
+- Temporary-workspace smoke: `node ./bin/agent-cli.js --workspace <tmp> --new-agent research --provider ollama --model gemma4:e4b --help`
 
 Both passed.

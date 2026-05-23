@@ -11,6 +11,7 @@
  * - Keeps the exported chat-store API stable for the CLI and remote host.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
  * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.
  * - 2026-05-07: Added file-backed chat persistence for the CLI.
  * - 2026-05-13: Added chat listing and explicit selection helpers for remote multi-client flows.
@@ -20,10 +21,10 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { loadPersistedRuntimeConfig } from './agent-config.js';
-import { AGENT_WORLD_AGENTS_ROOT, AGENT_WORLD_CHATS_ROOT, AGENT_WORLD_ROOT, buildAgentEventsPath, buildAgentInboxPath, buildAgentMemoryPath, buildAgentMetadataPath, buildAgentRuntimeConfigPath, buildAgentStatePath, buildWorldChatMessagesPath, buildWorldChatMetadataPath, buildWorldChatSummaryPath, REMOTE_HOST_LOCK_PATH, REPO_ROOT, WORLD_STATE_PATH, } from './paths.js';
+import { AGENT_WORLD_AGENTS_ROOT, AGENT_WORLD_CHATS_ROOT, AGENT_WORLD_ROOT, buildAgentEventsPath, buildAgentInboxPath, buildAgentMemoryPath, buildAgentMetadataPath, buildAgentRuntimeConfigPath, buildAgentStatePath, buildWorldChatMessagesPath, buildWorldChatMetadataPath, buildWorldChatSummaryPath, REMOTE_HOST_LOCK_PATH, WORKSPACE_ROOT, WORLD_STATE_PATH, } from './paths.js';
 const DEFAULT_AGENT_ID = 'default';
 function defaultWorldName() {
-    return path.basename(REPO_ROOT) || 'agent-world';
+    return path.basename(WORKSPACE_ROOT) || 'agent-world';
 }
 /** @param {string | undefined | null} agentId */
 function normalizeAgentId(agentId) {
@@ -270,8 +271,8 @@ function buildRemoteHostConflictError(remoteLock) {
         Number.isInteger(pid) && pid > 0 ? `pid ${pid}` : null,
     ].filter(Boolean).join(', ');
     return new Error(details
-        ? `Remote mode already active for this project root (${details}).`
-        : 'Remote mode already active for this project root.');
+        ? `Remote mode already active for this workspace root (${details}).`
+        : 'Remote mode already active for this workspace root.');
 }
 async function readRemoteHostLock() {
     try {
@@ -506,7 +507,7 @@ export async function acquireRemoteHostLock({ chat }) {
             await fs.rm(REMOTE_HOST_LOCK_PATH, { force: true });
         }
     }
-    throw new Error('Failed to acquire the remote host lock for this project root.');
+    throw new Error('Failed to acquire the remote host lock for this workspace root.');
 }
 export async function releaseRemoteHostLock() {
     const remoteLock = await readRemoteHostLock();
