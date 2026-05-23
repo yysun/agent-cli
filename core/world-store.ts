@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Agent CLI Session Store
+ * Agent CLI World Store
  *
  * Purpose:
  * - Persist durable world, chat, and agent state under `./.agent-world`.
@@ -8,10 +8,11 @@
  * Key features:
  * - Bootstraps `world.json`, default-agent records, and chat directories on demand.
  * - Creates and selects named agents under `.agent-world/agents/{agentId}`.
- * - Keeps the exported chat-store API stable for the CLI and remote host.
+ * - Keeps the exported world/chat store API stable for the CLI and remote host.
  * - Provides structured agent memory and per-chat queue helpers for the world runtime API.
  *
  * Recent changes:
+ * - 2026-05-23: Renamed from session-store to world-store to match module ownership.
  * - 2026-05-23: Added agent-level memory JSONL and durable per-chat queue persistence.
  * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
  * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.

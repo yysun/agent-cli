@@ -301,7 +301,7 @@ describe('agent-world-runtime', () => {
       ],
     }));
     const { createAgentWorldRuntime } = await loadRuntime(rootPath, runChatTurn);
-    const { addQueuedMessage } = await import('../../core/session-store.js');
+    const { addQueuedMessage } = await import('../../core/world-store.js');
     const setupRuntime = createAgentWorldRuntime({ autoResume: false });
     const { chatId } = await setupRuntime.chats.create();
 
@@ -343,7 +343,7 @@ describe('agent-world-runtime', () => {
     const {
       addQueuedMessage,
       persistCompletedChat,
-    } = await import('../../core/session-store.js');
+    } = await import('../../core/world-store.js');
     const setupRuntime = createAgentWorldRuntime({ autoResume: false });
     const { chatId } = await setupRuntime.chats.create();
 

@@ -19,7 +19,7 @@ import { getBuiltInSystemPrompt } from '../../core/agent-files.js';
 import {
   persistCompletedChat,
   persistStreamTraceEvents,
-} from '../../core/session-store.js';
+} from '../../core/world-store.js';
 import { runChatTurn } from '../../core/runtime-client.js';
 import {
   collectHumanInputAnswer,

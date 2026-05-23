@@ -464,7 +464,7 @@ function buildSkillInventoryMessage(skills) {
   ].join("\n");
 }
 
-// core/session-store.js
+// core/world-store.js
 import { randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import path3 from "node:path";

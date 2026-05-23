@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Agent CLI Session Store Unit Tests
+ * Agent CLI World Store Unit Tests
  *
  * Purpose:
  * - Validate world-backed chat persistence without touching the real repo state.
@@ -25,10 +25,10 @@ const rootsToClean = [];
 const originalCwd = process.cwd();
 
 /** @param {string} rootPath */
-async function loadSessionStore(rootPath) {
+async function loadWorldStore(rootPath) {
   process.chdir(rootPath);
   vi.resetModules();
-  return await import('../../core/session-store.js');
+  return await import('../../core/world-store.js');
 }
 
 /** @param {string} filePath */
@@ -45,12 +45,12 @@ afterEach(async () => {
   }
 });
 
-describe('session-store', () => {
+describe('world-store', () => {
   it('creates a new in-memory chat shell for --new-chat', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat } = await loadSessionStore(rootPath);
+    const { loadRequestedChat } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     expect(chat.id).toMatch(/Z-/);
@@ -62,7 +62,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat } = await loadSessionStore(rootPath);
+    const { loadRequestedChat, persistCompletedChat } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -121,7 +121,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { ensureAgentSelection } = await loadSessionStore(rootPath);
+    const { ensureAgentSelection } = await loadWorldStore(rootPath);
 
     await ensureAgentSelection({
       agentId: 'research',
@@ -154,7 +154,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat } = await loadSessionStore(rootPath);
+    const { loadRequestedChat, persistCompletedChat } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -175,7 +175,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat } = await loadSessionStore(rootPath);
+    const { loadRequestedChat } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: false });
 
     expect(chat.id).toMatch(/Z-/);
@@ -199,7 +199,7 @@ describe('session-store', () => {
       'utf8',
     );
 
-    const { loadRequestedChat } = await loadSessionStore(rootPath);
+    const { loadRequestedChat } = await loadWorldStore(rootPath);
     const recoveredChat = await loadRequestedChat({ newChat: false });
 
     expect(recoveredChat.id).toMatch(/Z-/);
@@ -210,7 +210,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } = await loadSessionStore(rootPath);
+    const { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -245,7 +245,7 @@ describe('session-store', () => {
       persistCompletedChat,
       persistRemoteSessionState,
       setCurrentChat,
-    } = await loadSessionStore(rootPath);
+    } = await loadWorldStore(rootPath);
     const firstChat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -290,7 +290,7 @@ describe('session-store', () => {
       listPersistedChats,
       loadRequestedChat,
       persistCompletedChat,
-    } = await loadSessionStore(rootPath);
+    } = await loadWorldStore(rootPath);
     const activeChat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -335,7 +335,7 @@ describe('session-store', () => {
       loadRequestedChat,
       persistCompletedChat,
       setCurrentChat,
-    } = await loadSessionStore(rootPath);
+    } = await loadWorldStore(rootPath);
     const firstChat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -387,7 +387,7 @@ describe('session-store', () => {
     );
     await writeFile(path.join(rootPath, '.chats', 'current.json'), `${JSON.stringify({ chatId: 'legacy-chat-1' }, null, 2)}\n`, 'utf8');
 
-    const { listPersistedChats, loadRequestedChat } = await loadSessionStore(rootPath);
+    const { listPersistedChats, loadRequestedChat } = await loadWorldStore(rootPath);
     const current = await loadRequestedChat({ newChat: false });
     expect(current.id).not.toBe('legacy-chat-1');
     expect(current.messages).toEqual([]);
@@ -404,7 +404,7 @@ describe('session-store', () => {
       acquireRemoteHostLock,
       loadRequestedChat,
       releaseRemoteHostLock,
-    } = await loadSessionStore(rootPath);
+    } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await acquireRemoteHostLock({ chat });
@@ -428,7 +428,7 @@ describe('session-store', () => {
       loadRequestedChat,
       releaseRemoteHostLock,
       updateRemoteHostLock,
-    } = await loadSessionStore(rootPath);
+    } = await loadWorldStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await acquireRemoteHostLock({ chat });
@@ -447,7 +447,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { assertNoActiveRemoteHost } = await loadSessionStore(rootPath);
+    const { assertNoActiveRemoteHost } = await loadWorldStore(rootPath);
     await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
     await writeFile(
       path.join(rootPath, '.agent-world', 'remote-host.lock.json'),
@@ -464,7 +464,7 @@ describe('session-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { assertNoActiveRemoteHost } = await loadSessionStore(rootPath);
+    const { assertNoActiveRemoteHost } = await loadWorldStore(rootPath);
     await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
     const processKillSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const error = new Error('ESRCH');

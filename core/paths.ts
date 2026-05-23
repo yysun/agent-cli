@@ -3,7 +3,7 @@
  * Agent CLI Path Constants
  *
  * Purpose:
- * - Centralize workspace-local filesystem paths used by the CLI and session store.
+ * - Centralize workspace-local filesystem paths used by the CLI and world store.
  *
  * Key features:
  * - Resolves workspace-local resources from `AGENT_CLI_WORKSPACE` when set, otherwise compatibility env or cwd.

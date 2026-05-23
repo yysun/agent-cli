@@ -320,7 +320,7 @@ describe('remote-control', () => {
     });
   });
 
-  it('routes slash commands through the session store and targets requester-only results', async () => {
+  it('routes slash commands through the world store and targets requester-only results', async () => {
     const firstPoll = createDeferred();
     const secondPoll = createDeferred();
     const thirdPoll = createDeferred();

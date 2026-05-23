@@ -10,6 +10,7 @@
  * - Persists per-agent memory and durable per-chat queue rows without replacing agent-runtime.
  *
  * Recent changes:
+ * - 2026-05-23: Made queue API add enqueue-only so CLI queued sends do not auto-dispatch.
  * - 2026-05-23: Implemented the world API runtime, event emitter, mention routing, agent memory, and queue dispatch.
  */
 import { EventEmitter } from 'node:events';
@@ -45,7 +46,7 @@ import {
   updateAgentMetadata,
   updateQueuedMessage,
   updateWorldMetadata,
-} from '../../core/session-store.js';
+} from '../../core/world-store.js';
 
 export interface WorkspaceState {
   workspaceRoot: string;
@@ -511,7 +512,6 @@ export class AgentWorldRuntime implements AgentWorldApi {
         const targetChatId = await this.resolveChatId(chatId);
         const row = await addQueuedMessage({ chatId: targetChatId, content, sender }) as QueuedMessage;
         this.emit({ type: 'queue_added', chatId: targetChatId, queueMessage: row, createdAt: nowIsoString() });
-        void this.processQueue(targetChatId);
         return row;
       },
       remove: async (messageId: string) => {

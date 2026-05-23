@@ -45,7 +45,7 @@ import {
   releaseRemoteHostLock,
   setCurrentChat,
   updateRemoteHostLock,
-} from '../../core/session-store.js';
+} from '../../core/world-store.js';
 import * as relayClient from '../../core/relay-client.js';
 import { runRemoteControlSession } from '../../core/remote-control.js';
 import {
