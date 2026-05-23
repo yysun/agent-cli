@@ -8,14 +8,16 @@
 - Added unit coverage for the CLI dispatcher and renamed store tests.
 - Added a real-binary E2E for `agent-world-cli`, modeled after `../agent-world` Electron E2E style: built entrypoint, isolated workspace, durable state assertions, and queue lifecycle checks.
 - Added `agent-world-cli` interactive mode for no-arg and `interactive` launches, with slash commands sharing the one-shot dispatcher and scripted stdin support.
+- Added a monitored interactive process E2E that writes stdin one command at a time, waits for stdout transitions, and verifies durable queue state after exit.
 
 ## Verification
 
 - `npx vitest run tests/unit/agent-world-cli.test.js tests/unit/world-store.test.js tests/unit/agent-world-runtime.test.js`
 - `npx vitest run tests/e2e/agent-world-cli.e2e.test.js`
+- `npx vitest run tests/e2e/agent-world-cli-interactive.e2e.test.js`
 - `npm test`
 - `git diff --check`
-- CR: no blocking code issues remained after fixing CLI startup auto-resume behavior and the piped-stdin readline path.
+- CR: no blocking code issues remained after fixing CLI startup auto-resume behavior, the piped-stdin readline path, and `/exit` cleanup for open stdin pipes.
 - VR: requirement, plan, E2E spec, implementation, and tests all align.
 
 ## Notes

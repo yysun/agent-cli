@@ -411,14 +411,90 @@ async function executeInteractiveLine(
   return true;
 }
 
-async function readAllInput(input: NodeJS.ReadableStream): Promise<string> {
-  let content = '';
+async function runScriptedInteractiveInput(
+  input: NodeJS.ReadableStream,
+  runtime: AgentWorldRuntime,
+  io: AgentWorldCliIo,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let buffer = '';
+    let processing = Promise.resolve();
+    let stopped = false;
+    let resolved = false;
 
-  for await (const chunk of input as AsyncIterable<Buffer | string>) {
-    content += String(chunk);
-  }
+    const cleanup = () => {
+      input.off('data', handleData);
+      input.off('end', handleEnd);
+      input.off('error', handleError);
+    };
 
-  return content;
+    const resolveAfterProcessing = () => {
+      if (resolved) {
+        return;
+      }
+
+      resolved = true;
+      cleanup();
+      processing.then(() => resolve(), reject);
+    };
+
+    const stopAfterProcessing = () => {
+      stopped = true;
+      if (typeof (input as { pause?: () => void }).pause === 'function') {
+        (input as { pause: () => void }).pause();
+      }
+      if (typeof (input as { destroy?: () => void }).destroy === 'function') {
+        (input as { destroy: () => void }).destroy();
+      }
+      resolveAfterProcessing();
+    };
+
+    const enqueueLine = (line: string) => {
+      processing = processing.then(async () => {
+        if (stopped || !line.trim()) {
+          return;
+        }
+
+        const shouldContinue = await executeInteractiveLine(line, runtime, io);
+        if (!shouldContinue) {
+          stopAfterProcessing();
+          return;
+        }
+
+        io.stdout.write(await buildInteractivePrompt(runtime));
+      }, reject);
+    };
+
+    const handleData = (chunk: Buffer | string) => {
+      buffer += String(chunk);
+      const lines = buffer.split(/\r?\n/u);
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        enqueueLine(line);
+      }
+    };
+
+    const handleEnd = () => {
+      if (buffer.trim()) {
+        enqueueLine(buffer);
+        buffer = '';
+      }
+
+      resolveAfterProcessing();
+    };
+
+    const handleError = (error: Error) => {
+      stopped = true;
+      resolved = true;
+      cleanup();
+      reject(error);
+    };
+
+    input.on('data', handleData);
+    input.on('end', handleEnd);
+    input.on('error', handleError);
+  });
 }
 
 export async function runAgentWorldInteractive(
@@ -432,21 +508,8 @@ export async function runAgentWorldInteractive(
   writeText(io, 'agent-world-cli interactive. Type /help for commands, /exit to quit.');
 
   if (!isTerminal) {
-    const content = await readAllInput(input);
-    const lines = content.split(/\r?\n/u);
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-
-      io.stdout.write(await buildInteractivePrompt(runtime));
-      const shouldContinue = await executeInteractiveLine(line, runtime, io);
-      if (!shouldContinue) {
-        break;
-      }
-    }
-
+    io.stdout.write(await buildInteractivePrompt(runtime));
+    await runScriptedInteractiveInput(input, runtime, io);
     return 0;
   }
 

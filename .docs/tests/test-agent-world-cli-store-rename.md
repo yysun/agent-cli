@@ -57,10 +57,11 @@
 4. Confirm agent and chat operations persist to `.agent-world`.
 5. Confirm queued send, queue stop, and queue clear expose durable queue status transitions without provider credentials.
 6. Run a scripted interactive session through stdin/stdout against the built binary and verify the same queue lifecycle.
+7. Run a monitored interactive session that keeps the process open, sends one stdin command at a time, waits for the corresponding stdout transition, and then verifies durable queue state.
 
 ## Execution Status
 
 - Automated unit coverage: `tests/unit/agent-world-cli.test.js`, `tests/unit/world-store.test.js`, and `tests/unit/agent-world-runtime.test.js`.
-- Automated E2E coverage: `tests/e2e/agent-world-cli.e2e.test.js`, included in `npm run test:e2e:relay` and therefore `npm test`.
+- Automated E2E coverage: `tests/e2e/agent-world-cli.e2e.test.js` and `tests/e2e/agent-world-cli-interactive.e2e.test.js`, included in `npm run test:e2e:relay` and therefore `npm test`.
 - The E2E follows the Electron app pattern from `../agent-world/tests/electron-e2e`: real built entrypoint, isolated workspace, helper-based command execution, and durable state assertions.
-- Interactive mode is covered by both scripted unit coverage and real-binary E2E stdin/stdout coverage.
+- Interactive mode is covered by scripted unit coverage, batch real-binary stdin/stdout coverage, and stepwise monitored real-binary stdin/stdout coverage.

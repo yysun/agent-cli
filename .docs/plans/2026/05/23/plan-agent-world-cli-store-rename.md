@@ -39,7 +39,7 @@ flowchart TD
 - Ensure the queue API has an enqueue-only path for `agent-world-cli send --queue`; direct sends can remain runtime-backed and may require provider credentials.
 - Add unit tests that invoke the CLI source in a temporary workspace and verify JSON output/state.
 - Add unit tests for interactive line handling where possible, and E2E coverage for scripted stdin/stdout through the real binary.
-- Add a real-binary E2E test inspired by `../agent-world/tests/electron-e2e`: launch the built entrypoint against an isolated workspace, use helper functions for command execution, and assert durable queue state transitions.
+- Add a real-binary E2E test inspired by `../agent-world/tests/electron-e2e`: launch the built entrypoint against an isolated workspace, use helper functions for command execution, monitor stdout after each stdin command, and assert durable queue state transitions.
 
 ## E2E Coverage
 
@@ -58,6 +58,7 @@ Needed. This story exposes a user-facing binary and changes a shared storage mod
 
 - `npx vitest run tests/unit/agent-world-cli.test.js tests/unit/world-store.test.js tests/unit/agent-world-runtime.test.js` passed.
 - `npx vitest run tests/e2e/agent-world-cli.e2e.test.js` passed.
+- `npx vitest run tests/e2e/agent-world-cli-interactive.e2e.test.js` passed.
 - `npm test` passed.
-- Interactive-mode scoped checks passed through `tests/unit/agent-world-cli.test.js` and `tests/e2e/agent-world-cli.e2e.test.js`.
+- Interactive-mode scoped checks passed through `tests/unit/agent-world-cli.test.js`, `tests/e2e/agent-world-cli.e2e.test.js`, and `tests/e2e/agent-world-cli-interactive.e2e.test.js`.
 - CR passed: no remaining `core/session-store.js` imports, no whitespace errors, and the generated `agent-world-cli` bundle is non-empty.

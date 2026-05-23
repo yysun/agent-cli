@@ -45,7 +45,7 @@ At the same time, `agent-world-cli` is published in `package.json` but its sourc
 - The CLI should not introduce remote execution, provider-key movement, or new persistence locations.
 - Add focused tests for the CLI command parser/behavior and for the store rename where useful.
 - Add focused tests for interactive command handling, including scripted stdin/stdout behavior.
-- Add a real-binary E2E for `agent-world-cli` modeled after `../agent-world` Electron E2E: isolated workspace, real built entrypoint, durable state assertions, and queue lifecycle checks without mocks.
+- Add real-binary E2E for `agent-world-cli` modeled after `../agent-world` Electron E2E: isolated workspace, real built entrypoint, monitored stdin/stdout, durable state assertions, and queue lifecycle checks without mocks.
 
 ## Acceptance Criteria
 
@@ -62,7 +62,7 @@ At the same time, `agent-world-cli` is published in `package.json` but its sourc
 - `send --queue` creates a durable queued row without requiring a live provider call.
 - Tests cover representative `agent-world-cli` commands without requiring live provider credentials.
 - E2E coverage runs the real `bin/agent-world-cli.js` against an isolated workspace and verifies queued-send lifecycle behavior.
-- E2E coverage includes a scripted interactive session against the real `bin/agent-world-cli.js`.
+- E2E coverage includes both batch-scripted and stepwise monitored interactive sessions against the real `bin/agent-world-cli.js`.
 - Full project validation passes.
 
 ## Non-Goals
