@@ -6,7 +6,7 @@
  * - Build temporary repo-like fixtures for isolated Vitest runs.
  *
  * Key features:
- * - Creates temporary Agent CLI roots with AGENTS/.agents fixtures on demand.
+ * - Creates temporary Agent CLI roots with AGENTS/.agent-world fixtures on demand.
  * - Provides JSON and stdout helpers used by both unit and e2e suites.
  *
  * Recent changes:
@@ -37,7 +37,7 @@ export async function writeSystemPrompt(rootPath, content = 'System prompt') {
 
 /** @param {string} rootPath */
 export async function ensureSkillsRoot(rootPath) {
-  await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+  await mkdir(path.join(rootPath, '.agent-world', 'skills'), { recursive: true });
 }
 
 /**
@@ -46,7 +46,7 @@ export async function ensureSkillsRoot(rootPath) {
  * @param {{ name: string, description: string, body?: string }} skill
  */
 export async function writeSkill(rootPath, relativeDirectory, { name, description, body = '# Skill\n' }) {
-  const directoryPath = path.join(rootPath, '.agents', 'skills', relativeDirectory);
+  const directoryPath = path.join(rootPath, '.agent-world', 'skills', relativeDirectory);
   await mkdir(directoryPath, { recursive: true });
   const fileContent = [
     '---',

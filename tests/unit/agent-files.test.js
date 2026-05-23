@@ -54,9 +54,9 @@ describe('agent-files', () => {
       name: 'alpha-skill',
       description: 'Loaded first.',
     });
-    await mkdir(path.join(rootPath, '.agents', 'skills', 'invalid'), { recursive: true });
+    await mkdir(path.join(rootPath, '.agent-world', 'skills', 'invalid'), { recursive: true });
     await writeFile(
-      path.join(rootPath, '.agents', 'skills', 'invalid', 'SKILL.md'),
+      path.join(rootPath, '.agent-world', 'skills', 'invalid', 'SKILL.md'),
       '# Missing front matter\n',
       'utf8',
     );
@@ -181,7 +181,7 @@ describe('agent-files', () => {
         promises: {
           ...actual.promises,
           stat: vi.fn(async (targetPath) => {
-            if (String(targetPath).endsWith('/.agents/skills')) {
+            if (String(targetPath).endsWith('/.agent-world/skills')) {
               const error = new Error('Permission denied');
               // @ts-expect-error Test-only error shape.
               error.code = 'EACCES';

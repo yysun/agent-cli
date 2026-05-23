@@ -30,8 +30,8 @@ describe('paths', () => {
     expect(paths.REPO_ROOT).toBe(cwdRoot);
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(cwdRoot, 'AGENTS.md'));
     expect(paths.ROOT_RUNTIME_CONFIG_PATH).toBe(path.join(cwdRoot, 'runtime.json'));
-    expect(paths.SKILLS_ROOT).toBe(path.join(cwdRoot, '.agents', 'skills'));
     expect(paths.AGENT_WORLD_ROOT).toBe(path.join(cwdRoot, '.agent-world'));
+    expect(paths.SKILLS_ROOT).toBe(path.join(cwdRoot, '.agent-world', 'skills'));
     expect(paths.WORLD_STATE_PATH).toBe(path.join(cwdRoot, '.agent-world', 'world.json'));
     expect(paths.REMOTE_HOST_LOCK_PATH).toBe(path.join(cwdRoot, '.agent-world', 'remote-host.lock.json'));
     expect(paths.buildAgentRuntimeConfigPath('agent-1')).toBe(
@@ -51,7 +51,7 @@ describe('paths', () => {
     expect(paths.REPO_ROOT).toBe(overrideRoot);
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'AGENTS.md'));
     expect(paths.ROOT_RUNTIME_CONFIG_PATH).toBe(path.join(overrideRoot, 'runtime.json'));
-    expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agents', 'skills'));
+    expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agent-world', 'skills'));
     expect(paths.WORLD_STATE_PATH).toBe(path.join(overrideRoot, '.agent-world', 'world.json'));
     expect(paths.REMOTE_HOST_LOCK_PATH).toBe(path.join(overrideRoot, '.agent-world', 'remote-host.lock.json'));
   });

@@ -119,7 +119,7 @@ The deterministic relay and remote-host e2e coverage confirms that a real `agent
 
 - System prompt: `./AGENTS.md`
 - Repo runtime defaults: `./runtime.json`
-- Skills root: `./.agents/skills/`
+- Skills root: `./.agent-world/skills/`
 - Durable world root: `./.agent-world/`
 
 Durable local state lives under `./.agent-world/`:
@@ -136,11 +136,11 @@ While a CLI process is running in `--remote` mode for a project root, other CLI 
 The CLI always includes a built-in default system prompt.
 If `./AGENTS.md` is present and non-empty, its content is added after the built-in prompt and before tools/skills guidance.
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
-If `./.agents/skills/` is missing, the CLI continues with an empty skill inventory.
+If `./.agent-world/skills/` is missing, the CLI continues with an empty skill inventory.
 
 The CLI uses `--project <path>` as the project root when provided, otherwise `AGENT_CLI_ROOT` when that environment variable is set, otherwise `AGENT_CLI_ROOT` from the current working directory's `.env`, otherwise the current working directory. Prompts, skills, runtime files, `.agent-world/` storage, the agent tool working directory, and the local `.env` lookup all resolve from that project root.
 
-Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agents/skills/`.
+Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agent-world/skills/`.
 
 ### Runtime Configuration
 

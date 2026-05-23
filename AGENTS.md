@@ -2,7 +2,7 @@
 
 Rules for AI agents working in this repo:
 
-- Root: use `AGENT_CLI_ROOT` when set; otherwise use `cwd`. Resolve `AGENTS.md`, `.agents/skills`, `runtime.json`, `.env`, and `.agent-world` from that root.
+- Root: use `AGENT_CLI_ROOT` when set; otherwise use `cwd`. Resolve `AGENTS.md`, `.agent-world/skills`, `runtime.json`, `.env`, and `.agent-world` from that root.
 - Storage: use `.agent-world` only. No `.chats` compatibility paths. `world.json` is the source of truth for `defaultAgentId` and `currentChatId`.
 - Layout: chats in `.agent-world/chats/{chatId}`; agent state in `.agent-world/agents/{agentId}`; remote lock in `.agent-world/remote-host.lock.json`.
 - Runtime precedence: CLI flags > `.agent-world/agents/{agentId}/runtime.json` > repo-root `runtime.json`.
@@ -14,4 +14,3 @@ Rules for AI agents working in this repo:
 - Safety: keep execution local-first. Do not move workspace files, tools, provider keys, or long-term memory off-machine.
 - Validation: prefer targeted checks. Key commands: `npm run build:ts`, `npm run test:syntax`, `npm run test:unit`, `npm run test:e2e:relay`.
 - Editing: prefer root-cause fixes, keep changes minimal, update tests/docs when behavior changes, and do not describe outdated layouts as current.
-

@@ -16,12 +16,13 @@
 import 'dotenv/config';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
   createIoCapture,
   createTestRoot,
+  ensureSkillsRoot,
   readJson,
   removeTestRoot,
   writeSkill,
@@ -240,7 +241,7 @@ describe('agent-cli CLI', () => {
       rootPath,
       'You are a terse test assistant. Reply in a single plain sentence without markdown.',
     );
-    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    await ensureSkillsRoot(rootPath);
     await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
@@ -327,7 +328,7 @@ describe('agent-cli CLI', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Keep responses under 20 words.');
-    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    await ensureSkillsRoot(rootPath);
     await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);
@@ -363,7 +364,7 @@ describe('agent-cli CLI', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Reply in one short sentence.');
-    await mkdir(path.join(rootPath, '.agents', 'skills'), { recursive: true });
+    await ensureSkillsRoot(rootPath);
     await writeLiveRuntimeConfig(rootPath);
 
     const { main } = await loadCli(rootPath);

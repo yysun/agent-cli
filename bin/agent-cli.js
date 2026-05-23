@@ -34,8 +34,8 @@ function configureProjectRoot(projectRoot) {
   REPO_ROOT = resolveProjectRoot(projectRoot);
   SYSTEM_PROMPT_PATH = path.join(REPO_ROOT, "AGENTS.md");
   ROOT_RUNTIME_CONFIG_PATH = path.join(REPO_ROOT, "runtime.json");
-  SKILLS_ROOT = path.join(REPO_ROOT, ".agents", "skills");
   AGENT_WORLD_ROOT = path.join(REPO_ROOT, ".agent-world");
+  SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
   WORLD_STATE_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
   AGENT_WORLD_AGENTS_ROOT = path.join(AGENT_WORLD_ROOT, "agents");
