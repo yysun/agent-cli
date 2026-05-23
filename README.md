@@ -14,7 +14,14 @@ Core objects:
 CLI source now lives under `./cli/src` in TypeScript.
 `./cli/src/cli-shell.ts` owns argument parsing, entrypoint flow, and shell I/O.
 `./cli/src/agent-runtime.ts` owns runtime resolution, turn execution, and stream-trace persistence.
+`./cli/src/agent-world-cli.ts` and `./cli/src/agent-world-runtime.ts` are reserved placeholders for the agent-world CLI/runtime surface.
 `./bin/agent-cli.js` is the bundled executable built from the TypeScript CLI entry.
+
+Naming convention:
+- `agent-cli`
+- `agent-runtime`
+- `agent-world-cli`
+- `agent-world-runtime`
 
 Run the chat CLI with:
 
