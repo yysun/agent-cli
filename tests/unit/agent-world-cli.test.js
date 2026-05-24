@@ -30,7 +30,6 @@ const originalCwd = process.cwd();
 const rootsToClean = [];
 const AGENT_WORLD_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
-  'AGENT_CLI_ROOT',
   'AGENT_CLI_WORLD',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
@@ -184,12 +183,12 @@ describe('agent-world-cli', () => {
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
   });
 
-  it('supports legacy --project and workspace .env credential loading', async () => {
+  it('supports legacy --project while loading .env credentials from cwd', async () => {
     const rootPath = await createTestRoot();
     const cwdRoot = await createTestRoot();
     rootsToClean.push(rootPath, cwdRoot);
     await writeFile(
-      path.join(rootPath, '.env'),
+      path.join(cwdRoot, '.env'),
       'GOOGLE_API_KEY=dotenv-google-key\nAGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787\n',
       'utf8',
     );
@@ -215,10 +214,12 @@ describe('agent-world-cli', () => {
     const workspaceRoot = path.join(cwdRoot, 'workspace-from-dotenv');
     rootsToClean.push(cwdRoot);
     await mkdir(workspaceRoot, { recursive: true });
-    await writeFile(path.join(cwdRoot, '.env'), 'AGENT_CLI_WORKSPACE=workspace-from-dotenv\n', 'utf8');
-    await writeFile(path.join(workspaceRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+    await writeFile(
+      path.join(cwdRoot, '.env'),
+      'AGENT_CLI_WORKSPACE=workspace-from-dotenv\nGOOGLE_API_KEY=dotenv-google-key\n',
+      'utf8',
+    );
     delete process.env.AGENT_CLI_WORKSPACE;
-    delete process.env.AGENT_CLI_ROOT;
     delete process.env.GOOGLE_API_KEY;
     const { runAgentWorldCli } = await loadAgentWorldCli(cwdRoot);
     const capture = createIoCapture();

@@ -173,7 +173,6 @@ async function startInteractiveCli(rootPath) {
       ...process.env,
       ...originalRuntimeEnvironment,
       AGENT_CLI_WORKSPACE: '',
-      AGENT_CLI_ROOT: '',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   }));

@@ -6,14 +6,14 @@
  * - Centralize workspace-local filesystem paths used by the CLI and world store.
  *
  * Key features:
- * - Resolves workspace-local resources from `AGENT_CLI_WORKSPACE` when set, otherwise compatibility env or cwd.
+ * - Resolves workspace-local resources from `AGENT_CLI_WORKSPACE` when set, otherwise cwd.
  * - Keeps path construction in one place for CLI helpers.
  * - Separates workspace-owned paths from selected-world paths under `.agent-world/worlds/{worldId}`.
  *
  * Recent changes:
+ * - 2026-05-24: Removed legacy root-env support and canonicalized cwd fallback into `AGENT_CLI_WORKSPACE`.
  * - 2026-05-23: Renamed the loaded root terminology from project to workspace.
  * - 2026-05-07: Added shared path helpers for the CLI implementation.
- * - 2026-05-07: Added `AGENT_CLI_ROOT` override support for isolated runs.
  * - 2026-05-07: Switched prompt, skills, and chat storage to AGENTS/.agents/.chats.
  * - 2026-05-24: Removed runtime.json path helpers from active configuration.
  * - 2026-05-14: Added `.agent-world` chat and agent persistence paths.
@@ -23,14 +23,12 @@
 import path from 'node:path';
 
 export const WORKSPACE_ROOT_ENV_KEY = 'AGENT_CLI_WORKSPACE';
-export const LEGACY_PROJECT_ROOT_ENV_KEY = 'AGENT_CLI_ROOT';
 export const WORLD_ID_ENV_KEY = 'AGENT_CLI_WORLD';
 
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
   const configuredRoot = [
     workspaceRoot,
     process.env[WORKSPACE_ROOT_ENV_KEY],
-    process.env[LEGACY_PROJECT_ROOT_ENV_KEY],
   ]
     .map((value) => String(value ?? '').trim())
     .find((value) => value.length > 0) ?? '';
@@ -69,8 +67,14 @@ function configureActiveWorldPaths(worldId = 'default'): string {
   return ACTIVE_WORLD_ROOT;
 }
 
-export function configureWorkspaceRoot(workspaceRoot?: string): string {
+export function configureWorkspaceRoot(
+  workspaceRoot?: string,
+  options: { publishEnvironment?: boolean } = {},
+): string {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
+  if (options.publishEnvironment ?? true) {
+    process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
+  }
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, 'AGENTS.md');
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, '.agent-world');
@@ -91,7 +95,7 @@ export function configureProjectRoot(projectRoot?: string): string {
   return configureWorkspaceRoot(projectRoot);
 }
 
-configureWorkspaceRoot();
+configureWorkspaceRoot(undefined, { publishEnvironment: false });
 
 /** @param {string} chatId */
 export function buildWorldChatDirectoryPath(chatId) {

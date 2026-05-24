@@ -46,7 +46,6 @@ const RUNTIME_ENVIRONMENT_KEYS = [
 ];
 const WORKSPACE_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
-  'AGENT_CLI_ROOT',
 ];
 
 /** @type {string[]} */
@@ -245,7 +244,6 @@ function extractAssistantTextFromCliStdout(stdout) {
  */
 async function loadCli(rootPath) {
   process.env.AGENT_CLI_WORKSPACE = rootPath;
-  delete process.env.AGENT_CLI_ROOT;
   process.chdir(rootPath);
   vi.resetModules();
   return /** @type {AgentCliModule} */ (await import('../../bin/agent-cli.js'));

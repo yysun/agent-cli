@@ -15,13 +15,11 @@ import { promises as fs2 } from "node:fs";
 // core/paths.ts
 import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
-var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
 var WORLD_ID_ENV_KEY = "AGENT_CLI_WORLD";
 function resolveWorkspaceRoot(workspaceRoot) {
   const configuredRoot = [
     workspaceRoot,
-    process.env[WORKSPACE_ROOT_ENV_KEY],
-    process.env[LEGACY_PROJECT_ROOT_ENV_KEY]
+    process.env[WORKSPACE_ROOT_ENV_KEY]
   ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
   return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
 }
@@ -51,8 +49,11 @@ function configureActiveWorldPaths(worldId = "default") {
   REMOTE_HOST_LOCK_PATH = path.join(ACTIVE_WORLD_ROOT, "remote-host.lock.json");
   return ACTIVE_WORLD_ROOT;
 }
-function configureWorkspaceRoot(workspaceRoot) {
+function configureWorkspaceRoot(workspaceRoot, options = {}) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
+  if (options.publishEnvironment ?? true) {
+    process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
+  }
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
@@ -65,7 +66,7 @@ function configureWorkspaceRoot(workspaceRoot) {
 function configureActiveWorld(worldId) {
   return configureActiveWorldPaths(worldId);
 }
-configureWorkspaceRoot();
+configureWorkspaceRoot(void 0, { publishEnvironment: false });
 function buildWorldChatDirectoryPath(chatId) {
   return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
@@ -2685,6 +2686,7 @@ function createAgentWorldRuntime(options = {}) {
 }
 
 // core/workspace-environment.ts
+import fs5 from "node:fs";
 import path5 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
@@ -2701,15 +2703,66 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AZURE_OPENAI_API_VERSION",
   "AGENT_CLI_RELAY_SERVER_URL"
 ]);
-var loadedDotEnvRoots = /* @__PURE__ */ new Set();
-function loadAllowedDotEnvEnvironment() {
-  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
+var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional relay settings.
+# Runtime defaults belong in .agent-world/worlds/{worldId}/world.json,
+# .agent-world/worlds/{worldId}/agents/{agentId}/agent.json, or CLI flags.
+
+# Provider credentials
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+XAI_API_KEY=
+
+# OpenAI-compatible
+OPENAI_COMPATIBLE_API_KEY=
+OPENAI_COMPATIBLE_BASE_URL=
+
+# Ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+
+# Azure OpenAI
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_RESOURCE_NAME=
+AZURE_OPENAI_DEPLOYMENT_NAME=
+# AZURE_OPENAI_API_VERSION=
+
+# Remote relay
+AGENT_CLI_RELAY_SERVER_URL=
+
+# Optional workspace selection from the invocation directory
+# AGENT_CLI_WORKSPACE=
+`;
+var loadedDotEnvPaths = /* @__PURE__ */ new Set();
+function resolveCwdDotEnvPath() {
+  return path5.join(process.cwd(), ".env");
+}
+function ensureDotEnvExampleFile(dotEnvPath) {
+  if (fs5.existsSync(dotEnvPath)) {
     return;
   }
-  loadedDotEnvRoots.add(WORKSPACE_ROOT);
+  const examplePath = path5.join(path5.dirname(dotEnvPath), ".env.example");
+  if (fs5.existsSync(examplePath)) {
+    return;
+  }
+  try {
+    fs5.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+      return;
+    }
+    throw error;
+  }
+}
+function loadAllowedDotEnvEnvironment() {
+  const dotEnvPath = resolveCwdDotEnvPath();
+  if (loadedDotEnvPaths.has(dotEnvPath)) {
+    return;
+  }
+  loadedDotEnvPaths.add(dotEnvPath);
+  ensureDotEnvExampleFile(dotEnvPath);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path5.join(WORKSPACE_ROOT, ".env"),
+    path: dotEnvPath,
     quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -2723,17 +2776,16 @@ function loadAllowedDotEnvEnvironment() {
   }
 }
 function readWorkspaceRootDotEnvFallback() {
-  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim() || String(process.env[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
+  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim()) {
     return void 0;
   }
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path5.join(process.cwd(), ".env"),
+    path: resolveCwdDotEnvPath(),
     quiet: true
   }).parsed ?? {};
   const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
-  const legacyProjectRoot = String(parsed[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim();
-  return workspaceRoot || legacyProjectRoot || void 0;
+  return workspaceRoot || void 0;
 }
 function prepareWorkspaceEnvironment(workspaceRoot) {
   const resolvedRoot = configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());

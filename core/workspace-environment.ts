@@ -2,23 +2,25 @@
  * Workspace Environment
  *
  * Purpose:
- * - Resolve the Agent CLI workspace root and load the allowed workspace-local `.env` keys.
+ * - Resolve the Agent CLI workspace root and load the allowed invocation-local `.env` keys.
  *
  * Key features:
- * - Preserves root precedence across explicit flags, `AGENT_CLI_WORKSPACE`, legacy `AGENT_CLI_ROOT`, and cwd.
- * - Supports cwd `.env` fallback for workspace root discovery before loading workspace-local credentials.
+ * - Preserves root precedence across explicit flags, `AGENT_CLI_WORKSPACE`, and cwd.
+ * - Resolves `.env` from the process cwd for root discovery, credentials, and relay configuration.
+ * - Creates a cwd `.env.example` template when no cwd `.env` exists and no template is present.
  * - Limits `.env` imports to provider credentials and relay configuration.
  *
  * Recent changes:
+ * - 2026-05-24: Removed legacy root-env handling.
+ * - 2026-05-24: Resolved credential `.env` from cwd instead of the selected workspace root.
  * - 2026-05-23: Extracted shared workspace preparation for `agent-cli` and `agent-world-cli`.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { config as loadDotEnvConfig } from 'dotenv';
 
 import {
   configureWorkspaceRoot,
-  LEGACY_PROJECT_ROOT_ENV_KEY,
-  WORKSPACE_ROOT,
   WORKSPACE_ROOT_ENV_KEY,
 } from './paths.js';
 
@@ -37,18 +39,76 @@ export const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'AGENT_CLI_RELAY_SERVER_URL',
 ]);
 
-const loadedDotEnvRoots = new Set<string>();
+const DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional relay settings.
+# Runtime defaults belong in .agent-world/worlds/{worldId}/world.json,
+# .agent-world/worlds/{worldId}/agents/{agentId}/agent.json, or CLI flags.
 
-export function loadAllowedDotEnvEnvironment(): void {
-  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
+# Provider credentials
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+XAI_API_KEY=
+
+# OpenAI-compatible
+OPENAI_COMPATIBLE_API_KEY=
+OPENAI_COMPATIBLE_BASE_URL=
+
+# Ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+
+# Azure OpenAI
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_RESOURCE_NAME=
+AZURE_OPENAI_DEPLOYMENT_NAME=
+# AZURE_OPENAI_API_VERSION=
+
+# Remote relay
+AGENT_CLI_RELAY_SERVER_URL=
+
+# Optional workspace selection from the invocation directory
+# AGENT_CLI_WORKSPACE=
+`;
+
+const loadedDotEnvPaths = new Set<string>();
+
+function resolveCwdDotEnvPath(): string {
+  return path.join(process.cwd(), '.env');
+}
+
+function ensureDotEnvExampleFile(dotEnvPath: string): void {
+  if (fs.existsSync(dotEnvPath)) {
     return;
   }
 
-  loadedDotEnvRoots.add(WORKSPACE_ROOT);
+  const examplePath = path.join(path.dirname(dotEnvPath), '.env.example');
+  if (fs.existsSync(examplePath)) {
+    return;
+  }
+
+  try {
+    fs.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+      return;
+    }
+
+    throw error;
+  }
+}
+
+export function loadAllowedDotEnvEnvironment(): void {
+  const dotEnvPath = resolveCwdDotEnvPath();
+
+  if (loadedDotEnvPaths.has(dotEnvPath)) {
+    return;
+  }
+
+  loadedDotEnvPaths.add(dotEnvPath);
+  ensureDotEnvExampleFile(dotEnvPath);
 
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path.join(WORKSPACE_ROOT, '.env'),
+    path: dotEnvPath,
     quiet: true,
   }).parsed ?? {};
 
@@ -66,22 +126,18 @@ export function loadAllowedDotEnvEnvironment(): void {
 }
 
 export function readWorkspaceRootDotEnvFallback(): string | undefined {
-  if (
-    String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? '').trim()
-    || String(process.env[LEGACY_PROJECT_ROOT_ENV_KEY] ?? '').trim()
-  ) {
+  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? '').trim()) {
     return undefined;
   }
 
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path.join(process.cwd(), '.env'),
+    path: resolveCwdDotEnvPath(),
     quiet: true,
   }).parsed ?? {};
   const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? '').trim();
-  const legacyProjectRoot = String(parsed[LEGACY_PROJECT_ROOT_ENV_KEY] ?? '').trim();
 
-  return workspaceRoot || legacyProjectRoot || undefined;
+  return workspaceRoot || undefined;
 }
 
 export function prepareWorkspaceEnvironment(workspaceRoot?: string): string {

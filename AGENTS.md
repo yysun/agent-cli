@@ -2,7 +2,7 @@
 
 Rules for AI agents working in this repo:
 
-- Workspace root: use `AGENT_CLI_WORKSPACE` when set, fall back to legacy `AGENT_CLI_ROOT`, otherwise use `cwd`. Resolve `AGENTS.md`, workspace `.agent-world/skills`, `.env`, and `.agent-world` from that root.
+- Workspace root: use `AGENT_CLI_WORKSPACE` when set, otherwise use `cwd` and publish that resolved path back to `AGENT_CLI_WORKSPACE`. Resolve `AGENTS.md`, workspace `.agent-world/skills`, and `.agent-world` from that root. Resolve `.env` from invocation `cwd`.
 - Workspace API: `.agent-world/registry.json` owns `currentWorldId` and the list of worlds. `--world <id>` or `AGENT_CLI_WORLD` selects a world.
 - Storage: use `.agent-world` only. No `.chats` compatibility paths and no singleton `.agent-world/world.json` layout.
 - Layout: world state in `.agent-world/worlds/{worldId}`; chats in `chats/{chatId}`; agent state in `agents/{agentId}`; world skills in `skills`; remote lock in `remote-host.lock.json`.

@@ -38,7 +38,6 @@ const rootsToClean = [];
 const originalCwd = process.cwd();
 const CLI_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
-  'AGENT_CLI_ROOT',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
   'OLLAMA_BASE_URL',
@@ -785,45 +784,31 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('loads .env from --workspace and uses that root in startup diagnostics', async () => {
+  it('loads .env from cwd and uses --workspace for startup diagnostics', async () => {
     const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+    const cwdRoot = await createTestRoot();
+    rootsToClean.push(rootPath, cwdRoot);
+    await writeFile(path.join(cwdRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
 
     delete process.env.GOOGLE_API_KEY;
 
-    const { main, startupText } = await loadCliModule();
+    const { main, startupText } = await loadCliModule(cwdRoot);
     await main(['--workspace', rootPath, '--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
   });
 
-  it('honors AGENT_CLI_WORKSPACE when --workspace is absent', async () => {
+  it('loads .env from cwd when AGENT_CLI_WORKSPACE selects the workspace root', async () => {
     const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+    const cwdRoot = await createTestRoot();
+    rootsToClean.push(rootPath, cwdRoot);
+    await writeFile(path.join(cwdRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
 
     delete process.env.GOOGLE_API_KEY;
     process.env.AGENT_CLI_WORKSPACE = rootPath;
 
-    const { main, startupText } = await loadCliModule();
-    await main(['--help'], createIoCapture());
-
-    expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
-    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}\nAgent CLI agent id: default`);
-  });
-
-  it('still honors AGENT_CLI_ROOT when --workspace and AGENT_CLI_WORKSPACE are absent', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeFile(path.join(rootPath, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
-
-    delete process.env.GOOGLE_API_KEY;
-    delete process.env.AGENT_CLI_WORKSPACE;
-    process.env.AGENT_CLI_ROOT = rootPath;
-
-    const { main, startupText } = await loadCliModule();
+    const { main, startupText } = await loadCliModule(cwdRoot);
     await main(['--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
@@ -835,20 +820,38 @@ describe('agent-cli entrypoint', () => {
     const workspaceRoot = path.join(cwdRoot, 'workspace-from-dotenv');
     rootsToClean.push(cwdRoot);
     await mkdir(workspaceRoot, { recursive: true });
-    await writeFile(path.join(cwdRoot, '.env'), 'AGENT_CLI_WORKSPACE=workspace-from-dotenv\n', 'utf8');
-    await writeFile(path.join(workspaceRoot, '.env'), 'GOOGLE_API_KEY=dotenv-google-key\n', 'utf8');
+    await writeFile(
+      path.join(cwdRoot, '.env'),
+      'AGENT_CLI_WORKSPACE=workspace-from-dotenv\nGOOGLE_API_KEY=dotenv-google-key\n',
+      'utf8',
+    );
 
     delete process.env.AGENT_CLI_WORKSPACE;
-    delete process.env.AGENT_CLI_ROOT;
     delete process.env.GOOGLE_API_KEY;
 
     const { main, startupText } = await loadCliModule(cwdRoot);
     await main(['--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
+    expect(process.env.AGENT_CLI_WORKSPACE).toBe(path.resolve('workspace-from-dotenv'));
     expect(startupText()).toBe(
       `Agent CLI starting in ${path.resolve('workspace-from-dotenv')}\nAgent CLI agent id: default`,
     );
+  });
+
+  it('creates a cwd .env.example when cwd .env is missing', async () => {
+    const cwdRoot = await createTestRoot();
+    rootsToClean.push(cwdRoot);
+    delete process.env.AGENT_CLI_WORKSPACE;
+
+    const { main } = await loadCliModule(cwdRoot);
+    await main(['--help'], createIoCapture());
+
+    expect(process.env.AGENT_CLI_WORKSPACE).toBe(process.cwd());
+    const example = await readFile(path.join(cwdRoot, '.env.example'), 'utf8');
+    expect(example).toContain('OPENAI_API_KEY=');
+    expect(example).toContain('AGENT_CLI_RELAY_SERVER_URL=');
+    expect(example).toContain('# AGENT_CLI_WORKSPACE=');
   });
 
   it('stores workspace state under --workspace instead of the process cwd', async () => {

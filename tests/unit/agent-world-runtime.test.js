@@ -56,6 +56,7 @@ async function waitFor(predicate, timeoutMs = 1000) {
  * @param {(params: any) => Promise<any>} runChatTurn
  */
 async function loadRuntime(rootPath, runChatTurn) {
+  delete process.env.AGENT_CLI_WORKSPACE;
   process.chdir(rootPath);
   vi.resetModules();
   vi.doMock('../../core/agent-runtime.js', async () => {
@@ -69,6 +70,7 @@ async function loadRuntime(rootPath, runChatTurn) {
 }
 
 afterEach(async () => {
+  delete process.env.AGENT_CLI_WORKSPACE;
   process.chdir(originalCwd);
   vi.doUnmock('../../core/agent-runtime.js');
 

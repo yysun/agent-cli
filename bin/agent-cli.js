@@ -17,13 +17,11 @@ import { promises as fs2 } from "node:fs";
 // core/paths.ts
 import path from "node:path";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
-var LEGACY_PROJECT_ROOT_ENV_KEY = "AGENT_CLI_ROOT";
 var WORLD_ID_ENV_KEY = "AGENT_CLI_WORLD";
 function resolveWorkspaceRoot(workspaceRoot) {
   const configuredRoot = [
     workspaceRoot,
-    process.env[WORKSPACE_ROOT_ENV_KEY],
-    process.env[LEGACY_PROJECT_ROOT_ENV_KEY]
+    process.env[WORKSPACE_ROOT_ENV_KEY]
   ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
   return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
 }
@@ -53,8 +51,11 @@ function configureActiveWorldPaths(worldId = "default") {
   REMOTE_HOST_LOCK_PATH = path.join(ACTIVE_WORLD_ROOT, "remote-host.lock.json");
   return ACTIVE_WORLD_ROOT;
 }
-function configureWorkspaceRoot(workspaceRoot) {
+function configureWorkspaceRoot(workspaceRoot, options = {}) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
+  if (options.publishEnvironment ?? true) {
+    process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
+  }
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
@@ -67,7 +68,7 @@ function configureWorkspaceRoot(workspaceRoot) {
 function configureActiveWorld(worldId) {
   return configureActiveWorldPaths(worldId);
 }
-configureWorkspaceRoot();
+configureWorkspaceRoot(void 0, { publishEnvironment: false });
 function buildWorldChatDirectoryPath(chatId) {
   return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
 }
@@ -625,6 +626,7 @@ function buildSkillInventoryMessage(skills) {
 }
 
 // core/workspace-environment.ts
+import fs4 from "node:fs";
 import path4 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
@@ -641,15 +643,66 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AZURE_OPENAI_API_VERSION",
   "AGENT_CLI_RELAY_SERVER_URL"
 ]);
-var loadedDotEnvRoots = /* @__PURE__ */ new Set();
-function loadAllowedDotEnvEnvironment() {
-  if (loadedDotEnvRoots.has(WORKSPACE_ROOT)) {
+var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional relay settings.
+# Runtime defaults belong in .agent-world/worlds/{worldId}/world.json,
+# .agent-world/worlds/{worldId}/agents/{agentId}/agent.json, or CLI flags.
+
+# Provider credentials
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+XAI_API_KEY=
+
+# OpenAI-compatible
+OPENAI_COMPATIBLE_API_KEY=
+OPENAI_COMPATIBLE_BASE_URL=
+
+# Ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+
+# Azure OpenAI
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_RESOURCE_NAME=
+AZURE_OPENAI_DEPLOYMENT_NAME=
+# AZURE_OPENAI_API_VERSION=
+
+# Remote relay
+AGENT_CLI_RELAY_SERVER_URL=
+
+# Optional workspace selection from the invocation directory
+# AGENT_CLI_WORKSPACE=
+`;
+var loadedDotEnvPaths = /* @__PURE__ */ new Set();
+function resolveCwdDotEnvPath() {
+  return path4.join(process.cwd(), ".env");
+}
+function ensureDotEnvExampleFile(dotEnvPath) {
+  if (fs4.existsSync(dotEnvPath)) {
     return;
   }
-  loadedDotEnvRoots.add(WORKSPACE_ROOT);
+  const examplePath = path4.join(path4.dirname(dotEnvPath), ".env.example");
+  if (fs4.existsSync(examplePath)) {
+    return;
+  }
+  try {
+    fs4.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+      return;
+    }
+    throw error;
+  }
+}
+function loadAllowedDotEnvEnvironment() {
+  const dotEnvPath = resolveCwdDotEnvPath();
+  if (loadedDotEnvPaths.has(dotEnvPath)) {
+    return;
+  }
+  loadedDotEnvPaths.add(dotEnvPath);
+  ensureDotEnvExampleFile(dotEnvPath);
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(WORKSPACE_ROOT, ".env"),
+    path: dotEnvPath,
     quiet: true
   }).parsed ?? {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -663,17 +716,16 @@ function loadAllowedDotEnvEnvironment() {
   }
 }
 function readWorkspaceRootDotEnvFallback() {
-  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim() || String(process.env[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim()) {
+  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim()) {
     return void 0;
   }
   const parsed = loadDotEnvConfig({
     processEnv: {},
-    path: path4.join(process.cwd(), ".env"),
+    path: resolveCwdDotEnvPath(),
     quiet: true
   }).parsed ?? {};
   const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
-  const legacyProjectRoot = String(parsed[LEGACY_PROJECT_ROOT_ENV_KEY] ?? "").trim();
-  return workspaceRoot || legacyProjectRoot || void 0;
+  return workspaceRoot || void 0;
 }
 function prepareWorkspaceEnvironment(workspaceRoot) {
   const resolvedRoot = configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
@@ -683,7 +735,7 @@ function prepareWorkspaceEnvironment(workspaceRoot) {
 
 // core/world-store.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-import { promises as fs4 } from "node:fs";
+import { promises as fs5 } from "node:fs";
 import path5 from "node:path";
 var DEFAULT_AGENT_ID = "default";
 function defaultWorldName2() {
@@ -756,18 +808,18 @@ async function writeJsonAtomic2(filePath, value) {
   const directoryPath = path5.dirname(filePath);
   const fileName = path5.basename(filePath);
   const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
-  await fs4.mkdir(directoryPath, { recursive: true });
-  await fs4.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+  await fs5.mkdir(directoryPath, { recursive: true });
+  await fs5.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
-  await fs4.rename(temporaryPath, filePath);
+  await fs5.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
   const directoryPath = path5.dirname(filePath);
   const fileName = path5.basename(filePath);
   const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
-  await fs4.mkdir(directoryPath, { recursive: true });
-  await fs4.writeFile(temporaryPath, text, "utf8");
-  await fs4.rename(temporaryPath, filePath);
+  await fs5.mkdir(directoryPath, { recursive: true });
+  await fs5.writeFile(temporaryPath, text, "utf8");
+  await fs5.rename(temporaryPath, filePath);
 }
 async function writeJsonlAtomic(filePath, values) {
   const serialized = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}
@@ -778,15 +830,15 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs4.mkdir(path5.dirname(filePath), { recursive: true });
+  await fs5.mkdir(path5.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
-  await fs4.appendFile(filePath, serialized, "utf8");
+  await fs5.appendFile(filePath, serialized, "utf8");
 }
 async function readJson(filePath, missingMessage, invalidMessage) {
   let rawContent;
   try {
-    rawContent = await fs4.readFile(filePath, "utf8");
+    rawContent = await fs5.readFile(filePath, "utf8");
   } catch {
     throw new Error(missingMessage);
   }
@@ -798,7 +850,7 @@ async function readJson(filePath, missingMessage, invalidMessage) {
 }
 async function readJsonIfPresent2(filePath) {
   try {
-    return JSON.parse(await fs4.readFile(filePath, "utf8"));
+    return JSON.parse(await fs5.readFile(filePath, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -808,7 +860,7 @@ async function readJsonIfPresent2(filePath) {
 }
 async function pathExists(filePath) {
   try {
-    await fs4.access(filePath);
+    await fs5.access(filePath);
     return true;
   } catch {
     return false;
@@ -823,7 +875,7 @@ async function ensureTextFile(filePath, defaultText = "") {
 async function readJsonl(filePath) {
   let rawContent;
   try {
-    rawContent = await fs4.readFile(filePath, "utf8");
+    rawContent = await fs5.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(`Missing chat session file: ${filePath}`);
@@ -838,15 +890,15 @@ async function readJsonl(filePath) {
   }
 }
 async function ensureRemoteHostLockDirectory() {
-  await fs4.mkdir(path5.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
+  await fs5.mkdir(path5.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
 }
 async function ensureAgentWorldDirectories() {
   await ensureWorkspaceWorld();
   await Promise.all([
-    fs4.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
-    fs4.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs4.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
-    fs4.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
+    fs5.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs5.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs5.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
+    fs5.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
   ]);
 }
 function isProcessRunning(pid) {
@@ -885,7 +937,7 @@ function buildRemoteHostConflictError(remoteLock) {
 }
 async function readRemoteHostLock() {
   try {
-    return JSON.parse(await fs4.readFile(REMOTE_HOST_LOCK_PATH, "utf8"));
+    return JSON.parse(await fs5.readFile(REMOTE_HOST_LOCK_PATH, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -1061,7 +1113,7 @@ async function assertNoActiveRemoteHost() {
   if (isActiveRemoteHostLock(remoteLock)) {
     throw buildRemoteHostConflictError(remoteLock);
   }
-  await fs4.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+  await fs5.rm(REMOTE_HOST_LOCK_PATH, { force: true });
   return null;
 }
 async function acquireRemoteHostLock({ chat }) {
@@ -1076,7 +1128,7 @@ async function acquireRemoteHostLock({ chat }) {
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      await fs4.writeFile(
+      await fs5.writeFile(
         REMOTE_HOST_LOCK_PATH,
         `${JSON.stringify(remoteLock, null, 2)}
 `,
@@ -1091,7 +1143,7 @@ async function acquireRemoteHostLock({ chat }) {
       if (isActiveRemoteHostLock(existingRemoteLock)) {
         throw buildRemoteHostConflictError(existingRemoteLock);
       }
-      await fs4.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+      await fs5.rm(REMOTE_HOST_LOCK_PATH, { force: true });
     }
   }
   throw new Error("Failed to acquire the remote host lock for this workspace root.");
@@ -1102,7 +1154,7 @@ async function releaseRemoteHostLock() {
   if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
     return false;
   }
-  await fs4.rm(REMOTE_HOST_LOCK_PATH, { force: true });
+  await fs5.rm(REMOTE_HOST_LOCK_PATH, { force: true });
   return true;
 }
 async function updateRemoteHostLock({ chatId }) {
@@ -1129,7 +1181,7 @@ async function loadChatById(chatId) {
 async function listPersistedChats() {
   const world = await ensureWorldBootstrap();
   const currentChatId = String(world.currentChatId ?? "").trim();
-  const entries = await fs4.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
+  const entries = await fs5.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
   const chats = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -3508,7 +3560,6 @@ function createTurnExecutor(options) {
 // cli/src/agent-cli.ts
 var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
 var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
-var PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
 var DEFAULT_AGENT_ID2 = "default";
 function usageText() {
   return [
@@ -4104,7 +4155,6 @@ if (isCliEntrypoint()) {
   await runCli();
 }
 export {
-  PROJECT_ROOT_ENV_KEY,
   REMOTE_RELAY_SERVER_ENV_KEY,
   WORKSPACE_ENV_KEY,
   isCliEntrypoint,

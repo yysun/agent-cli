@@ -29,7 +29,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { normalizeAgentConfig } from '../../core/agent-config.js';
 import { loadSkillInventory, loadWorkspaceSystemPrompt } from '../../core/agent-files.js';
 import {
-  LEGACY_PROJECT_ROOT_ENV_KEY,
   WORKSPACE_ROOT,
   WORKSPACE_ROOT_ENV_KEY,
 } from '../../core/paths.js';
@@ -60,7 +59,6 @@ import {
 
 export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
 export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
-export const PROJECT_ROOT_ENV_KEY = LEGACY_PROJECT_ROOT_ENV_KEY;
 const DEFAULT_AGENT_ID = 'default';
 
 export interface ParsedArguments {
