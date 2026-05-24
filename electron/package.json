@@ -1,0 +1,6 @@
+{
+  "name": "agent-cli-electron",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js"
+}

@@ -1,0 +1,90 @@
+<!--
+Agent CLI Electron Renderer
+
+Purpose:
+- Provide the Electron-owned desktop shell surface.
+
+Key features:
+- Loads without the shared web app or a dev server.
+- Uses the preload metadata bridge to show runtime status.
+- Keeps the first screen focused on desktop shell state and next actions.
+
+Recent changes:
+- 2026-05-24: Added the initial Electron-owned renderer document.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent CLI</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar" aria-label="Desktop shell navigation">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <div>
+            <h1>Agent CLI</h1>
+            <p>Desktop Shell</p>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item is-active" type="button">Overview</button>
+          <button class="nav-item" type="button" disabled>Workspace</button>
+          <button class="nav-item" type="button" disabled>Relay</button>
+          <button class="nav-item" type="button" disabled>Settings</button>
+        </nav>
+      </aside>
+
+      <section class="workspace" aria-labelledby="workspace-title">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local desktop runtime</p>
+            <h2 id="workspace-title">Agent CLI shell is installed</h2>
+          </div>
+          <div class="status-pill" id="runtime-status">Loading</div>
+        </header>
+
+        <section class="panel-grid" aria-label="Desktop shell details">
+          <article class="panel primary-panel">
+            <h3>Renderer</h3>
+            <p>This window is running from the Electron renderer under <code>electron/renderer</code>.</p>
+            <dl class="metadata-list">
+              <div>
+                <dt>App</dt>
+                <dd id="app-name">--</dd>
+              </div>
+              <div>
+                <dt>Version</dt>
+                <dd id="app-version">--</dd>
+              </div>
+              <div>
+                <dt>Platform</dt>
+                <dd id="app-platform">--</dd>
+              </div>
+              <div>
+                <dt>Mode</dt>
+                <dd id="renderer-mode">--</dd>
+              </div>
+            </dl>
+          </article>
+
+          <article class="panel">
+            <h3>Next Surface</h3>
+            <p>The shell is ready for desktop-specific workspace and runtime IPC without coupling to the browser relay UI.</p>
+          </article>
+
+          <article class="panel">
+            <h3>Boundary</h3>
+            <p>Node integration is off. Renderer access goes through the preload bridge only.</p>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

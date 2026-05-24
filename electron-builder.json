@@ -1,0 +1,19 @@
+{
+  "appId": "com.agentcli.desktop",
+  "productName": "Agent CLI",
+  "directories": {
+    "output": "release",
+    "buildResources": "electron/assets"
+  },
+  "files": [
+    "electron/dist/**/*",
+    "electron/renderer/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "electron/dist/main.js"
+  },
+  "mac": {
+    "category": "public.app-category.developer-tools"
+  }
+}
