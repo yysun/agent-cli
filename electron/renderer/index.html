@@ -1,15 +1,16 @@
 <!--
-Agent CLI Electron Renderer
+Agent World Electron Renderer
 
 Purpose:
-- Provide the Electron-owned desktop shell surface.
+- Provide the Electron-owned desktop workspace surface.
 
 Key features:
-- Loads without the shared web app or a dev server.
-- Uses the preload metadata bridge to show runtime status.
-- Keeps the first screen focused on desktop shell state and next actions.
+- Mirrors the legacy desktop shell layout with mock world, chat, agent, status, and panel data.
+- Uses local design-system tokens and static renderer assets without the shared web app.
+- Keeps the renderer read-only until IPC-backed behavior is added later.
 
 Recent changes:
+- 2026-05-24: Ported the legacy Agent World desktop layout into the standalone renderer.
 - 2026-05-24: Added the initial Electron-owned renderer document.
 -->
 <!doctype html>
@@ -18,70 +19,247 @@ Recent changes:
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent World</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <aside class="sidebar" aria-label="Desktop shell navigation">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">A</div>
-          <div>
-            <h1>Agent World</h1>
-            <p>Desktop Shell</p>
-          </div>
+    <main class="aw-app-shell">
+      <aside class="aw-sidebar" aria-label="World and session navigation">
+        <div class="aw-window-strip">
+          <button class="aw-icon-button" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
+            <span aria-hidden="true">‹</span>
+          </button>
         </div>
 
-        <nav class="nav-list">
-          <button class="nav-item is-active" type="button">Overview</button>
-          <button class="nav-item" type="button" disabled>Workspace</button>
-          <button class="nav-item" type="button" disabled>Relay</button>
-          <button class="nav-item" type="button" disabled>Settings</button>
-        </nav>
-      </aside>
-
-      <section class="workspace" aria-labelledby="workspace-title">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">Local desktop runtime</p>
-            <h2 id="workspace-title">Agent World shell is installed</h2>
+        <section class="aw-sidebar-section" aria-labelledby="worlds-title">
+          <div class="aw-section-header">
+            <h1 id="worlds-title">Worlds</h1>
+            <div class="aw-section-actions" aria-label="World actions">
+              <button class="aw-icon-button" type="button" aria-label="Create world" title="Create world">+</button>
+              <button class="aw-icon-button" type="button" aria-label="Import world" title="Import world">↧</button>
+            </div>
           </div>
-          <div class="status-pill" id="runtime-status">Loading</div>
-        </header>
 
-        <section class="panel-grid" aria-label="Desktop shell details">
-          <article class="panel primary-panel">
-            <h3>Renderer</h3>
-            <p>This window is running from the Electron renderer under <code>electron/renderer</code>.</p>
-            <dl class="metadata-list">
+          <button class="aw-select-button" type="button" aria-label="Selected world">
+            <span>Research Lab</span>
+            <span aria-hidden="true">⌄</span>
+          </button>
+
+          <article class="aw-world-card">
+            <div class="aw-world-card-header">
               <div>
-                <dt>App</dt>
-                <dd id="app-name">--</dd>
+                <h2>Research Lab</h2>
+                <p>4 agents · 8 sessions · local workspace</p>
+              </div>
+              <span class="aw-state-pill aw-state-running">Running</span>
+            </div>
+            <dl class="aw-world-stats">
+              <div>
+                <dt>Messages</dt>
+                <dd>128</dd>
               </div>
               <div>
-                <dt>Version</dt>
-                <dd id="app-version">--</dd>
+                <dt>Queue</dt>
+                <dd>3</dd>
               </div>
               <div>
-                <dt>Platform</dt>
-                <dd id="app-platform">--</dd>
-              </div>
-              <div>
-                <dt>Mode</dt>
-                <dd id="renderer-mode">--</dd>
+                <dt>Skills</dt>
+                <dd>12</dd>
               </div>
             </dl>
           </article>
-
-          <article class="panel">
-            <h3>Next Surface</h3>
-            <p>The shell is ready for desktop-specific workspace and runtime IPC without coupling to the browser relay UI.</p>
-          </article>
-
-          <article class="panel">
-            <h3>Boundary</h3>
-            <p>Node integration is off. Renderer access goes through the preload bridge only.</p>
-          </article>
         </section>
+
+        <section class="aw-sidebar-section aw-sessions-section" aria-labelledby="sessions-title">
+          <div class="aw-section-header">
+            <h2 id="sessions-title">Sessions</h2>
+            <button class="aw-icon-button" type="button" aria-label="New session" title="New session">+</button>
+          </div>
+
+          <label class="aw-search">
+            <span class="aw-sr-only">Search sessions</span>
+            <span aria-hidden="true">⌕</span>
+            <input value="roadmap" aria-label="Search sessions" readonly />
+          </label>
+
+          <div class="aw-session-list" role="list">
+            <button class="aw-session-item is-active" type="button" role="listitem">
+              <span class="aw-session-title">Roadmap review</span>
+              <span class="aw-session-meta">24 messages · active</span>
+            </button>
+            <button class="aw-session-item" type="button" role="listitem">
+              <span class="aw-session-title">Tooling audit</span>
+              <span class="aw-session-meta">18 messages · 9:42 AM</span>
+            </button>
+            <button class="aw-session-item has-prompt" type="button" role="listitem">
+              <span class="aw-session-title">Release checklist</span>
+              <span class="aw-session-meta">HITL pending · yesterday</span>
+            </button>
+            <button class="aw-session-item" type="button" role="listitem">
+              <span class="aw-session-title">Design sync</span>
+              <span class="aw-session-meta">11 messages · Monday</span>
+            </button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="aw-workspace" aria-labelledby="chat-title">
+        <header class="aw-header">
+          <div class="aw-header-context">
+            <h2 id="chat-title">Research Lab</h2>
+            <button class="aw-session-copy" type="button" aria-label="Copy session id">Roadmap review</button>
+          </div>
+
+          <div class="aw-agent-strip" aria-label="World agents">
+            <button class="aw-agent-badge aw-main-agent" type="button" title="Planner · Main agent">
+              PL
+              <span>MAIN</span>
+            </button>
+            <button class="aw-agent-badge aw-agent-active" type="button" title="Researcher · Responding">RS</button>
+            <button class="aw-agent-badge" type="button" title="Builder">BD</button>
+            <button class="aw-agent-badge" type="button" title="Reviewer">RV</button>
+            <button class="aw-agent-add" type="button" aria-label="Add agent" title="Add agent">+</button>
+          </div>
+
+          <div class="aw-header-actions" aria-label="Workspace view controls">
+            <button class="aw-view-button is-active" type="button" aria-label="Chat view" title="Chat view">☰</button>
+            <button class="aw-view-button" type="button" aria-label="Board view" title="Board view">▦</button>
+            <button class="aw-view-button" type="button" aria-label="Grid view" title="Grid view">▥</button>
+            <button class="aw-view-button" type="button" aria-label="Logs" title="Logs">≡</button>
+            <button class="aw-view-button is-panel-active" type="button" aria-label="Settings" title="Settings">⚙</button>
+          </div>
+        </header>
+
+        <div class="aw-main-content">
+          <section class="aw-chat-column" aria-label="Chat transcript">
+            <div class="aw-message-list">
+              <article class="aw-message aw-message-user">
+                <div class="aw-message-avatar">Y</div>
+                <div class="aw-message-card">
+                  <div class="aw-message-meta">
+                    <span>You</span>
+                    <time datetime="2026-05-24T08:12:00">8:12 AM</time>
+                  </div>
+                  <p>Review the release plan and flag risks before we publish the desktop build.</p>
+                </div>
+              </article>
+
+              <article class="aw-message aw-message-agent">
+                <div class="aw-message-avatar">PL</div>
+                <div class="aw-message-card">
+                  <div class="aw-message-meta">
+                    <span>Planner</span>
+                    <time datetime="2026-05-24T08:13:00">8:13 AM</time>
+                  </div>
+                  <p>I’ll split the review across packaging, verification, and operator handoff so the release call has concrete owners.</p>
+                </div>
+              </article>
+
+              <article class="aw-message aw-tool-card agent-tool-active-card">
+                <div class="aw-tool-dot"></div>
+                <div>
+                  <div class="aw-tool-title">tool · read-release-plan</div>
+                  <p>Loaded release checklist, packaging notes, and the latest verification summary.</p>
+                </div>
+              </article>
+
+              <article class="aw-message aw-message-agent agent-streaming-card">
+                <div class="aw-message-avatar">RS</div>
+                <div class="aw-message-card">
+                  <div class="aw-message-meta">
+                    <span>Researcher</span>
+                    <time datetime="2026-05-24T08:14:00">8:14 AM</time>
+                  </div>
+                  <p>The main risk is notarization timing. Build verification is clean, but signing credentials and app icon polish should be closed before a public package.</p>
+                  <div class="agent-streaming-dots">
+                    <span class="agent-streaming-dots-label">Researcher</span>
+                    <span class="agent-streaming-dots-text" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="aw-queue-panel">
+              <div>
+                <strong>Queue</strong>
+                <span>3 pending turns</span>
+              </div>
+              <button type="button">Resume</button>
+            </div>
+
+            <form class="aw-composer" aria-label="Message composer">
+              <textarea rows="2" aria-label="Message input" readonly>Ask @Researcher to summarize the remaining release risks.</textarea>
+              <div class="aw-composer-toolbar">
+                <div class="aw-composer-actions">
+                  <button type="button" aria-label="Open project folder" title="Open project folder">▣</button>
+                  <select aria-label="Tool permission">
+                    <option>Auto</option>
+                    <option>Ask</option>
+                    <option>Read</option>
+                  </select>
+                  <select aria-label="Reasoning effort">
+                    <option>Not set</option>
+                    <option>Low</option>
+                    <option>High</option>
+                  </select>
+                </div>
+                <button class="aw-send-button" type="button" aria-label="Send message" title="Send message">↑</button>
+              </div>
+            </form>
+
+            <div class="aw-working-status" role="status">
+              <span class="aw-pulse" aria-hidden="true"></span>
+              <span>Researcher is working</span>
+            </div>
+          </section>
+
+          <aside class="aw-right-panel" aria-labelledby="panel-title">
+            <div class="aw-panel-header">
+              <h2 id="panel-title">System Settings</h2>
+              <button class="aw-icon-button" type="button" aria-label="Close panel" title="Close panel">×</button>
+            </div>
+
+            <section class="aw-panel-section">
+              <h3>Runtime</h3>
+              <label class="aw-field-row">
+                <span>Provider</span>
+                <select>
+                  <option>OpenAI</option>
+                  <option>Anthropic</option>
+                  <option>Google</option>
+                </select>
+              </label>
+              <label class="aw-field-row">
+                <span>Model</span>
+                <input value="gpt-5.1-codex" readonly />
+              </label>
+            </section>
+
+            <section class="aw-panel-section">
+              <h3>Skills</h3>
+              <label class="aw-switch-row">
+                <span>Global skills</span>
+                <input type="checkbox" checked readonly />
+              </label>
+              <label class="aw-switch-row">
+                <span>Project skills</span>
+                <input type="checkbox" checked readonly />
+              </label>
+            </section>
+
+            <section class="aw-panel-section aw-log-panel">
+              <h3>Logs</h3>
+              <div class="aw-log-entry">
+                <span>info</span>
+                <p>World subscription rebound to Roadmap review.</p>
+              </div>
+              <div class="aw-log-entry">
+                <span>warn</span>
+                <p>Three queued turns are paused for review.</p>
+              </div>
+            </section>
+          </aside>
+        </div>
       </section>
     </main>
 

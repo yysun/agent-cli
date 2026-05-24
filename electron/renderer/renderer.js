@@ -1,5 +1,5 @@
 /*
-Agent CLI Electron Renderer Script
+Agent World Electron Renderer Script
 
 Purpose:
 - Hydrate the Electron-owned renderer with preload bridge metadata.
@@ -7,8 +7,10 @@ Purpose:
 Key features:
 - Reads only from window.agentCliDesktop.
 - Keeps missing-bridge failures visible in the shell instead of throwing.
+- Updates mock runtime metadata without wiring application IPC.
 
 Recent changes:
+- 2026-05-24: Preserved metadata hydration for the ported desktop layout.
 - 2026-05-24: Added initial renderer metadata hydration.
 */
 (async () => {

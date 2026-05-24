@@ -1,5 +1,5 @@
 /**
- * Agent CLI Electron Preload Bridge
+ * Agent World Electron Preload Bridge
  *
  * Purpose:
  * - Expose a tiny, explicit desktop API to the isolated renderer.

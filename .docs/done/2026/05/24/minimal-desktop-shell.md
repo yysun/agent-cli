@@ -4,6 +4,8 @@
 
 - Added a minimal Electron app under `electron/` with isolated main/preload entry points and a separate renderer.
 - The shell loads `electron/renderer/index.html` directly instead of reusing the existing `web` app.
+- Ported the legacy Electron renderer's workspace composition into static mock data: world/session sidebar, central transcript, composer/status stack, and right settings/logs panel.
+- Ported the local renderer design tokens and active status animations into `electron/renderer/styles.css`.
 - Exposed a metadata-only `window.agentCliDesktop.getAppInfo()` bridge.
 - Added Electron scripts for build, dev, start, and directory packaging.
 - Simplified `electron:dev` so it launches without a web dev server.
@@ -18,6 +20,7 @@
 - `node --check electron/dist/main.js && node --check electron/dist/preload.cjs`
 - `node --check electron/renderer/renderer.js`
 - `npm run electron:dist:dir`
+- Static visual check at `http://127.0.0.1:4187/index.html` with a 1440×900 headless Chrome screenshot.
 - `npm run build`
 - `npm run test:unit` passed: 11 files, 133 tests.
 - `npm_config_cache=/private/tmp/agent-cli-npm-cache npm audit --audit-level=high` passed with 0 vulnerabilities after dependency updates.

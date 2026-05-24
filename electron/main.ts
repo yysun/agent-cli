@@ -1,5 +1,5 @@
 /**
- * Agent CLI Electron Main Process
+ * Agent World Electron Main Process
  *
  * Purpose:
  * - Provide a minimal desktop shell with an Electron-owned renderer.
