@@ -13,6 +13,8 @@
  * - Resolves world-owned state through the workspace registry before touching disk.
  *
  * Recent changes:
+ * - 2026-05-24: Preserved existing agent.json runtime settings during agent selection.
+ * - 2026-05-24: Retired agent runtime.json writes; agent runtime settings live in agent.json.
  * - 2026-05-23: Routed world state through selected `.agent-world/worlds/{worldId}` roots.
  * - 2026-05-23: Added agent-level memory JSONL and durable per-chat queue persistence.
  * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
@@ -36,7 +38,6 @@ import {
   buildAgentMemoryLogPath,
   buildAgentMemoryPath,
   buildAgentMetadataPath,
-  buildAgentRuntimeConfigPath,
   buildAgentStatePath,
   buildWorldChatMessagesPath,
   buildWorldChatMetadataPath,
@@ -409,6 +410,7 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
     || inferredRuntime.model;
 
   await writeJsonAtomic(buildAgentMetadataPath(agentId), {
+    ...(existingAgentMetadata && typeof existingAgentMetadata === 'object' ? existingAgentMetadata : {}),
     id: agentId,
     name,
     provider,
@@ -416,14 +418,6 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
     createdAt: String(existingAgentMetadata?.createdAt ?? now),
     updatedAt: now,
   });
-
-  if (metadata.provider || metadata.model || !(await pathExists(buildAgentRuntimeConfigPath(agentId)))) {
-    await writeJsonAtomic(buildAgentRuntimeConfigPath(agentId), {
-      schemaVersion: 1,
-      provider,
-      model,
-    });
-  }
 
   if (!await pathExists(buildAgentStatePath(agentId))) {
     await writeJsonAtomic(buildAgentStatePath(agentId), {
@@ -601,15 +595,6 @@ export async function updateAgentMetadata(agentId, updates) {
   };
 
   await writeJsonAtomic(buildAgentMetadataPath(normalizedAgentId), nextMetadata);
-
-  if (updates.provider || updates.model) {
-    const existingRuntime = await readJsonIfPresent(buildAgentRuntimeConfigPath(normalizedAgentId));
-    await writeJsonAtomic(buildAgentRuntimeConfigPath(normalizedAgentId), {
-      ...(existingRuntime && typeof existingRuntime === 'object' ? existingRuntime : { schemaVersion: 1 }),
-      ...(updates.provider ? { provider: updates.provider } : {}),
-      ...(updates.model ? { model: updates.model } : {}),
-    });
-  }
 
   return nextMetadata;
 }

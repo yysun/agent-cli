@@ -7,9 +7,10 @@
  *
  * Key features:
  * - Bootstraps `.agent-world/registry.json` and `.agent-world/worlds/{worldId}`.
- * - Keeps AGENTS.md, `.env`, root runtime config, and workspace skills outside world-owned state.
+ * - Keeps AGENTS.md, `.env`, and workspace skills outside world-owned state.
  *
  * Recent changes:
+ * - 2026-05-24: Removed root runtime config from workspace-owned responsibilities.
  * - 2026-05-23: Added workspace API and multi-world storage registry with new-layout-only storage.
  */
 import { randomUUID } from 'node:crypto';

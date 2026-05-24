@@ -7,10 +7,11 @@
  *
  * Key features:
  * - Keeps provider credentials in environment variables.
- * - Resolves provider/model from runtime config or provider defaults.
+ * - Resolves provider/model from agent config or provider defaults.
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-05-24: Updated missing-model guidance for world.json and agent.json runtime settings.
  * - 2026-05-16: Added coverage for runtime tool-result callbacks.
  * - 2026-05-23: Added coverage for CLI-handled tool-call results.
  * - 2026-05-16: Migrated agent-runtime coverage to the `llm-runtime` 0.5.0 loop API.
@@ -148,7 +149,7 @@ describe('agent-runtime', () => {
     expect(() => validateRuntimeEnvironment(process.env, {
       provider: 'anthropic',
       model: '',
-    })).toThrow('Missing LLM model. Set it in runtime.json or pass --model for provider anthropic.');
+    })).toThrow('Missing LLM model. Set it in world.json, agent.json, or pass --model for provider anthropic.');
   });
 
   it('runs a chat turn through llm-runtime with normalized runtime settings', async () => {

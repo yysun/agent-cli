@@ -12,6 +12,7 @@
  * - Prints startup diagnostics for workspace root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-24: Updated runtime help to describe world.json and agent.json defaults.
  * - 2026-05-23: Added --world selection for multi-world workspaces.
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
  * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
@@ -94,7 +95,7 @@ export function usageText(): string {
     'Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
     '       agent-cli [--workspace <path>] --remote [--new-chat] [initial message]',
     '',
-    'Runtime options override runtime.json defaults when provided:',
+    'Runtime options override world.json and agent.json defaults when provided:',
     '  --provider <name>                 --model <name>',
     '  --temperature <number>            --max-tokens <number>',
     '  --tool-permission <auto|ask|read> --reasoning-effort <level>',

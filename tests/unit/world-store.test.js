@@ -12,6 +12,7 @@
  * - Verifies default-world storage under `.agent-world/worlds/default`.
  *
  * Recent changes:
+ * - 2026-05-24: Confirmed named-agent runtime settings stay in agent.json.
  * - 2026-05-23: Updated fixtures for multi-world storage paths.
  * - 2026-05-20: Added named-agent selection coverage.
  * - 2026-05-14: Reworked coverage for `.agent-world` storage.
@@ -119,7 +120,7 @@ describe('world-store', () => {
     await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', chat.id, 'summary.md'), 'utf8')).resolves.toBe('');
   });
 
-  it('creates and selects a named agent with metadata and runtime config', async () => {
+  it('creates and selects a named agent with runtime settings in agent.json', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -134,7 +135,6 @@ describe('world-store', () => {
 
     const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'agent.json'));
-    const runtime = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'runtime.json'));
 
     expect(world.defaultAgentId).toBe('research');
     expect(world.currentChatId).toBe('');
@@ -144,11 +144,7 @@ describe('world-store', () => {
       provider: 'ollama',
       model: 'gemma4:e4b',
     });
-    expect(runtime).toMatchObject({
-      schemaVersion: 1,
-      provider: 'ollama',
-      model: 'gemma4:e4b',
-    });
+    await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'runtime.json'), 'utf8')).rejects.toThrow();
     await expect(readFile(path.join(rootPath, '.agent-world', 'research', 'agent.json'), 'utf8')).rejects.toThrow();
   });
 

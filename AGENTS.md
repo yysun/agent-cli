@@ -2,11 +2,11 @@
 
 Rules for AI agents working in this repo:
 
-- Workspace root: use `AGENT_CLI_WORKSPACE` when set, fall back to legacy `AGENT_CLI_ROOT`, otherwise use `cwd`. Resolve `AGENTS.md`, workspace `.agent-world/skills`, `runtime.json`, `.env`, and `.agent-world` from that root.
+- Workspace root: use `AGENT_CLI_WORKSPACE` when set, fall back to legacy `AGENT_CLI_ROOT`, otherwise use `cwd`. Resolve `AGENTS.md`, workspace `.agent-world/skills`, `.env`, and `.agent-world` from that root.
 - Workspace API: `.agent-world/registry.json` owns `currentWorldId` and the list of worlds. `--world <id>` or `AGENT_CLI_WORLD` selects a world.
 - Storage: use `.agent-world` only. No `.chats` compatibility paths and no singleton `.agent-world/world.json` layout.
 - Layout: world state in `.agent-world/worlds/{worldId}`; chats in `chats/{chatId}`; agent state in `agents/{agentId}`; world skills in `skills`; remote lock in `remote-host.lock.json`.
-- Runtime precedence: CLI flags > selected-world `agents/{agentId}/runtime.json` > selected-world `agents/{agentId}/agent.json` > repo-root `runtime.json`.
+- Runtime precedence: CLI flags > selected-world `agents/{agentId}/agent.json` > selected-world `world.json`.
 - `.env`: credentials and relay config only. Do not move runtime defaults into `.env`.
 - Build outputs: CLI -> `bin/agent-cli.js`; relay -> `bin/server.js`; web -> `bin/public`; core remains TypeScript source and is checked with no emit.
 - Source of truth: prefer editing `cli/src`, `core`, `server/src`, `web/src`. Avoid editing generated outputs unless required.

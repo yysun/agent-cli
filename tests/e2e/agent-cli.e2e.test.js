@@ -10,13 +10,14 @@
  * - Verifies persisted session files rather than only internal helper behavior.
  *
  * Recent changes:
+ * - 2026-05-24: Moved live runtime fixture setup from runtime.json to world.json.
  * - 2026-05-07: Switched e2e coverage from a mocked runtime to live LLM-backed turns.
  * - 2026-05-07: Made `test:e2e` require a usable live provider and moved deterministic CLI checks to unit tests.
  */
 import 'dotenv/config';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -130,7 +131,7 @@ function resolveRequiredLiveRuntimeConfig(environment) {
   }
 
   throw new Error(
-    'test:e2e requires a usable live LLM provider configuration. Configure credentials for any supported provider so the test can write a matching runtime.json.',
+    'test:e2e requires a usable live LLM provider configuration. Configure credentials for any supported provider so the test can write matching world.json runtime settings.',
   );
 }
 
@@ -168,8 +169,12 @@ function restoreWorkspaceEnvironment(snapshot) {
 
 /** @param {string} rootPath */
 async function writeLiveRuntimeConfig(rootPath) {
-  await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
-    schemaVersion: 1,
+  await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
+    id: 'world-1',
+    name: 'Live E2E World',
+    defaultAgentId: 'default',
+    currentChatId: '',
     ...liveRuntimeConfig.runtimeConfig,
   }, null, 2)}\n`, 'utf8');
 }

@@ -11,6 +11,7 @@
  * - Covers loaded-current, switched, and new-chat send/edit/delete/HITL flows without queue cases.
  *
  * Recent changes:
+ * - 2026-05-24: Moved live runtime fixture setup from runtime.json to world.json.
  * - 2026-05-23: Added live interactive CLI flow-matrix coverage derived from the Electron E2E suite.
  */
 import 'dotenv/config';
@@ -18,7 +19,7 @@ import 'dotenv/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -139,8 +140,12 @@ function resolveRequiredLiveRuntimeConfig(environment) {
 
 /** @param {string} rootPath */
 async function writeLiveRuntimeConfig(rootPath) {
-  await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({
-    schemaVersion: 1,
+  await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
+    id: 'world-1',
+    name: 'Live Flow World',
+    defaultAgentId: 'default',
+    currentChatId: '',
     ...liveRuntimeConfig.runtimeConfig,
   }, null, 2)}\n`, 'utf8');
 }

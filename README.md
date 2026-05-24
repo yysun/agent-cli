@@ -57,7 +57,7 @@ Paired browsers observe the same shared remote session over SSE. Shared assistan
 
 Remote sessions created by `agent-cli --remote` do not expire by default. They stay available until the local CLI process exits, the remote client disconnects, or you press `Ctrl+C`.
 
-Runtime settings can be supplied through `runtime.json` and overridden on the command line. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
+Runtime settings can be supplied through the selected world's `world.json`, the selected agent's `agent.json`, and command-line overrides. Supported flags are `--provider`, `--model`, `--temperature`, `--max-tokens`, `--tool-permission`, `--reasoning-effort`, `--past-messages`, `--stream-trace`, and `--web-search`. Use either `--flag=value` or `--flag value`.
 Use `--workspace <path>` to run against a specific Agent CLI workspace without changing your shell's current directory. `--project <path>` remains as a compatibility alias.
 Use `--agent-id <id>` to select an agent, or `--new-agent <id>` to create/select one.
 
@@ -125,19 +125,18 @@ The deterministic relay and remote-host e2e coverage confirms that a real `agent
 ### Agent Files
 
 - System prompt: `./AGENTS.md`
-- Repo runtime defaults: `./runtime.json`
 - Workspace skills root: `./.agent-world/skills/`
 - Durable workspace state root: `./.agent-world/`
 
 Durable local state lives under `./.agent-world/`:
 - `registry.json` stores the workspace world registry plus `currentWorldId`
 - `skills/` stores workspace-shared skills
-- `worlds/{worldId}/world.json` stores world identity plus `defaultAgentId` and `currentChatId`
+- `worlds/{worldId}/world.json` stores world identity, world runtime defaults, `defaultAgentId`, and `currentChatId`
 - `worlds/{worldId}/skills/` stores skills that apply only to that world
 - `worlds/{worldId}/chats/{chatId}/chat.json`, `messages.jsonl`, and `summary.md` store chat metadata, ordered message history, and summary text
-- `worlds/{worldId}/agents/{agentId}/agent.json`, `inbox.jsonl`, `state.json`, `events.jsonl`, and `memory.md` store agent-scoped metadata, inbox, mutable state, event traces, and memory
+- `worlds/{worldId}/agents/{agentId}/agent.json`, `inbox.jsonl`, `state.json`, `events.jsonl`, and `memory.md` store agent-scoped metadata, runtime settings, inbox, mutable state, event traces, and memory
 
-Agent runtime config can live in `./.agent-world/worlds/{worldId}/agents/{agentId}/agent.json` and `./.agent-world/worlds/{worldId}/agents/{agentId}/runtime.json`. `agent.json` provides the agent identity plus provider/model fallback; `runtime.json` stores runtime overrides and wins over matching `agent.json` fields.
+World runtime defaults live in `./.agent-world/worlds/{worldId}/world.json`. Agent-specific runtime settings live in `./.agent-world/worlds/{worldId}/agents/{agentId}/agent.json`.
 
 Remote host coordination lives under `./.agent-world/worlds/{worldId}/remote-host.lock.json` while a `--remote` host session is active. Remote locks are scoped to the selected world.
 
@@ -148,24 +147,22 @@ If `./AGENTS.md` is present and non-empty, its content is added after the built-
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
 If `./.agent-world/skills/` and the selected world's `skills/` directory are missing, the CLI continues with an empty skill inventory.
 
-The CLI uses `--workspace <path>` as the workspace root when provided, otherwise legacy `--project <path>`, otherwise `AGENT_CLI_WORKSPACE`, otherwise legacy `AGENT_CLI_ROOT`, otherwise either value from the current working directory's `.env`, otherwise the current working directory. `AGENTS.md`, workspace skills, runtime files, `.agent-world/` workspace storage, the agent tool working directory, and the local `.env` lookup all resolve from that workspace root. `--world <id>` or `AGENT_CLI_WORLD` selects a world inside the workspace; otherwise the workspace registry's current world is used.
+The CLI uses `--workspace <path>` as the workspace root when provided, otherwise legacy `--project <path>`, otherwise `AGENT_CLI_WORKSPACE`, otherwise legacy `AGENT_CLI_ROOT`, otherwise either value from the current working directory's `.env`, otherwise the current working directory. `AGENTS.md`, workspace skills, `.agent-world/` workspace storage, the agent tool working directory, and the local `.env` lookup all resolve from that workspace root. `--world <id>` or `AGENT_CLI_WORLD` selects a world inside the workspace; otherwise the workspace registry's current world is used.
 
 Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agent-world/skills/` and `./.agent-world/worlds/{worldId}/skills/`. World-level skills override workspace-level skills with the same `skillId`.
 
 ### Runtime Configuration
 
-Runtime defaults can come from three file layers:
-- `./runtime.json`
+Runtime defaults come from two durable state layers:
+- `./.agent-world/worlds/{worldId}/world.json`
 - `./.agent-world/worlds/{worldId}/agents/{agentId}/agent.json`
-- `./.agent-world/worlds/{worldId}/agents/{agentId}/runtime.json`
 
-Precedence is: CLI flags, then selected-world agent-level `runtime.json`, then selected-world agent-level `agent.json`, then repo-root `runtime.json`. `--agent-id <id>` selects the agent for the invocation. `--new-agent <id>` creates the folder under `./.agent-world/worlds/{worldId}/agents/{id}`, prompts for missing name/provider/model when running interactively, writes `agent.json` and `runtime.json`, and sets the selected world's `world.json.defaultAgentId`.
+Precedence is: CLI flags, then selected-world agent-level `agent.json`, then selected-world `world.json`. `--agent-id <id>` selects the agent for the invocation. `--new-agent <id>` creates the folder under `./.agent-world/worlds/{worldId}/agents/{id}`, prompts for missing name/provider/model when running interactively, writes `agent.json`, and sets the selected world's `world.json.defaultAgentId`.
 
-The runtime file schema currently supports:
+World and agent runtime settings currently support:
 
 ```json
 {
-	"schemaVersion": 1,
 	"provider": "openai",
 	"model": "gpt-5",
 	"reasoningEffort": "medium",
@@ -180,21 +177,21 @@ The runtime file schema currently supports:
 ```
 
 `pastMessages` controls how many previous persisted chat messages are loaded into each LLM request. If it is not defined, the CLI loads `0` past messages by default.
-`stream` controls whether response text streams by default. Use `--stream-off` to force non-stream mode even when the runtime file enables streaming.
+`stream` controls whether response text streams by default. Use `--stream-off` to force non-stream mode even when persisted settings enable streaming.
 `streamTrace` accepts `true` or `false`. When set to `true`, the CLI writes per-turn streaming events (`warning`, `error`, `reasoning`, `tool`, and `text`) to `events.jsonl` under the active agent directory.
 
 The CLI parser accepts a few aliases for convenience: `modal` -> `model`, `tokens` -> `maxTokens`, `permissions` -> `toolPermission`, `reasoning` -> `reasoningEffort`, and `web_search` -> `webSearch`.
 
 Provider credentials still come from environment variables. When a local `.env` file is present at the resolved workspace root, Agent CLI only loads provider credential keys and relay configuration from it.
 
-Non-credential runtime defaults such as provider selection, model, temperature, tool mode, search mode, history depth, streaming, and stream tracing should be set in `runtime.json` or on the command line rather than in `.env`.
+Non-credential runtime defaults such as provider selection, model, temperature, tool mode, search mode, history depth, streaming, and stream tracing should be set in `world.json`, `agent.json`, or on the command line rather than in `.env`.
 
 Set credential environment variables before running the CLI:
 
 Use `./.env.example` as a template for local credential setup.
 
 - Export `AGENT_CLI_RELAY_SERVER_URL` in your shell when using `--remote`
-- Provider credentials depend on the `provider` selected in `runtime.json` or via CLI flags
+- Provider credentials depend on the `provider` selected in `world.json`, `agent.json`, or via CLI flags
 
 Supported provider env vars:
 

@@ -15,7 +15,7 @@
  * - 2026-05-07: Added shared path helpers for the CLI implementation.
  * - 2026-05-07: Added `AGENT_CLI_ROOT` override support for isolated runs.
  * - 2026-05-07: Switched prompt, skills, and chat storage to AGENTS/.agents/.chats.
- * - 2026-05-14: Added `.agent-world` runtime-config paths for root and agent overrides.
+ * - 2026-05-24: Removed runtime.json path helpers from active configuration.
  * - 2026-05-14: Added `.agent-world` chat and agent persistence paths.
  * - 2026-05-23: Moved skills under `.agent-world/skills`.
  * - 2026-05-23: Added workspace registry and selected-world path roots for multi-world storage.
@@ -43,7 +43,6 @@ function resolveWorkspaceRoot(workspaceRoot?: string): string {
 export let WORKSPACE_ROOT = '';
 export let REPO_ROOT = '';
 export let SYSTEM_PROMPT_PATH = '';
-export let ROOT_RUNTIME_CONFIG_PATH = '';
 export let SKILLS_ROOT = '';
 export let AGENT_WORLD_ROOT = '';
 export let WORKSPACE_REGISTRY_PATH = '';
@@ -74,7 +73,6 @@ export function configureWorkspaceRoot(workspaceRoot?: string): string {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, 'AGENTS.md');
-  ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, 'runtime.json');
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, '.agent-world');
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, 'skills');
   WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, 'registry.json');
@@ -148,11 +146,6 @@ export function buildAgentMemoryPath(agentId) {
 /** @param {string} agentId */
 export function buildAgentMemoryLogPath(agentId) {
   return path.join(buildAgentDirectoryPath(agentId), 'memory.jsonl');
-}
-
-/** @param {string} agentId */
-export function buildAgentRuntimeConfigPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'runtime.json');
 }
 
 /** @param {string} chatId */

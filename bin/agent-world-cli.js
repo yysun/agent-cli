@@ -28,7 +28,6 @@ function resolveWorkspaceRoot(workspaceRoot) {
 var WORKSPACE_ROOT = "";
 var REPO_ROOT = "";
 var SYSTEM_PROMPT_PATH = "";
-var ROOT_RUNTIME_CONFIG_PATH = "";
 var SKILLS_ROOT = "";
 var AGENT_WORLD_ROOT = "";
 var WORKSPACE_REGISTRY_PATH = "";
@@ -56,7 +55,6 @@ function configureWorkspaceRoot(workspaceRoot) {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
-  ROOT_RUNTIME_CONFIG_PATH = path.join(WORKSPACE_ROOT, "runtime.json");
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
   WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, "registry.json");
@@ -100,9 +98,6 @@ function buildAgentMemoryPath(agentId) {
 }
 function buildAgentMemoryLogPath(agentId) {
   return path.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
-}
-function buildAgentRuntimeConfigPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "runtime.json");
 }
 function buildWorldQueuePath(chatId) {
   return path.join(AGENT_WORLD_QUEUES_ROOT, `${chatId}.json`);
@@ -543,26 +538,6 @@ async function readJsonFileIfPresent(filePath, label) {
   }
   return parsed;
 }
-function validateRuntimeSchemaVersion(schemaVersion, filePath) {
-  if (schemaVersion === void 0 || schemaVersion === null || schemaVersion === "") {
-    return;
-  }
-  const normalizedSchemaVersion = Number(schemaVersion);
-  if (normalizedSchemaVersion !== 1) {
-    throw new Error(`Unsupported runtime config schemaVersion in ${filePath}: expected 1.`);
-  }
-}
-function normalizeRuntimeConfigFile(source, filePath) {
-  validateRuntimeSchemaVersion(source.schemaVersion, filePath);
-  return normalizeAgentConfig(source);
-}
-async function loadRuntimeConfigFile(filePath) {
-  const config = await readJsonFileIfPresent(filePath, "runtime config");
-  if (!config) {
-    return {};
-  }
-  return normalizeRuntimeConfigFile(config, filePath);
-}
 function normalizeAgentId(agentId) {
   if (agentId === void 0 || agentId === null) {
     return "";
@@ -580,20 +555,19 @@ async function loadDefaultAgentIdFromWorld() {
 }
 async function loadPersistedRuntimeConfig(options = {}) {
   await ensureWorkspaceWorld();
-  const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
+  const worldMetadata = await readJsonFileIfPresent(WORLD_STATE_PATH, "world metadata") ?? {};
+  const worldRuntimeConfig = normalizeAgentConfig(worldMetadata);
   const configuredAgentId = normalizeAgentId(options.agentId);
   const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
   if (!defaultAgentId) {
-    return rootRuntimeConfig;
+    return worldRuntimeConfig;
   }
   const agentMetadataConfig = normalizeAgentConfig(
     await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {}
   );
-  const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
   return {
-    ...rootRuntimeConfig,
-    ...agentMetadataConfig,
-    ...agentRuntimeConfig
+    ...worldRuntimeConfig,
+    ...agentMetadataConfig
   };
 }
 
@@ -859,7 +833,7 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
     agentConfig.model ?? providerDefaultModel ?? ""
   ).trim();
   if (!model) {
-    throw new Error(`Missing LLM model. Set it in runtime.json or pass --model for provider ${provider}.`);
+    throw new Error(`Missing LLM model. Set it in world.json, agent.json, or pass --model for provider ${provider}.`);
   }
   const providers = (
     /** @type {LLMProviderConfigs} */
@@ -1323,6 +1297,7 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
   const provider = String(metadata.provider ?? existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider;
   const model = String(metadata.model ?? existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model;
   await writeJsonAtomic2(buildAgentMetadataPath(agentId), {
+    ...existingAgentMetadata && typeof existingAgentMetadata === "object" ? existingAgentMetadata : {},
     id: agentId,
     name,
     provider,
@@ -1330,13 +1305,6 @@ async function ensureDefaultAgentFiles(agentId, metadata = {}) {
     createdAt: String(existingAgentMetadata?.createdAt ?? now),
     updatedAt: now
   });
-  if (metadata.provider || metadata.model || !await pathExists(buildAgentRuntimeConfigPath(agentId))) {
-    await writeJsonAtomic2(buildAgentRuntimeConfigPath(agentId), {
-      schemaVersion: 1,
-      provider,
-      model
-    });
-  }
   if (!await pathExists(buildAgentStatePath(agentId))) {
     await writeJsonAtomic2(buildAgentStatePath(agentId), {
       id: agentId,
@@ -1466,14 +1434,6 @@ async function updateAgentMetadata(agentId, updates) {
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   await writeJsonAtomic2(buildAgentMetadataPath(normalizedAgentId), nextMetadata);
-  if (updates.provider || updates.model) {
-    const existingRuntime = await readJsonIfPresent2(buildAgentRuntimeConfigPath(normalizedAgentId));
-    await writeJsonAtomic2(buildAgentRuntimeConfigPath(normalizedAgentId), {
-      ...existingRuntime && typeof existingRuntime === "object" ? existingRuntime : { schemaVersion: 1 },
-      ...updates.provider ? { provider: updates.provider } : {},
-      ...updates.model ? { model: updates.model } : {}
-    });
-  }
   return nextMetadata;
 }
 async function deleteAgentMetadata(agentId) {

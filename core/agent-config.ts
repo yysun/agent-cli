@@ -3,28 +3,24 @@
  * Agent CLI Agent Config Loading
  *
  * Purpose:
- * - Normalize runtime overrides from CLI flags and optional runtime.json files.
+ * - Normalize runtime overrides from CLI flags plus world and agent metadata.
  *
  * Key features:
  * - Normalizes common aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
- * - Loads repo-root runtime defaults from `./runtime.json` when present.
- * - Applies selected-world agent metadata and runtime overrides.
+ * - Loads selected-world defaults from `world.json`.
+ * - Applies selected-world agent metadata overrides from `agent.json`.
  * - Validates supported enum values before runtime calls.
  * - Keeps runtime override parsing separate from provider credential environment variables.
  *
  * Recent changes:
- * - 2026-05-23: Resolve selected-world state before reading agent runtime defaults.
- * - 2026-05-20: Load provider/model fallback from agent.json before agent runtime.json.
- * - 2026-05-07: Retired JSON config-file loading in favor of CLI/runtime-file config.
- * - 2026-05-14: Restored optional runtime.json defaults at the repo root and default-agent scope.
+ * - 2026-05-24: Retired runtime.json loading in favor of world.json and agent.json.
+ * - 2026-05-23: Resolve selected-world state before reading persisted runtime defaults.
  */
 
 import { promises as fs } from 'node:fs';
 
 import {
   buildAgentMetadataPath,
-  buildAgentRuntimeConfigPath,
-  ROOT_RUNTIME_CONFIG_PATH,
   WORLD_STATE_PATH,
 } from './paths.js';
 import { ensureWorkspaceWorld } from './workspace-store.js';
@@ -350,42 +346,6 @@ async function readJsonFileIfPresent(filePath, label) {
   return parsed;
 }
 
-/**
- * @param {unknown} schemaVersion
- * @param {string} filePath
- */
-function validateRuntimeSchemaVersion(schemaVersion, filePath) {
-  if (schemaVersion === undefined || schemaVersion === null || schemaVersion === '') {
-    return;
-  }
-
-  const normalizedSchemaVersion = Number(schemaVersion);
-
-  if (normalizedSchemaVersion !== 1) {
-    throw new Error(`Unsupported runtime config schemaVersion in ${filePath}: expected 1.`);
-  }
-}
-
-/**
- * @param {Record<string, unknown>} source
- * @param {string} filePath
- */
-function normalizeRuntimeConfigFile(source, filePath) {
-  validateRuntimeSchemaVersion(source.schemaVersion, filePath);
-  return normalizeAgentConfig(source);
-}
-
-/** @param {string} filePath */
-async function loadRuntimeConfigFile(filePath) {
-  const config = await readJsonFileIfPresent(filePath, 'runtime config');
-
-  if (!config) {
-    return {};
-  }
-
-  return normalizeRuntimeConfigFile(config, filePath);
-}
-
 /** @param {string | undefined} agentId */
 function normalizeAgentId(agentId) {
   if (agentId === undefined || agentId === null) {
@@ -412,22 +372,21 @@ async function loadDefaultAgentIdFromWorld() {
  */
 export async function loadPersistedRuntimeConfig(options = {}) {
   await ensureWorkspaceWorld();
-  const rootRuntimeConfig = await loadRuntimeConfigFile(ROOT_RUNTIME_CONFIG_PATH);
+  const worldMetadata = await readJsonFileIfPresent(WORLD_STATE_PATH, 'world metadata') ?? {};
+  const worldRuntimeConfig = normalizeAgentConfig(worldMetadata);
   const configuredAgentId = normalizeAgentId(options.agentId);
   const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
 
   if (!defaultAgentId) {
-    return rootRuntimeConfig;
+    return worldRuntimeConfig;
   }
 
   const agentMetadataConfig = normalizeAgentConfig(
     await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), 'agent metadata') ?? {},
   );
-  const agentRuntimeConfig = await loadRuntimeConfigFile(buildAgentRuntimeConfigPath(defaultAgentId));
 
   return {
-    ...rootRuntimeConfig,
+    ...worldRuntimeConfig,
     ...agentMetadataConfig,
-    ...agentRuntimeConfig,
   };
 }

@@ -7,10 +7,11 @@
  *
  * Key features:
  * - Verifies symlinked binaries still execute the CLI module.
- * - Confirms runtime.json plus agent runtime overrides are honored.
+ * - Confirms world.json plus agent.json runtime overrides are honored.
  * - Confirms env remains limited to provider credentials and relay configuration.
  *
  * Recent changes:
+ * - 2026-05-24: Retired runtime JSON fixtures in favor of world.json and agent.json.
  * - 2026-05-23: Added workspace terminology coverage while preserving project aliases.
  * - 2026-05-20: Added coverage for automatic interactive mode when no message is provided.
  * - 2026-05-23: Added coverage for TTY pending display and ask_user_input prompts.
@@ -83,8 +84,15 @@ async function readJsonl(filePath) {
  * @param {string} rootPath
  * @param {Record<string, unknown>} runtimeConfig
  */
-async function writeRootRuntimeConfig(rootPath, runtimeConfig) {
-  await writeFile(path.join(rootPath, 'runtime.json'), `${JSON.stringify({ schemaVersion: 1, ...runtimeConfig }, null, 2)}\n`, 'utf8');
+async function writeWorldRuntimeConfig(rootPath, runtimeConfig) {
+  await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
+    id: 'world-1',
+    name: 'Test World',
+    defaultAgentId: 'default',
+    currentChatId: '',
+    ...runtimeConfig,
+  }, null, 2)}\n`, 'utf8');
 }
 
 /**
@@ -92,15 +100,32 @@ async function writeRootRuntimeConfig(rootPath, runtimeConfig) {
  * @param {string} agentId
  * @param {Record<string, unknown>} runtimeConfig
  */
-async function writeAgentRuntimeConfig(rootPath, agentId, runtimeConfig) {
+async function writeAgentConfig(rootPath, agentId, runtimeConfig) {
   await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', agentId), { recursive: true });
-  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
+  let worldConfig = {
     id: 'world-1',
     name: 'Test World',
     defaultAgentId: agentId,
     currentChatId: 'chat-1',
+  };
+
+  try {
+    worldConfig = {
+      ...JSON.parse(await readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), 'utf8')),
+      defaultAgentId: agentId,
+    };
+  } catch {
+    // Create the minimal world fixture when a test only needs agent metadata.
+  }
+
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
+    ...worldConfig,
   }, null, 2)}\n`, 'utf8');
-  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', agentId, 'runtime.json'), `${JSON.stringify({ schemaVersion: 1, ...runtimeConfig }, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', agentId, 'agent.json'), `${JSON.stringify({
+    id: agentId,
+    name: `${agentId} agent`,
+    ...runtimeConfig,
+  }, null, 2)}\n`, 'utf8');
 }
 
 /**
@@ -402,12 +427,12 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('loads runtime.json defaults, applies the default-agent override, and lets CLI flags win', async () => {
+  it('loads world.json defaults, applies the default-agent override, and lets CLI flags win', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
     await ensureSkillsRoot(rootPath);
-    await writeRootRuntimeConfig(rootPath, {
+    await writeWorldRuntimeConfig(rootPath, {
       provider: 'openai',
       model: 'gpt-5',
       toolPermission: 'ask',
@@ -415,7 +440,7 @@ describe('agent-cli entrypoint', () => {
       stream: true,
       streamTrace: false,
     });
-    await writeAgentRuntimeConfig(rootPath, 'agent-7', {
+    await writeAgentConfig(rootPath, 'agent-7', {
       model: 'gpt-5-mini',
       stream: false,
     });
@@ -512,10 +537,11 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStderr()).toBe('');
   });
 
-  it('prints help even when runtime.json is malformed', async () => {
+  it('prints help even when world runtime settings are malformed', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await writeFile(path.join(rootPath, 'runtime.json'), '{\n  "schemaVersion": 1,\n  "maxTokens": "not-a-number"\n}\n', 'utf8');
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), '{\n  "id": "world-1",\n  "defaultAgentId": "default",\n  "maxTokens": "not-a-number"\n}\n', 'utf8');
 
     const { main } = await loadCliModule(rootPath);
     const io = createIoCapture();
@@ -527,7 +553,8 @@ describe('agent-cli entrypoint', () => {
   it('validates runtime config before starting automatic interactive mode', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await writeFile(path.join(rootPath, 'runtime.json'), '{\n  "schemaVersion": 1,\n  "maxTokens": "not-a-number"\n}\n', 'utf8');
+    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
+    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), '{\n  "id": "world-1",\n  "defaultAgentId": "default",\n  "maxTokens": "not-a-number"\n}\n', 'utf8');
 
     const { main } = await loadCliModule(rootPath);
     const io = createIoCapture();
@@ -611,7 +638,7 @@ describe('agent-cli entrypoint', () => {
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
     await ensureSkillsRoot(rootPath);
-    await writeRootRuntimeConfig(rootPath, {
+    await writeWorldRuntimeConfig(rootPath, {
       provider: 'openai',
       model: 'gpt-5',
     });
@@ -668,11 +695,11 @@ describe('agent-cli entrypoint', () => {
     rootsToClean.push(rootPath);
     await ensureSkillsRoot(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
-    await writeRootRuntimeConfig(rootPath, {
+    await writeWorldRuntimeConfig(rootPath, {
       provider: 'openai',
       model: 'gpt-5',
     });
-    await writeAgentRuntimeConfig(rootPath, 'research', {
+    await writeAgentConfig(rootPath, 'research', {
       provider: 'unsupported-provider',
       model: 'model-x',
     });
@@ -706,7 +733,7 @@ describe('agent-cli entrypoint', () => {
     rootsToClean.push(rootPath);
     await ensureSkillsRoot(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
-    await writeAgentRuntimeConfig(rootPath, 'research', {
+    await writeAgentConfig(rootPath, 'research', {
       provider: 'openai',
       model: 'gpt-5-mini',
     });
@@ -887,7 +914,6 @@ describe('agent-cli entrypoint', () => {
 
     const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
     const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'agent.json'));
-    const runtime = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'runtime.json'));
 
     expect(world.defaultAgentId).toBe('research');
     expect(agent).toMatchObject({
@@ -895,11 +921,7 @@ describe('agent-cli entrypoint', () => {
       provider: 'ollama',
       model: 'gemma4:e4b',
     });
-    expect(runtime).toMatchObject({
-      schemaVersion: 1,
-      provider: 'ollama',
-      model: 'gemma4:e4b',
-    });
+    await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'research', 'runtime.json'), 'utf8')).rejects.toThrow();
     expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
       agentConfig: expect.objectContaining({
         provider: 'ollama',
@@ -918,7 +940,6 @@ describe('agent-cli entrypoint', () => {
     await main(['--new-agent', 'draft', '--help'], createIoCapture(), { interactivePrompt });
 
     const agent = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'draft', 'agent.json'));
-    const runtime = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'draft', 'runtime.json'));
 
     expect(interactivePrompt.question).toHaveBeenCalledWith('Agent name (draft agent): ');
     expect(interactivePrompt.question).toHaveBeenCalledWith('Provider (openai): ');
@@ -929,19 +950,15 @@ describe('agent-cli entrypoint', () => {
       provider: 'ollama',
       model: 'gemma4:e4b',
     });
-    expect(runtime).toMatchObject({
-      schemaVersion: 1,
-      provider: 'ollama',
-      model: 'gemma4:e4b',
-    });
+    await expect(readFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'draft', 'runtime.json'), 'utf8')).rejects.toThrow();
   });
 
-  it('applies CLI runtime overrides over runtime.json defaults', async () => {
+  it('applies CLI runtime overrides over world.json defaults', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await ensureSkillsRoot(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
-    await writeRootRuntimeConfig(rootPath, {
+    await writeWorldRuntimeConfig(rootPath, {
       provider: 'openai',
       model: 'gpt-5',
       toolPermission: 'ask',
@@ -1357,7 +1374,7 @@ describe('agent-cli entrypoint', () => {
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
     await ensureSkillsRoot(rootPath);
-    await writeRootRuntimeConfig(rootPath, {
+    await writeWorldRuntimeConfig(rootPath, {
       provider: 'unsupported-provider',
       model: 'model-x',
     });
@@ -1372,7 +1389,7 @@ describe('agent-cli entrypoint', () => {
     ).rejects.toThrow();
   });
 
-  it('prints help without requiring agent runtime files', async () => {
+  it('prints help without requiring persisted runtime settings', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 

@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-05-24: Point missing-model guidance at world.json, agent.json, and CLI flags.
  * - 2026-05-23: Renamed workspace root and AGENTS.md prompt parameters while preserving compatibility aliases.
  * - 2026-05-07: Added `llm-runtime` orchestration for the CLI.
  * - 2026-05-11: Layered built-in prompt, AGENTS.md, and skill inventory in explicit order.
@@ -235,7 +236,7 @@ export function validateRuntimeEnvironment(environment = process.env, agentConfi
   ).trim();
 
   if (!model) {
-    throw new Error(`Missing LLM model. Set it in runtime.json or pass --model for provider ${provider}.`);
+    throw new Error(`Missing LLM model. Set it in world.json, agent.json, or pass --model for provider ${provider}.`);
   }
 
   const providers = /** @type {LLMProviderConfigs} */ ({
