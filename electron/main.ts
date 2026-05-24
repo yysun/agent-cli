@@ -10,6 +10,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-05-24: Renamed the Electron-facing app identity to Agent World.
  * - 2026-05-24: Switched from the shared web app to an Electron-owned renderer.
  * - 2026-05-24: Allowed same-origin dev-server navigation while keeping external links out of the shell.
  * - 2026-05-24: Added the initial minimal Electron shell entry point.
@@ -74,7 +75,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
     height: 820,
     minWidth: 960,
     minHeight: 640,
-    title: 'Agent CLI',
+    title: 'Agent World',
     show: false,
     webPreferences: {
       preload: getPreloadPath(),
@@ -113,7 +114,8 @@ async function createMainWindow(): Promise<BrowserWindow> {
 }
 
 registerIpcHandlers();
-app.setAppUserModelId('com.agentcli.desktop');
+app.setName('Agent World');
+app.setAppUserModelId('com.agentworld.desktop');
 
 app.whenReady().then(async () => {
   await createMainWindow();
@@ -124,7 +126,7 @@ app.whenReady().then(async () => {
     }
   });
 }).catch((error) => {
-  console.error('Failed to start Agent CLI desktop shell:', error);
+  console.error('Failed to start Agent World desktop shell:', error);
   app.quit();
 });
 

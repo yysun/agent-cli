@@ -31,7 +31,7 @@ Recent changes:
 
   try {
     const info = await window.agentCliDesktop.getAppInfo();
-    setText(appName, info.name || 'Agent CLI');
+    setText(appName, info.name || 'Agent World');
     setText(appVersion, info.version || '0.1.0');
     setText(appPlatform, info.platform || 'unknown');
     setText(rendererMode, info.rendererMode || 'electron');

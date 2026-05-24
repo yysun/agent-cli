@@ -1,6 +1,6 @@
 {
-  "appId": "com.agentcli.desktop",
-  "productName": "Agent CLI",
+  "appId": "com.agentworld.desktop",
+  "productName": "Agent World",
   "directories": {
     "output": "release",
     "buildResources": "electron/assets"

@@ -8,6 +8,7 @@
 - Added Electron scripts for build, dev, start, and directory packaging.
 - Simplified `electron:dev` so it launches without a web dev server.
 - Added electron-builder config for a local packaged app directory.
+- Renamed the Electron-facing application identity to `Agent World`.
 - Kept the legacy Agent World Electron runtime out of scope.
 
 ## Verification
@@ -23,6 +24,6 @@
 
 ## Notes
 
-- Electron GUI launch was not run because it opens a local desktop app; the packaged app directory was generated at `release/mac-arm64/Agent CLI.app`.
+- Electron GUI launch was not run because it opens a local desktop app; the packaged app directory was generated at `release/mac-arm64/Agent World.app`.
 - electron-builder used the default Electron icon; custom app branding remains a follow-up.
 - Commit was not created because the worktree contains unrelated untracked 2026-05-23 RPD docs.
