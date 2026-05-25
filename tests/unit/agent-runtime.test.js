@@ -17,6 +17,7 @@
  * - 2026-05-16: Migrated agent-runtime coverage to the `llm-runtime` 0.5.0 loop API.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
 const createRuntime = vi.fn();
 const executeToolCall = vi.fn();
@@ -213,6 +214,10 @@ describe('agent-runtime', () => {
           apiKey: 'test-openai-key',
         },
       },
+      skillRoots: expect.arrayContaining([
+        expect.stringContaining(path.join('.agent-world', 'skills')),
+        expect.stringContaining(path.join('.agent-world', 'worlds', 'default', 'skills')),
+      ]),
       defaults: {
         reasoningEffort: 'medium',
         toolPermission: 'ask',

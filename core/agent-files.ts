@@ -7,7 +7,7 @@
  *
  * Key features:
  * - Reads optional `./AGENTS.md` prompt content without replacing the built-in prompt.
- * - Discovers recursive workspace and selected-world `SKILL.md` files using deterministic lexical ordering.
+ * - Discovers recursive user, workspace, and selected-world `SKILL.md` files using deterministic lexical ordering.
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
@@ -21,7 +21,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { SKILLS_ROOT, SYSTEM_PROMPT_PATH, WORLD_SKILLS_ROOT } from './paths.js';
+import { SKILLS_ROOT, SYSTEM_PROMPT_PATH, USER_SKILLS_ROOT, WORLD_SKILLS_ROOT } from './paths.js';
 import { ensureWorkspaceWorld } from './workspace-store.js';
 
 export const DEFAULT_SYSTEM_PROMPT = [
@@ -175,8 +175,9 @@ export async function loadProjectSystemPrompt() {
 
 /**
  * @param {string} skillsRoot
+ * @param {'user' | 'project' | 'world'} sourceScope
  */
-async function loadSkillInventoryFromRoot(skillsRoot) {
+async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   try {
     await assertReadableDirectory(skillsRoot, 'skills root');
   } catch (error) {
@@ -204,25 +205,45 @@ async function loadSkillInventoryFromRoot(skillsRoot) {
       skillId: metadata.skillId,
       description: metadata.description,
       sourcePath: skillFilePath,
+      sourceScope,
     });
   }
 
   return skills;
 }
 
-export async function loadSkillInventory() {
+export async function loadSkillInventoryByScope() {
   await ensureWorkspaceWorld();
+  return {
+    user: await loadSkillInventoryFromRoot(USER_SKILLS_ROOT, 'user'),
+    project: await loadSkillInventoryFromRoot(SKILLS_ROOT, 'project'),
+    world: await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT, 'world'),
+  };
+}
+
+/**
+ * @param {{ user: any[], project: any[], world: any[] }} scopedInventory
+ */
+export function flattenSkillInventoryByPrecedence(scopedInventory) {
   const skillsById = new Map();
 
-  for (const skill of await loadSkillInventoryFromRoot(SKILLS_ROOT)) {
+  for (const skill of scopedInventory.user) {
     skillsById.set(skill.skillId, skill);
   }
 
-  for (const skill of await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT)) {
+  for (const skill of scopedInventory.project) {
+    skillsById.set(skill.skillId, skill);
+  }
+
+  for (const skill of scopedInventory.world) {
     skillsById.set(skill.skillId, skill);
   }
 
   return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
+}
+
+export async function loadSkillInventory() {
+  return flattenSkillInventoryByPrecedence(await loadSkillInventoryByScope());
 }
 
 /**

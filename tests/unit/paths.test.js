@@ -18,6 +18,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
+import os from 'node:os';
 
 const originalCwd = process.cwd();
 
@@ -38,6 +39,7 @@ describe('paths', () => {
     expect(paths.WORKSPACE_ROOT).toBe(cwdRoot);
     expect(paths.REPO_ROOT).toBe(cwdRoot);
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(cwdRoot, 'AGENTS.md'));
+    expect(paths.USER_SKILLS_ROOT).toBe(path.join(os.homedir(), '.agent-world', 'skills'));
     expect(paths.AGENT_WORLD_ROOT).toBe(path.join(cwdRoot, '.agent-world'));
     expect(paths.SKILLS_ROOT).toBe(path.join(cwdRoot, '.agent-world', 'skills'));
     expect(paths.WORLD_STATE_PATH).toBe(path.join(cwdRoot, '.agent-world', 'worlds', 'default', 'world.json'));
@@ -70,6 +72,7 @@ describe('paths', () => {
     expect(process.env.AGENT_CLI_WORKSPACE).toBe(overrideRoot);
     expect(paths.REPO_ROOT).toBe(overrideRoot);
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'AGENTS.md'));
+    expect(paths.USER_SKILLS_ROOT).toBe(path.join(os.homedir(), '.agent-world', 'skills'));
     expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agent-world', 'skills'));
     expect(paths.WORLD_STATE_PATH).toBe(path.join(overrideRoot, '.agent-world', 'worlds', 'default', 'world.json'));
     expect(paths.REMOTE_HOST_LOCK_PATH).toBe(

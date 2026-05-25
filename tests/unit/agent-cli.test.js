@@ -28,6 +28,7 @@ import {
   ensureSkillsRoot,
   readJson,
   removeTestRoot,
+  writeSkill,
   writeSystemPrompt,
 } from '../helpers/test-root.js';
 
@@ -40,6 +41,7 @@ const CLI_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
   'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
+  'HOME',
   'OLLAMA_BASE_URL',
   'OPENAI_API_KEY',
 ];
@@ -658,13 +660,25 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('logs workspace root, agent id, provider, and model on startup', async () => {
+  it('logs workspace root, agent id, runtime, and scoped skills on startup', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+    const homeRoot = await createTestRoot();
+    rootsToClean.push(rootPath, homeRoot);
+    process.env.HOME = homeRoot;
     await ensureSkillsRoot(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
+    await writeSkill(rootPath, 'project-tool', {
+      name: 'project-skill',
+      description: 'Project skill.',
+    });
+    await mkdir(path.join(homeRoot, '.agent-world', 'skills', 'user-tool'), { recursive: true });
+    await writeFile(
+      path.join(homeRoot, '.agent-world', 'skills', 'user-tool', 'SKILL.md'),
+      ['---', 'name: user-skill', 'description: User skill.', '---', '', '# User', ''].join('\n'),
+      'utf8',
+    );
 
     const { runCli } = await loadCliModule(rootPath, {
       runtimeClient: {
@@ -680,7 +694,11 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toBe('');
     expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
     expect(io.getStderr()).toContain('Agent CLI agent id: default');
-    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).toContain('Runtime: provider=openai, model=gpt-5');
+    expect(io.getStderr()).toContain('Skills available:');
+    expect(io.getStderr()).toContain('  user: user-skill');
+    expect(io.getStderr()).toContain('  project: project-skill');
+    expect(io.getStderr()).toContain('  world: none');
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
@@ -720,7 +738,7 @@ describe('agent-cli entrypoint', () => {
     await runCli(['--verbose', 'hello'], io);
 
     expect(io.getStderr()).toContain('Agent CLI agent id: default');
-    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).toContain('Runtime: provider=openai, model=gpt-5');
     expect(io.getStderr()).not.toContain('unsupported-provider');
     expect(runChatTurn).toHaveBeenCalled();
   });
@@ -749,7 +767,7 @@ describe('agent-cli entrypoint', () => {
     await runCli(['--agent-id', 'research', 'hello'], io);
 
     expect(io.getStderr()).toContain('Agent CLI agent id: research');
-    expect(io.getStderr()).toContain('provider=openai model=gpt-5-mini');
+    expect(io.getStderr()).toContain('Runtime: provider=openai, model=gpt-5-mini');
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
@@ -777,7 +795,7 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStderr()).toContain(`Agent CLI starting in ${process.cwd()}`);
     expect(io.getStderr()).toContain('Agent CLI agent id: default');
-    expect(io.getStderr()).toContain('provider=openai model=gpt-5');
+    expect(io.getStderr()).toContain('Runtime: provider=openai, model=gpt-5');
     expect(io.getStderr()).toContain('Synthetic turn failure');
     expect(process.exitCode).toBe(1);
 
@@ -988,7 +1006,7 @@ describe('agent-cli entrypoint', () => {
       'hello',
     ], io);
 
-    expect(io.getStderr()).toContain('provider=google model=gemini-2.5-pro');
+    expect(io.getStderr()).toContain('Runtime: provider=google, model=gemini-2.5-pro');
     expect(runChatTurn).toHaveBeenCalledWith(expect.objectContaining({
       historyMessageLimit: 9,
       agentConfig: expect.objectContaining({

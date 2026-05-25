@@ -21,6 +21,7 @@
  * - 2026-05-23: Added workspace registry and selected-world path roots for multi-world storage.
  */
 import path from 'node:path';
+import os from 'node:os';
 
 export const WORKSPACE_ROOT_ENV_KEY = 'AGENT_CLI_WORKSPACE';
 export const WORLD_ID_ENV_KEY = 'AGENT_CLI_WORLD';
@@ -41,6 +42,7 @@ function resolveWorkspaceRoot(workspaceRoot?: string): string {
 export let WORKSPACE_ROOT = '';
 export let REPO_ROOT = '';
 export let SYSTEM_PROMPT_PATH = '';
+export let USER_SKILLS_ROOT = '';
 export let SKILLS_ROOT = '';
 export let AGENT_WORLD_ROOT = '';
 export let WORKSPACE_REGISTRY_PATH = '';
@@ -77,6 +79,7 @@ export function configureWorkspaceRoot(
   }
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, 'AGENTS.md');
+  USER_SKILLS_ROOT = path.join(os.homedir(), '.agent-world', 'skills');
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, '.agent-world');
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, 'skills');
   WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, 'registry.json');

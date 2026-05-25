@@ -27,7 +27,7 @@ import {
 } from 'llm-runtime';
 
 import { buildSkillInventoryMessage } from './agent-files.js';
-import { SKILLS_ROOT, WORKSPACE_ROOT } from './paths.js';
+import { SKILLS_ROOT, USER_SKILLS_ROOT, WORKSPACE_ROOT, WORLD_SKILLS_ROOT } from './paths.js';
 
 /** @typedef {import('llm-runtime').LLMChatMessage} LLMChatMessage */
 /** @typedef {import('llm-runtime').LLMEnvironmentOptions} LLMEnvironmentOptions */
@@ -413,7 +413,7 @@ export async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: [SKILLS_ROOT],
+    skillRoots: [USER_SKILLS_ROOT, SKILLS_ROOT, WORLD_SKILLS_ROOT],
     ...(Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}),
   });
 

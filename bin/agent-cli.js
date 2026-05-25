@@ -16,6 +16,7 @@ import { promises as fs2 } from "node:fs";
 
 // core/paths.ts
 import path from "node:path";
+import os from "node:os";
 var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
 var WORLD_ID_ENV_KEY = "AGENT_CLI_WORLD";
 function resolveWorkspaceRoot(workspaceRoot) {
@@ -28,6 +29,7 @@ function resolveWorkspaceRoot(workspaceRoot) {
 var WORKSPACE_ROOT = "";
 var REPO_ROOT = "";
 var SYSTEM_PROMPT_PATH = "";
+var USER_SKILLS_ROOT = "";
 var SKILLS_ROOT = "";
 var AGENT_WORLD_ROOT = "";
 var WORKSPACE_REGISTRY_PATH = "";
@@ -58,6 +60,7 @@ function configureWorkspaceRoot(workspaceRoot, options = {}) {
   }
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
+  USER_SKILLS_ROOT = path.join(os.homedir(), ".agent-world", "skills");
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
   WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, "registry.json");
@@ -573,7 +576,7 @@ async function loadWorkspaceSystemPrompt() {
   const content = (await fs3.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
   return content;
 }
-async function loadSkillInventoryFromRoot(skillsRoot) {
+async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   try {
     await assertReadableDirectory(skillsRoot, "skills root");
   } catch (error) {
@@ -593,18 +596,29 @@ async function loadSkillInventoryFromRoot(skillsRoot) {
     skills.push({
       skillId: metadata.skillId,
       description: metadata.description,
-      sourcePath: skillFilePath
+      sourcePath: skillFilePath,
+      sourceScope
     });
   }
   return skills;
 }
-async function loadSkillInventory() {
+async function loadSkillInventoryByScope() {
   await ensureWorkspaceWorld();
+  return {
+    user: await loadSkillInventoryFromRoot(USER_SKILLS_ROOT, "user"),
+    project: await loadSkillInventoryFromRoot(SKILLS_ROOT, "project"),
+    world: await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT, "world")
+  };
+}
+function flattenSkillInventoryByPrecedence(scopedInventory) {
   const skillsById = /* @__PURE__ */ new Map();
-  for (const skill of await loadSkillInventoryFromRoot(SKILLS_ROOT)) {
+  for (const skill of scopedInventory.user) {
     skillsById.set(skill.skillId, skill);
   }
-  for (const skill of await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT)) {
+  for (const skill of scopedInventory.project) {
+    skillsById.set(skill.skillId, skill);
+  }
+  for (const skill of scopedInventory.world) {
     skillsById.set(skill.skillId, skill);
   }
   return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
@@ -2222,7 +2236,7 @@ async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: [SKILLS_ROOT],
+    skillRoots: [USER_SKILLS_ROOT, SKILLS_ROOT, WORLD_SKILLS_ROOT],
     ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
   });
   const pendingUserMessage = {
@@ -3589,7 +3603,7 @@ function usageText() {
     "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
   ].join("\n");
 }
-function startupText(cwd = WORKSPACE_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings) {
+function startupText(cwd = WORKSPACE_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings, scopedSkills) {
   const lines = [
     `Agent CLI starting in ${cwd}`,
     `Agent CLI agent id: ${agentId}`
@@ -3597,10 +3611,27 @@ function startupText(cwd = WORKSPACE_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeS
   if (runtimeSettings) {
     lines.push(runtimeSelectionText(runtimeSettings));
   }
+  if (scopedSkills) {
+    lines.push(skillStartupText(scopedSkills));
+  }
   return lines.join("\n");
 }
 function runtimeSelectionText(runtimeSettings) {
-  return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
+  return `Runtime: provider=${runtimeSettings.provider}, model=${runtimeSettings.model}`;
+}
+function formatSkillIds(skills) {
+  if (skills.length === 0) {
+    return "none";
+  }
+  return skills.map((skill) => skill.skillId).sort((left, right) => left.localeCompare(right)).join(", ");
+}
+function skillStartupText(scopedSkills) {
+  return [
+    "Skills available:",
+    `  user: ${formatSkillIds(scopedSkills.user)}`,
+    `  project: ${formatSkillIds(scopedSkills.project)}`,
+    `  world: ${formatSkillIds(scopedSkills.world)}`
+  ].join("\n");
 }
 function createDefaultInteractivePrompt() {
   return createInterface({
@@ -4041,12 +4072,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     agentId: options.agentId ?? selectedAgentId
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
-  if (options.startupDiagnostics) {
-    (io.stderr ?? process.stderr).write(
-      `${startupText(WORKSPACE_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}
-`
-    );
-  }
   if (!newAgentId && !agentId) {
     await ensureAgentSelection({
       agentId: selectedAgentId,
@@ -4057,11 +4082,23 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
   if (!remoteControl) {
     await assertNoActiveRemoteHost();
   }
-  const [workspaceSystemPrompt, skillInventory, chat] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
     loadWorkspaceSystemPrompt(),
-    loadSkillInventory(),
+    loadSkillInventoryByScope(),
     loadRequestedChat({ newChat, agentId: selectedAgentId })
   ]);
+  const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
+  if (options.startupDiagnostics) {
+    (io.stderr ?? process.stderr).write(
+      `${startupText(
+        WORKSPACE_ROOT,
+        selectedAgentId,
+        runtimeSettingsForStartup(agentConfig),
+        scopedSkillInventory
+      )}
+`
+    );
+  }
   const executeTurn = createTurnExecutor({
     io,
     verbose,
@@ -4163,6 +4200,7 @@ export {
   readRemoteRelayServerUrl,
   runCli,
   runtimeSelectionText,
+  skillStartupText,
   startupText,
   usageText
 };

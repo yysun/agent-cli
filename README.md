@@ -126,6 +126,7 @@ The deterministic relay and remote-host e2e coverage confirms that a real `agent
 
 - System prompt: `./AGENTS.md`
 - Workspace skills root: `./.agent-world/skills/`
+- User skills root: `~/.agent-world/skills/`
 - Durable workspace state root: `./.agent-world/`
 
 Durable local state lives under `./.agent-world/`:
@@ -145,11 +146,11 @@ While a CLI process is running in `--remote` mode for a world, other CLI invocat
 The CLI always includes a built-in default system prompt.
 If `./AGENTS.md` is present and non-empty, its content is added after the built-in prompt and before tools/skills guidance.
 If `./AGENTS.md` is missing or empty, the CLI continues with only the built-in prompt.
-If `./.agent-world/skills/` and the selected world's `skills/` directory are missing, the CLI continues with an empty skill inventory.
+If `~/.agent-world/skills/`, `./.agent-world/skills/`, and the selected world's `skills/` directory are missing, the CLI continues with an empty skill inventory.
 
 The CLI uses `--workspace <path>` as the workspace root when provided, otherwise legacy `--project <path>`, otherwise `AGENT_CLI_WORKSPACE`, otherwise `AGENT_CLI_WORKSPACE` from the current working directory's `.env`, otherwise the current working directory. The resolved absolute root is published back to `AGENT_CLI_WORKSPACE`. `AGENTS.md`, workspace skills, `.agent-world/` workspace storage, and the agent tool working directory resolve from that workspace root. The local `.env` lookup resolves from the invocation cwd. `--world <id>` or `AGENT_CLI_WORLD` selects a world inside the workspace; otherwise the workspace registry's current world is used.
 
-Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `./.agent-world/skills/` and `./.agent-world/worlds/{worldId}/skills/`. World-level skills override workspace-level skills with the same `skillId`.
+Skills follow `llm-runtime` conventions and are discovered from recursive `SKILL.md` files under `~/.agent-world/skills/`, `./.agent-world/skills/`, and `./.agent-world/worlds/{worldId}/skills/`. Precedence is world over project over user for duplicate `skillId`s. Startup diagnostics print the available skill IDs by scope.
 
 ### Runtime Configuration
 

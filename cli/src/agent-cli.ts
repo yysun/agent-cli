@@ -27,7 +27,11 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
-import { loadSkillInventory, loadWorkspaceSystemPrompt } from '../../core/agent-files.js';
+import {
+  flattenSkillInventoryByPrecedence,
+  loadSkillInventoryByScope,
+  loadWorkspaceSystemPrompt,
+} from '../../core/agent-files.js';
 import {
   WORKSPACE_ROOT,
   WORKSPACE_ROOT_ENV_KEY,
@@ -121,6 +125,7 @@ export function startupText(
   cwd = WORKSPACE_ROOT,
   agentId = DEFAULT_AGENT_ID,
   runtimeSettings?: { provider: string; model: string },
+  scopedSkills?: SkillScopesForStartup,
 ): string {
   const lines = [
     `Agent CLI starting in ${cwd}`,
@@ -131,11 +136,38 @@ export function startupText(
     lines.push(runtimeSelectionText(runtimeSettings));
   }
 
+  if (scopedSkills) {
+    lines.push(skillStartupText(scopedSkills));
+  }
+
   return lines.join('\n');
 }
 
 export function runtimeSelectionText(runtimeSettings: { provider: string; model: string }): string {
-  return `provider=${runtimeSettings.provider} model=${runtimeSettings.model}`;
+  return `Runtime: provider=${runtimeSettings.provider}, model=${runtimeSettings.model}`;
+}
+
+type SkillScopesForStartup = {
+  user: Array<{ skillId: string }>;
+  project: Array<{ skillId: string }>;
+  world: Array<{ skillId: string }>;
+};
+
+function formatSkillIds(skills: Array<{ skillId: string }>): string {
+  if (skills.length === 0) {
+    return 'none';
+  }
+
+  return skills.map((skill) => skill.skillId).sort((left, right) => left.localeCompare(right)).join(', ');
+}
+
+export function skillStartupText(scopedSkills: SkillScopesForStartup): string {
+  return [
+    'Skills available:',
+    `  user: ${formatSkillIds(scopedSkills.user)}`,
+    `  project: ${formatSkillIds(scopedSkills.project)}`,
+    `  world: ${formatSkillIds(scopedSkills.world)}`,
+  ].join('\n');
 }
 
 function createDefaultInteractivePrompt(): InteractivePrompt {
@@ -698,12 +730,6 @@ export async function main(
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
 
-  if (options.startupDiagnostics) {
-    (io.stderr ?? process.stderr).write(
-      `${startupText(WORKSPACE_ROOT, selectedAgentId, runtimeSettingsForStartup(agentConfig))}\n`,
-    );
-  }
-
   if (!newAgentId && !agentId) {
     await ensureAgentSelection({
       agentId: selectedAgentId,
@@ -716,11 +742,24 @@ export async function main(
     await assertNoActiveRemoteHost();
   }
 
-  const [workspaceSystemPrompt, skillInventory, chat] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
     loadWorkspaceSystemPrompt(),
-    loadSkillInventory(),
+    loadSkillInventoryByScope(),
     loadRequestedChat({ newChat, agentId: selectedAgentId }),
   ]);
+  const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
+
+  if (options.startupDiagnostics) {
+    (io.stderr ?? process.stderr).write(
+      `${startupText(
+        WORKSPACE_ROOT,
+        selectedAgentId,
+        runtimeSettingsForStartup(agentConfig),
+        scopedSkillInventory,
+      )}\n`,
+    );
+  }
+
   const executeTurn = createTurnExecutor({
     io,
     verbose,

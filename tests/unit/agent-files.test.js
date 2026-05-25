@@ -26,10 +26,15 @@ import { createTestRoot, ensureSkillsRoot, removeTestRoot, writeSkill, writeSyst
 /** @type {string[]} */
 const rootsToClean = [];
 const originalCwd = process.cwd();
+const originalHome = process.env.HOME;
 
-/** @param {string} rootPath */
-async function loadAgentFiles(rootPath) {
+/**
+ * @param {string} rootPath
+ * @param {string} [homePath]
+ */
+async function loadAgentFiles(rootPath, homePath = rootPath) {
   process.chdir(rootPath);
+  process.env.HOME = homePath;
   vi.resetModules();
   return await import('../../core/agent-files.js');
 }
@@ -37,6 +42,11 @@ async function loadAgentFiles(rootPath) {
 afterEach(async () => {
   process.chdir(originalCwd);
   delete process.env.AGENT_CLI_WORLD;
+  if (typeof originalHome === 'undefined') {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = originalHome;
+  }
   vi.doUnmock('node:fs');
 
   while (rootsToClean.length > 0) {
@@ -80,11 +90,25 @@ describe('agent-files', () => {
     ]);
   });
 
-  it('layers selected-world skills over workspace skills while keeping AGENTS.md workspace-only', async () => {
+  it('layers user, workspace, and selected-world skills while keeping AGENTS.md workspace-only', async () => {
     const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+    const homeRoot = await createTestRoot();
+    rootsToClean.push(rootPath, homeRoot);
+    process.env.HOME = homeRoot;
 
     await writeSystemPrompt(rootPath, 'Workspace-only prompt');
+    await mkdir(path.join(homeRoot, '.agent-world', 'skills', 'user-only'), { recursive: true });
+    await writeFile(
+      path.join(homeRoot, '.agent-world', 'skills', 'user-only', 'SKILL.md'),
+      ['---', 'name: user-skill', 'description: User only.', '---', '', '# User', ''].join('\n'),
+      'utf8',
+    );
+    await mkdir(path.join(homeRoot, '.agent-world', 'skills', 'duplicate'), { recursive: true });
+    await writeFile(
+      path.join(homeRoot, '.agent-world', 'skills', 'duplicate', 'SKILL.md'),
+      ['---', 'name: duplicate-skill', 'description: User duplicate.', '---', '', '# User duplicate', ''].join('\n'),
+      'utf8',
+    );
     await writeSkill(rootPath, 'shared', {
       name: 'shared-skill',
       description: 'Workspace shared.',
@@ -109,16 +133,32 @@ describe('agent-files', () => {
     await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'research', 'AGENTS.md'), 'Wrong prompt\n', 'utf8');
     process.env.AGENT_CLI_WORLD = 'research';
 
-    const { loadSkillInventory, loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
+    const { loadSkillInventory, loadSkillInventoryByScope, loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath, homeRoot);
 
     await expect(loadWorkspaceSystemPrompt()).resolves.toBe('Workspace-only prompt');
+    await expect(loadSkillInventoryByScope()).resolves.toMatchObject({
+      user: [
+        expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'user' }),
+        expect.objectContaining({ skillId: 'user-skill', sourceScope: 'user' }),
+      ],
+      project: [
+        expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'project' }),
+        expect.objectContaining({ skillId: 'shared-skill', sourceScope: 'project' }),
+      ],
+      world: [
+        expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'world' }),
+        expect.objectContaining({ skillId: 'world-skill', sourceScope: 'world' }),
+      ],
+    });
     await expect(loadSkillInventory()).resolves.toEqual([
       expect.objectContaining({
         skillId: 'duplicate-skill',
         description: 'World duplicate.',
+        sourceScope: 'world',
         sourcePath: expect.stringContaining(path.join('worlds', 'research', 'skills')),
       }),
       expect.objectContaining({ skillId: 'shared-skill', description: 'Workspace shared.' }),
+      expect.objectContaining({ skillId: 'user-skill', description: 'User only.' }),
       expect.objectContaining({ skillId: 'world-skill', description: 'World only.' }),
     ]);
   });
