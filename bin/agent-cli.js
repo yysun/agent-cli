@@ -224,6 +224,8 @@ var WORKSPACE_ROOT = "";
 var REPO_ROOT = "";
 var SYSTEM_PROMPT_PATH = "";
 var USER_SKILLS_ROOT = "";
+var AGENTS_SKILLS_ROOT = "";
+var GLOBAL_SKILLS_ROOTS = [];
 var SKILLS_ROOT = "";
 var AGENT_WORLD_ROOT = "";
 var AGENT_WORLD_CHATS_ROOT = "";
@@ -236,6 +238,8 @@ function configureWorkspaceRoot(workspaceRoot, options = {}) {
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
   USER_SKILLS_ROOT = path.join(os.homedir(), ".agent-world", "skills");
+  AGENTS_SKILLS_ROOT = path.join(os.homedir(), ".agents", "skills");
+  GLOBAL_SKILLS_ROOTS = [USER_SKILLS_ROOT, AGENTS_SKILLS_ROOT];
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
@@ -279,6 +283,7 @@ async function ensureWorkspaceWorld() {
 }
 
 // core/agent-files.ts
+var GLOBAL_SKILLS_ENV_KEY = "AGENT_CLI_GLOBAL_SKILLS";
 var DEFAULT_SYSTEM_PROMPT = [
   "You are Agent CLI.",
   "Be concise, factual, and action-oriented.",
@@ -404,10 +409,20 @@ async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   }
   return skills;
 }
+function isGlobalSkillLoadingEnabled(environment = process.env) {
+  const normalized = String(environment[GLOBAL_SKILLS_ENV_KEY] ?? "").trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+}
+async function loadGlobalSkillInventory(skillRoots) {
+  const scopedSkills = await Promise.all(
+    skillRoots.map((skillRoot) => loadSkillInventoryFromRoot(skillRoot, "user"))
+  );
+  return scopedSkills.flat();
+}
 async function loadSkillInventoryByScope() {
   await ensureWorkspaceWorld();
   return {
-    user: await loadSkillInventoryFromRoot(USER_SKILLS_ROOT, "user"),
+    user: isGlobalSkillLoadingEnabled() ? await loadGlobalSkillInventory(GLOBAL_SKILLS_ROOTS) : [],
     project: await loadSkillInventoryFromRoot(SKILLS_ROOT, "project")
   };
 }
@@ -463,22 +478,24 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AGENT_CLI_STREAM",
   "AGENT_CLI_STREAM_TRACE",
   "AGENT_CLI_WEB_SEARCH",
+  "AGENT_CLI_GLOBAL_SKILLS",
   WORKSPACE_ROOT_ENV_KEY
 ]);
 var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials, Agent CLI runtime defaults, and optional workspace selection.
 # CLI flags override these runtime defaults.
 
 # Agent CLI runtime
-AGENT_CLI_PROVIDER=openai
-AGENT_CLI_MODEL=gpt-5
-# AGENT_CLI_TEMPERATURE=0.2
-# AGENT_CLI_MAX_TOKENS=4096
-# AGENT_CLI_TOOL_PERMISSION=ask
-# AGENT_CLI_REASONING_EFFORT=medium
-# AGENT_CLI_PAST_MESSAGES=20
-# AGENT_CLI_STREAM=true
-# AGENT_CLI_STREAM_TRACE=false
-# AGENT_CLI_WEB_SEARCH=false
+AGENT_CLI_PROVIDER=ollama
+AGENT_CLI_MODEL=emma4:e4b
+AGENT_CLI_TEMPERATURE=1
+AGENT_CLI_MAX_TOKENS=4096
+AGENT_CLI_TOOL_PERMISSION=ask
+AGENT_CLI_REASONING_EFFORT=medium
+AGENT_CLI_PAST_MESSAGES=20
+AGENT_CLI_STREAM=true
+AGENT_CLI_STREAM_TRACE=false
+AGENT_CLI_WEB_SEARCH=false
+AGENT_CLI_GLOBAL_SKILLS=false
 
 # Provider credentials
 OPENAI_API_KEY=

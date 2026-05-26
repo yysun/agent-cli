@@ -6,6 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-05-26: Added `.env` and startup coverage for opt-in global skill loading.
  * - 2026-05-26: Removed world and agent selection tests after flattening storage.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +42,7 @@ const CLI_ENVIRONMENT_KEYS = [
   'AGENT_CLI_STREAM',
   'AGENT_CLI_STREAM_TRACE',
   'AGENT_CLI_WEB_SEARCH',
+  'AGENT_CLI_GLOBAL_SKILLS',
   'GOOGLE_API_KEY',
   'HOME',
   'OLLAMA_BASE_URL',
@@ -387,6 +389,7 @@ describe('agent-cli entrypoint', () => {
       ['---', 'name: user-skill', 'description: User skill.', '---', '', '# User', ''].join('\n'),
       'utf8',
     );
+    process.env.AGENT_CLI_GLOBAL_SKILLS = 'true';
 
     const { runCli } = await loadCliModule(rootPath, {
       runtimeClient: {
@@ -430,6 +433,7 @@ describe('agent-cli entrypoint', () => {
         'AGENT_CLI_STREAM=false',
         'AGENT_CLI_STREAM_TRACE=true',
         'AGENT_CLI_WEB_SEARCH=medium',
+        'AGENT_CLI_GLOBAL_SKILLS=true',
         'GOOGLE_API_KEY=dotenv-google-key',
         '',
       ].join('\n'),
@@ -447,6 +451,7 @@ describe('agent-cli entrypoint', () => {
     delete process.env.AGENT_CLI_STREAM;
     delete process.env.AGENT_CLI_STREAM_TRACE;
     delete process.env.AGENT_CLI_WEB_SEARCH;
+    delete process.env.AGENT_CLI_GLOBAL_SKILLS;
     delete process.env.GOOGLE_API_KEY;
 
     const { main, startupText } = await loadCliModule(cwdRoot);
@@ -463,16 +468,18 @@ describe('agent-cli entrypoint', () => {
     expect(process.env.AGENT_CLI_STREAM).toBe('false');
     expect(process.env.AGENT_CLI_STREAM_TRACE).toBe('true');
     expect(process.env.AGENT_CLI_WEB_SEARCH).toBe('medium');
+    expect(process.env.AGENT_CLI_GLOBAL_SKILLS).toBe('true');
     expect(process.env.AGENT_CLI_WORKSPACE).toBe(path.resolve('workspace-from-dotenv'));
     expect(startupText()).toBe(`Agent CLI starting in ${path.resolve('workspace-from-dotenv')}`);
 
     const { main: missingEnvMain } = await loadCliModule(emptyCwdRoot);
     await missingEnvMain(['--help'], createIoCapture());
     const example = await readFile(path.join(emptyCwdRoot, '.env.example'), 'utf8');
-    expect(example).toContain('AGENT_CLI_PROVIDER=openai');
-    expect(example).toContain('AGENT_CLI_MODEL=gpt-5');
-    expect(example).toContain('# AGENT_CLI_TEMPERATURE=0.2');
-    expect(example).toContain('# AGENT_CLI_MAX_TOKENS=4096');
+    expect(example).toContain('AGENT_CLI_PROVIDER=ollama');
+    expect(example).toContain('AGENT_CLI_MODEL=emma4:e4b');
+    expect(example).toContain('AGENT_CLI_TEMPERATURE=1');
+    expect(example).toContain('AGENT_CLI_MAX_TOKENS=4096');
+    expect(example).toContain('AGENT_CLI_GLOBAL_SKILLS=false');
     expect(example).toContain('# AGENT_CLI_WORKSPACE=');
   });
 

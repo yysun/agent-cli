@@ -11,6 +11,7 @@
  * - Limits `.env` imports to provider credentials, Agent CLI runtime defaults, and optional workspace selection.
  *
  * Recent changes:
+ * - 2026-05-26: Allowed `AGENT_CLI_GLOBAL_SKILLS` in cwd `.env` for opt-in home skill loading.
  * - 2026-05-26: Added LLM-time runtime defaults to allowed `.env` keys.
  * - 2026-05-26: Added `AGENT_CLI_PROVIDER` and `AGENT_CLI_MODEL` runtime defaults.
  * - 2026-05-26: Removed relay configuration from `.env` handling.
@@ -49,6 +50,7 @@ export const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'AGENT_CLI_STREAM',
   'AGENT_CLI_STREAM_TRACE',
   'AGENT_CLI_WEB_SEARCH',
+  'AGENT_CLI_GLOBAL_SKILLS',
   WORKSPACE_ROOT_ENV_KEY,
 ]);
 
@@ -66,6 +68,7 @@ AGENT_CLI_PAST_MESSAGES=20
 AGENT_CLI_STREAM=true
 AGENT_CLI_STREAM_TRACE=false
 AGENT_CLI_WEB_SEARCH=false
+AGENT_CLI_GLOBAL_SKILLS=false
 
 # Provider credentials
 OPENAI_API_KEY=

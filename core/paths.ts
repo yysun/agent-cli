@@ -11,6 +11,7 @@
  * - Uses `.agent-world/chats` for chat state and `.agent-world/skills` for workspace skills.
  *
  * Recent changes:
+ * - 2026-05-26: Added explicit global skill roots for opt-in home-directory skill loading.
  * - 2026-05-26: Flattened storage by removing workspace registry, worlds, world ids, and agent paths.
  * - 2026-05-26: Switched workspace skill storage back to `.agent-world/skills`.
  */
@@ -36,6 +37,8 @@ export let WORKSPACE_ROOT = '';
 export let REPO_ROOT = '';
 export let SYSTEM_PROMPT_PATH = '';
 export let USER_SKILLS_ROOT = '';
+export let AGENTS_SKILLS_ROOT = '';
+export let GLOBAL_SKILLS_ROOTS: string[] = [];
 export let SKILLS_ROOT = '';
 export let AGENT_WORLD_ROOT = '';
 export let AGENT_WORLD_CHATS_ROOT = '';
@@ -53,6 +56,8 @@ export function configureWorkspaceRoot(
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, 'AGENTS.md');
   USER_SKILLS_ROOT = path.join(os.homedir(), '.agent-world', 'skills');
+  AGENTS_SKILLS_ROOT = path.join(os.homedir(), '.agents', 'skills');
+  GLOBAL_SKILLS_ROOTS = [USER_SKILLS_ROOT, AGENTS_SKILLS_ROOT];
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, '.agent-world');
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, 'skills');
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, 'chats');

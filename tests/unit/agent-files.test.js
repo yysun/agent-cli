@@ -6,6 +6,7 @@
  * - Validate AGENTS.md prompt loading and `SKILL.md` inventory behavior.
  *
  * Recent changes:
+ * - 2026-05-26: Added opt-in global skill loading coverage for both home skill roots.
  * - 2026-05-26: Removed selected-world skills and switched workspace skills to `.agent-world/skills`.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,7 @@ import { createTestRoot, ensureSkillsRoot, removeTestRoot, writeSkill, writeSyst
 const rootsToClean = [];
 const originalCwd = process.cwd();
 const originalHome = process.env.HOME;
+const originalGlobalSkills = process.env.AGENT_CLI_GLOBAL_SKILLS;
 
 /**
  * @param {string} rootPath
@@ -36,6 +38,11 @@ afterEach(async () => {
     delete process.env.HOME;
   } else {
     process.env.HOME = originalHome;
+  }
+  if (typeof originalGlobalSkills === 'undefined') {
+    delete process.env.AGENT_CLI_GLOBAL_SKILLS;
+  } else {
+    process.env.AGENT_CLI_GLOBAL_SKILLS = originalGlobalSkills;
   }
   vi.doUnmock('node:fs');
 
@@ -86,10 +93,41 @@ describe('agent-files', () => {
     ]);
   });
 
-  it('layers user and workspace skills, with workspace overriding duplicate ids', async () => {
+  it('does not load home-directory skills unless global skills are enabled', async () => {
     const rootPath = await createTestRoot();
     const homeRoot = await createTestRoot();
     rootsToClean.push(rootPath, homeRoot);
+
+    await mkdir(path.join(homeRoot, '.agent-world', 'skills', 'user-only'), { recursive: true });
+    await writeFile(
+      path.join(homeRoot, '.agent-world', 'skills', 'user-only', 'SKILL.md'),
+      ['---', 'name: user-skill', 'description: User only.', '---', '', '# User', ''].join('\n'),
+      'utf8',
+    );
+    await writeSkill(rootPath, 'workspace-only', {
+      name: 'workspace-skill',
+      description: 'Workspace only.',
+    });
+    delete process.env.AGENT_CLI_GLOBAL_SKILLS;
+
+    const { loadSkillInventory, loadSkillInventoryByScope } = await loadAgentFiles(rootPath, homeRoot);
+
+    await expect(loadSkillInventoryByScope()).resolves.toMatchObject({
+      user: [],
+      project: [
+        expect.objectContaining({ skillId: 'workspace-skill', sourceScope: 'project' }),
+      ],
+    });
+    await expect(loadSkillInventory()).resolves.toEqual([
+      expect.objectContaining({ skillId: 'workspace-skill', description: 'Workspace only.' }),
+    ]);
+  });
+
+  it('layers global and workspace skills, with workspace overriding duplicate ids', async () => {
+    const rootPath = await createTestRoot();
+    const homeRoot = await createTestRoot();
+    rootsToClean.push(rootPath, homeRoot);
+    process.env.AGENT_CLI_GLOBAL_SKILLS = 'true';
 
     await mkdir(path.join(homeRoot, '.agent-world', 'skills', 'user-only'), { recursive: true });
     await writeFile(
@@ -101,6 +139,12 @@ describe('agent-files', () => {
     await writeFile(
       path.join(homeRoot, '.agent-world', 'skills', 'duplicate', 'SKILL.md'),
       ['---', 'name: duplicate-skill', 'description: User duplicate.', '---', '', '# User duplicate', ''].join('\n'),
+      'utf8',
+    );
+    await mkdir(path.join(homeRoot, '.agents', 'skills', 'agents-only'), { recursive: true });
+    await writeFile(
+      path.join(homeRoot, '.agents', 'skills', 'agents-only', 'SKILL.md'),
+      ['---', 'name: agents-skill', 'description: Agents only.', '---', '', '# Agents', ''].join('\n'),
       'utf8',
     );
     await writeSkill(rootPath, 'shared', {
@@ -118,6 +162,7 @@ describe('agent-files', () => {
       user: [
         expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'user' }),
         expect.objectContaining({ skillId: 'user-skill', sourceScope: 'user' }),
+        expect.objectContaining({ skillId: 'agents-skill', sourceScope: 'user' }),
       ],
       project: [
         expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'project' }),
@@ -125,6 +170,7 @@ describe('agent-files', () => {
       ],
     });
     await expect(loadSkillInventory()).resolves.toEqual([
+      expect.objectContaining({ skillId: 'agents-skill', description: 'Agents only.' }),
       expect.objectContaining({
         skillId: 'duplicate-skill',
         description: 'Workspace duplicate.',

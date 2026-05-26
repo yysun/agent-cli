@@ -7,10 +7,11 @@
  *
  * Key features:
  * - Reads optional `./AGENTS.md` prompt content without replacing the built-in prompt.
- * - Discovers recursive user and workspace `SKILL.md` files using deterministic lexical ordering.
+ * - Discovers recursive workspace `SKILL.md` files and opt-in global skills using deterministic lexical ordering.
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
+ * - 2026-05-26: Gated global skill loading behind `AGENT_CLI_GLOBAL_SKILLS` and added `~/.agents/skills`.
  * - 2026-05-26: Removed selected-world skill discovery and switched workspace skills to `.agent-world/skills`.
  * - 2026-05-23: Renamed AGENTS.md prompt loading terminology from project to workspace.
  * - 2026-05-07: Added agent prompt and skill inventory helpers for the CLI.
@@ -21,8 +22,10 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { SKILLS_ROOT, SYSTEM_PROMPT_PATH, USER_SKILLS_ROOT } from './paths.js';
+import { GLOBAL_SKILLS_ROOTS, SKILLS_ROOT, SYSTEM_PROMPT_PATH } from './paths.js';
 import { ensureWorkspaceWorld } from './workspace-store.js';
+
+export const GLOBAL_SKILLS_ENV_KEY = 'AGENT_CLI_GLOBAL_SKILLS';
 
 export const DEFAULT_SYSTEM_PROMPT = [
   'You are Agent CLI.',
@@ -212,10 +215,31 @@ async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   return skills;
 }
 
+/**
+ * @param {NodeJS.ProcessEnv} [environment]
+ */
+export function isGlobalSkillLoadingEnabled(environment = process.env) {
+  const normalized = String(environment[GLOBAL_SKILLS_ENV_KEY] ?? '').trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+}
+
+/**
+ * @param {string[]} skillRoots
+ */
+async function loadGlobalSkillInventory(skillRoots) {
+  const scopedSkills = await Promise.all(
+    skillRoots.map((skillRoot) => loadSkillInventoryFromRoot(skillRoot, 'user')),
+  );
+
+  return scopedSkills.flat();
+}
+
 export async function loadSkillInventoryByScope() {
   await ensureWorkspaceWorld();
   return {
-    user: await loadSkillInventoryFromRoot(USER_SKILLS_ROOT, 'user'),
+    user: isGlobalSkillLoadingEnabled()
+      ? await loadGlobalSkillInventory(GLOBAL_SKILLS_ROOTS)
+      : [],
     project: await loadSkillInventoryFromRoot(SKILLS_ROOT, 'project'),
   };
 }

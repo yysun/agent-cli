@@ -86,6 +86,7 @@ AGENT_CLI_PAST_MESSAGES=20
 AGENT_CLI_STREAM=true
 AGENT_CLI_STREAM_TRACE=false
 AGENT_CLI_WEB_SEARCH=false
+AGENT_CLI_GLOBAL_SKILLS=false
 ```
 
 CLI flags override `.env`:
@@ -137,6 +138,8 @@ Durable workspace state is flat:
   skills/
     .../SKILL.md
 ```
+
+Workspace skills in `.agent-world/skills` always load. Global skills are opt-in: set `AGENT_CLI_GLOBAL_SKILLS=true` to also load `~/.agent-world/skills` and `~/.agents/skills`. Workspace skills win when skill ids collide.
 
 No `.chats` compatibility path is current. No `.agent-world/worlds`, registry, `world.json`, `agents`, or `agent.json` layout is current.
 
