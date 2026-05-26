@@ -8,19 +8,18 @@
  * Key features:
  * - Bootstraps `world.json`, default-agent records, and chat directories on demand.
  * - Creates and selects named agents under the selected world's `agents/{agentId}`.
- * - Keeps the exported world/chat store API stable for the CLI and remote host.
+ * - Keeps the exported world/chat store API stable for the local CLI and runtime.
  * - Provides structured agent memory and per-chat queue helpers for the world runtime API.
  * - Resolves world-owned state through the workspace registry before touching disk.
  *
  * Recent changes:
+ * - 2026-05-26: Removed relay remote-host lock and session persistence helpers.
  * - 2026-05-24: Preserved existing agent.json runtime settings during agent selection.
  * - 2026-05-24: Retired agent runtime.json writes; agent runtime settings live in agent.json.
  * - 2026-05-23: Routed world state through selected `.agent-world/worlds/{worldId}` roots.
  * - 2026-05-23: Added agent-level memory JSONL and durable per-chat queue persistence.
- * - 2026-05-23: Renamed remote lock diagnostics from project root to workspace root.
  * - 2026-05-20: Added named-agent selection and metadata/runtime initialization.
  * - 2026-05-07: Added file-backed chat persistence for the CLI.
- * - 2026-05-13: Added chat listing and explicit selection helpers for remote multi-client flows.
  * - 2026-05-14: Moved durable storage to `./.agent-world`.
  */
 import { randomUUID } from 'node:crypto';
@@ -43,7 +42,6 @@ import {
   buildWorldChatMetadataPath,
   buildWorldChatSummaryPath,
   buildWorldQueuePath,
-  REMOTE_HOST_LOCK_PATH,
   WORKSPACE_ROOT,
   WORLD_STATE_PATH,
 } from './paths.js';
@@ -289,10 +287,6 @@ async function readJsonl(filePath) {
   }
 }
 
-async function ensureRemoteHostLockDirectory() {
-  await fs.mkdir(path.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
-}
-
 async function ensureAgentWorldDirectories() {
   await ensureWorkspaceWorld();
   await Promise.all([
@@ -301,70 +295,6 @@ async function ensureAgentWorldDirectories() {
     fs.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
     fs.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true }),
   ]);
-}
-
-/** @param {number} pid */
-function isProcessRunning(pid) {
-  if (!Number.isInteger(pid) || pid < 1) {
-    return false;
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return Boolean(
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && error.code === 'EPERM',
-    );
-  }
-}
-
-/** @param {unknown} remoteLock */
-function isActiveRemoteHostLock(remoteLock) {
-  if (!remoteLock || typeof remoteLock !== 'object') {
-    return false;
-  }
-
-  return isProcessRunning(Number(remoteLock.pid));
-}
-
-/** @param {unknown} remoteLock */
-function buildRemoteHostConflictError(remoteLock) {
-  const chatId = String(
-    remoteLock && typeof remoteLock === 'object' && 'chatId' in remoteLock
-      ? remoteLock.chatId ?? ''
-      : '',
-  ).trim();
-  const pid = Number(
-    remoteLock && typeof remoteLock === 'object' && 'pid' in remoteLock
-      ? remoteLock.pid
-      : NaN,
-  );
-  const details = [
-    chatId ? `chat ${chatId}` : null,
-    Number.isInteger(pid) && pid > 0 ? `pid ${pid}` : null,
-  ].filter(Boolean).join(', ');
-
-  return new Error(
-    details
-      ? `Remote mode already active for this workspace root (${details}).`
-      : 'Remote mode already active for this workspace root.',
-  );
-}
-
-async function readRemoteHostLock() {
-  try {
-    return JSON.parse(await fs.readFile(REMOTE_HOST_LOCK_PATH, 'utf8'));
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      return null;
-    }
-
-    return null;
-  }
 }
 
 function createEmptyChat() {
@@ -808,95 +738,6 @@ export async function loadAgentMemory(options = {}) {
   });
 }
 
-export async function assertNoActiveRemoteHost() {
-  await ensureWorkspaceWorld();
-  const remoteLock = await readRemoteHostLock();
-
-  if (!remoteLock) {
-    return null;
-  }
-
-  if (isActiveRemoteHostLock(remoteLock)) {
-    throw buildRemoteHostConflictError(remoteLock);
-  }
-
-  await fs.rm(REMOTE_HOST_LOCK_PATH, { force: true });
-  return null;
-}
-
-/**
- * @param {{ chat: { id: string } }} params
- */
-export async function acquireRemoteHostLock({ chat }) {
-  await ensureWorkspaceWorld();
-  await ensureRemoteHostLockDirectory();
-  const now = new Date().toISOString();
-
-  const remoteLock = {
-    chatId: chat.id,
-    pid: process.pid,
-    startedAt: now,
-    updatedAt: now,
-  };
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await fs.writeFile(
-        REMOTE_HOST_LOCK_PATH,
-        `${JSON.stringify(remoteLock, null, 2)}\n`,
-        { encoding: 'utf8', flag: 'wx' },
-      );
-      return remoteLock;
-    } catch (error) {
-      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') {
-        throw error;
-      }
-
-      const existingRemoteLock = await readRemoteHostLock();
-
-      if (isActiveRemoteHostLock(existingRemoteLock)) {
-        throw buildRemoteHostConflictError(existingRemoteLock);
-      }
-
-      await fs.rm(REMOTE_HOST_LOCK_PATH, { force: true });
-    }
-  }
-
-  throw new Error('Failed to acquire the remote host lock for this workspace root.');
-}
-
-export async function releaseRemoteHostLock() {
-  await ensureWorkspaceWorld();
-  const remoteLock = await readRemoteHostLock();
-
-  if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
-    return false;
-  }
-
-  await fs.rm(REMOTE_HOST_LOCK_PATH, { force: true });
-  return true;
-}
-
-/**
- * @param {{ chatId: string }} params
- */
-export async function updateRemoteHostLock({ chatId }) {
-  await ensureWorkspaceWorld();
-  const remoteLock = await readRemoteHostLock();
-
-  if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
-    return false;
-  }
-
-  await writeJsonAtomic(REMOTE_HOST_LOCK_PATH, {
-    ...remoteLock,
-    chatId,
-    updatedAt: new Date().toISOString(),
-  });
-
-  return true;
-}
-
 /**
  * @param {string} chatId
  */
@@ -1103,29 +944,6 @@ export async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
   })));
 
   return eventsPath;
-}
-
-/**
- * @param {{
- *   chatId?: string,
- *   remoteSession: Record<string, unknown>,
- * }} params
- */
-export async function persistRemoteSessionState({ chatId, remoteSession }) {
-  const world = await ensureWorldBootstrap();
-  const statePath = buildAgentStatePath(String(world.defaultAgentId));
-  const existingState = await readJsonIfPresent(statePath);
-  const currentChatId = String(chatId ?? world.currentChatId ?? '').trim();
-
-  await writeJsonAtomic(statePath, {
-    ...(existingState && typeof existingState === 'object' ? existingState : {}),
-    id: String(world.defaultAgentId),
-    currentChatId,
-    updatedAt: new Date().toISOString(),
-    remoteSession,
-  });
-
-  return statePath;
 }
 
 function createEmptyQueueState() {

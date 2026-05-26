@@ -20,7 +20,6 @@
     "core/**/*.ts"
   ],
   "exclude": [
-    "node_modules",
-    "web"
+    "node_modules"
   ]
 }

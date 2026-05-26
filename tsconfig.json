@@ -16,12 +16,10 @@
   },
   "include": [
     "cli/src/**/*.ts",
-    "core/**/*.ts",
-    "server/src/**/*.ts"
+    "core/**/*.ts"
   ],
   "exclude": [
     "dist",
-    "node_modules",
-    "web"
+    "node_modules"
   ]
 }

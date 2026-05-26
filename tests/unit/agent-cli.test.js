@@ -8,9 +8,10 @@
  * Key features:
  * - Verifies symlinked binaries still execute the CLI module.
  * - Confirms world.json plus agent.json runtime overrides are honored.
- * - Confirms env remains limited to provider credentials and relay configuration.
+ * - Confirms env remains limited to provider credentials and workspace selection.
  *
  * Recent changes:
+ * - 2026-05-26: Removed remote relay expectations from the local CLI test surface.
  * - 2026-05-24: Retired runtime JSON fixtures in favor of world.json and agent.json.
  * - 2026-05-23: Added workspace terminology coverage while preserving project aliases.
  * - 2026-05-20: Added coverage for automatic interactive mode when no message is provided.
@@ -39,7 +40,6 @@ const rootsToClean = [];
 const originalCwd = process.cwd();
 const CLI_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
-  'AGENT_CLI_RELAY_SERVER_URL',
   'GOOGLE_API_KEY',
   'HOME',
   'OLLAMA_BASE_URL',
@@ -133,7 +133,6 @@ async function writeAgentConfig(rootPath, agentId, runtimeConfig) {
  * @param {string} [rootPath]
  * @param {{
  *   runtimeClient?: Record<string, unknown> | ((actual: Record<string, unknown>) => Record<string, unknown>),
- *   remoteControl?: Record<string, unknown> | ((actual: Record<string, unknown>) => Record<string, unknown>),
  * }} [moduleOverrides]
  */
 async function loadCliModule(rootPath, moduleOverrides = {}) {
@@ -159,22 +158,6 @@ async function loadCliModule(rootPath, moduleOverrides = {}) {
     vi.doUnmock('../../core/agent-runtime.js');
   }
 
-  if (moduleOverrides.remoteControl) {
-    vi.doMock('../../core/remote-control.js', async () => {
-      const actual = /** @type {Record<string, unknown>} */ (await vi.importActual('../../core/remote-control.js'));
-      const overrides = typeof moduleOverrides.remoteControl === 'function'
-        ? moduleOverrides.remoteControl(actual)
-        : moduleOverrides.remoteControl;
-
-      return {
-        ...actual,
-        ...overrides,
-      };
-    });
-  } else {
-    vi.doUnmock('../../core/remote-control.js');
-  }
-
   return await import('../../cli/src/agent-cli.ts');
 }
 
@@ -182,7 +165,6 @@ afterEach(async () => {
   process.chdir(originalCwd);
   restoreCliEnvironment(originalCliEnvironment);
   vi.doUnmock('../../core/agent-runtime.js');
-  vi.doUnmock('../../core/remote-control.js');
 
   while (rootsToClean.length > 0) {
     const rootPath = rootsToClean.pop();
@@ -212,7 +194,6 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--new-chat', 'Map', 'the', 'terrain'])).toEqual({
       help: false,
       newChat: true,
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -221,7 +202,6 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--help'])).toEqual({
       help: true,
       newChat: false,
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -230,7 +210,6 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--verbose', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: true,
@@ -239,26 +218,16 @@ describe('agent-cli entrypoint', () => {
     expect(parseArguments(['--stream-off', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: true,
       verbose: false,
       message: 'Inspect status',
     });
-    expect(parseArguments(['--remote'])).toEqual({
-      help: false,
-      newChat: false,
-      remoteControl: true,
-      runtimeOverrides: {},
-      streamOff: false,
-      verbose: false,
-      message: '',
-    });
+    expect(() => parseArguments(['--remote'])).toThrow('Unknown flag: --remote');
     expect(parseArguments(['--workspace', '/tmp/workspace-a', 'Inspect', 'status'])).toEqual({
       help: false,
       newChat: false,
       workspaceRoot: '/tmp/workspace-a',
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -269,7 +238,6 @@ describe('agent-cli entrypoint', () => {
       newChat: false,
       workspaceRoot: '/tmp/project-a',
       projectRoot: '/tmp/project-a',
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -280,7 +248,6 @@ describe('agent-cli entrypoint', () => {
       agentId: 'research',
       newChat: false,
       newAgentId: 'writer',
-      remoteControl: false,
       runtimeOverrides: {},
       streamOff: false,
       verbose: false,
@@ -306,7 +273,6 @@ describe('agent-cli entrypoint', () => {
     ])).toEqual({
       help: false,
       newChat: false,
-      remoteControl: false,
       runtimeOverrides: {
         provider: 'google',
         model: 'gemini-2.5-pro',
@@ -324,108 +290,6 @@ describe('agent-cli entrypoint', () => {
       verbose: false,
       message: 'Inspect status',
     });
-  });
-
-  it('starts remote host mode from AGENT_CLI_RELAY_SERVER_URL and persists remote metadata under the default agent state', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
-    await ensureSkillsRoot(rootPath);
-    process.env.AGENT_CLI_RELAY_SERVER_URL = 'http://127.0.0.1:8787';
-
-    /** @type {((value?: unknown) => void) | undefined} */
-    let resolveSessionReady;
-    const sessionReady = new Promise((resolve) => {
-      resolveSessionReady = resolve;
-    });
-    /** @type {((value?: unknown) => void) | undefined} */
-    let resolveRemoteSession;
-    const remoteSessionComplete = new Promise((resolve) => {
-      resolveRemoteSession = resolve;
-    });
-
-    const relaySession = {
-      sessionId: 'relay-session-1',
-      clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
-      pairingToken: 'pair-token',
-      expiresAt: '2026-05-11T12:15:00.000Z',
-    };
-    const runRemoteControlSession = vi.fn().mockImplementation(async (params) => {
-      await params.onSessionReady?.(relaySession);
-      resolveSessionReady?.();
-      await remoteSessionComplete;
-      return relaySession;
-    });
-
-    const { main } = await loadCliModule(rootPath, {
-      remoteControl: {
-        runRemoteControlSession,
-      },
-    });
-
-    const mainPromise = main(['--new-chat', '--remote'], createIoCapture());
-
-    await sessionReady;
-
-    expect(runRemoteControlSession).toHaveBeenCalledWith(expect.objectContaining({
-      relayServer: 'http://127.0.0.1:8787',
-      initialMessage: undefined,
-    }));
-
-    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
-    const remoteState = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'agents', 'default', 'state.json'));
-
-    expect(world.currentChatId).toBeTruthy();
-    expect(remoteState.currentChatId).toBe(world.currentChatId);
-    expect(remoteState.remoteSession).toMatchObject({
-      sessionId: 'relay-session-1',
-      clientConnectionUrl: 'http://127.0.0.1:8787/pair?sessionId=relay-session-1',
-    });
-
-    resolveRemoteSession?.();
-    await mainPromise;
-  });
-
-  it('fails clearly when --remote is used without AGENT_CLI_RELAY_SERVER_URL', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    const { runCli } = await loadCliModule(rootPath);
-    const io = createIoCapture();
-    const originalExitCode = process.exitCode;
-
-    delete process.env.AGENT_CLI_RELAY_SERVER_URL;
-    process.exitCode = undefined;
-    await runCli(['--remote'], io);
-
-    expect(io.getStderr()).toContain('Missing environment variable: AGENT_CLI_RELAY_SERVER_URL');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
-  });
-
-  it('rejects any CLI invocation when remote mode is already active for the root', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-
-    await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
-    await writeFile(
-      path.join(rootPath, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'),
-      `${JSON.stringify({ chatId: 'chat-remote-1', pid: process.pid }, null, 2)}\n`,
-      'utf8',
-    );
-
-    const { runCli } = await loadCliModule(rootPath);
-    const io = createIoCapture();
-    const originalExitCode = process.exitCode;
-
-    process.exitCode = undefined;
-    await runCli(['Inspect', 'status'], io);
-
-    expect(io.getStderr()).toContain('Remote mode already active for this workspace root');
-    expect(process.exitCode).toBe(1);
-
-    process.exitCode = originalExitCode;
   });
 
   it('loads world.json defaults, applies the default-agent override, and lets CLI flags win', async () => {
@@ -500,7 +364,7 @@ describe('agent-cli entrypoint', () => {
     expect(isCliEntrypoint(otherPath, pathToFileURL(cliPath).href)).toBe(false);
   });
 
-  it('starts interactive mode when no message and no --remote flag are provided', async () => {
+  it('starts interactive mode when no message is provided', async () => {
     applyMinimalRuntimeEnvironment();
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -868,7 +732,7 @@ describe('agent-cli entrypoint', () => {
     expect(process.env.AGENT_CLI_WORKSPACE).toBe(process.cwd());
     const example = await readFile(path.join(cwdRoot, '.env.example'), 'utf8');
     expect(example).toContain('OPENAI_API_KEY=');
-    expect(example).toContain('AGENT_CLI_RELAY_SERVER_URL=');
+    expect(example).not.toContain('AGENT_CLI_RELAY_SERVER_URL=');
     expect(example).toContain('# AGENT_CLI_WORKSPACE=');
   });
 

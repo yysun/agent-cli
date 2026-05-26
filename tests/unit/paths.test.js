@@ -12,6 +12,7 @@
  * - Verifies selected-world paths live under `.agent-world/worlds/default`.
  *
  * Recent changes:
+ * - 2026-05-26: Removed remote-host lock path expectations.
  * - 2026-05-24: Removed legacy root-env expectations.
  * - 2026-05-24: Removed runtime.json path expectations.
  * - 2026-05-23: Updated expectations for multi-world workspace paths.
@@ -43,9 +44,6 @@ describe('paths', () => {
     expect(paths.AGENT_WORLD_ROOT).toBe(path.join(cwdRoot, '.agent-world'));
     expect(paths.SKILLS_ROOT).toBe(path.join(cwdRoot, '.agent-world', 'skills'));
     expect(paths.WORLD_STATE_PATH).toBe(path.join(cwdRoot, '.agent-world', 'worlds', 'default', 'world.json'));
-    expect(paths.REMOTE_HOST_LOCK_PATH).toBe(
-      path.join(cwdRoot, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'),
-    );
   });
 
   it('publishes cwd to AGENT_CLI_WORKSPACE when explicitly configured without an override', async () => {
@@ -75,9 +73,6 @@ describe('paths', () => {
     expect(paths.USER_SKILLS_ROOT).toBe(path.join(os.homedir(), '.agent-world', 'skills'));
     expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agent-world', 'skills'));
     expect(paths.WORLD_STATE_PATH).toBe(path.join(overrideRoot, '.agent-world', 'worlds', 'default', 'world.json'));
-    expect(paths.REMOTE_HOST_LOCK_PATH).toBe(
-      path.join(overrideRoot, '.agent-world', 'worlds', 'default', 'remote-host.lock.json'),
-    );
   });
 
   it('uses cwd when AGENT_CLI_WORKSPACE is empty', async () => {

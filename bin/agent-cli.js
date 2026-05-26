@@ -1,9 +1,4 @@
 #!/usr/bin/env node
-var __defProp = Object.defineProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
 
 // cli/src/agent-cli.ts
 import path6 from "node:path";
@@ -41,7 +36,6 @@ var AGENT_WORLD_CHATS_ROOT = "";
 var AGENT_WORLD_AGENTS_ROOT = "";
 var AGENT_WORLD_QUEUES_ROOT = "";
 var WORLD_SKILLS_ROOT = "";
-var REMOTE_HOST_LOCK_PATH = "";
 function configureActiveWorldPaths(worldId = "default") {
   ACTIVE_WORLD_ID = String(worldId || "default").trim() || "default";
   ACTIVE_WORLD_ROOT = path.join(AGENT_WORLD_WORLDS_ROOT, ACTIVE_WORLD_ID);
@@ -50,7 +44,6 @@ function configureActiveWorldPaths(worldId = "default") {
   AGENT_WORLD_AGENTS_ROOT = path.join(ACTIVE_WORLD_ROOT, "agents");
   AGENT_WORLD_QUEUES_ROOT = path.join(ACTIVE_WORLD_ROOT, "queues");
   WORLD_SKILLS_ROOT = path.join(ACTIVE_WORLD_ROOT, "skills");
-  REMOTE_HOST_LOCK_PATH = path.join(ACTIVE_WORLD_ROOT, "remote-host.lock.json");
   return ACTIVE_WORLD_ROOT;
 }
 function configureWorkspaceRoot(workspaceRoot, options = {}) {
@@ -654,10 +647,9 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AZURE_OPENAI_API_KEY",
   "AZURE_OPENAI_RESOURCE_NAME",
   "AZURE_OPENAI_DEPLOYMENT_NAME",
-  "AZURE_OPENAI_API_VERSION",
-  "AGENT_CLI_RELAY_SERVER_URL"
+  "AZURE_OPENAI_API_VERSION"
 ]);
-var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional relay settings.
+var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional workspace selection.
 # Runtime defaults belong in .agent-world/worlds/{worldId}/world.json,
 # .agent-world/worlds/{worldId}/agents/{agentId}/agent.json, or CLI flags.
 
@@ -679,9 +671,6 @@ AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_RESOURCE_NAME=
 AZURE_OPENAI_DEPLOYMENT_NAME=
 # AZURE_OPENAI_API_VERSION=
-
-# Remote relay
-AGENT_CLI_RELAY_SERVER_URL=
 
 # Optional workspace selection from the invocation directory
 # AGENT_CLI_WORKSPACE=
@@ -903,9 +892,6 @@ async function readJsonl(filePath) {
     throw new Error(`Invalid chat session file: ${filePath}`);
   }
 }
-async function ensureRemoteHostLockDirectory() {
-  await fs5.mkdir(path5.dirname(REMOTE_HOST_LOCK_PATH), { recursive: true });
-}
 async function ensureAgentWorldDirectories() {
   await ensureWorkspaceWorld();
   await Promise.all([
@@ -914,50 +900,6 @@ async function ensureAgentWorldDirectories() {
     fs5.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
     fs5.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
   ]);
-}
-function isProcessRunning(pid) {
-  if (!Number.isInteger(pid) || pid < 1) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return Boolean(
-      error && typeof error === "object" && "code" in error && error.code === "EPERM"
-    );
-  }
-}
-function isActiveRemoteHostLock(remoteLock) {
-  if (!remoteLock || typeof remoteLock !== "object") {
-    return false;
-  }
-  return isProcessRunning(Number(remoteLock.pid));
-}
-function buildRemoteHostConflictError(remoteLock) {
-  const chatId = String(
-    remoteLock && typeof remoteLock === "object" && "chatId" in remoteLock ? remoteLock.chatId ?? "" : ""
-  ).trim();
-  const pid = Number(
-    remoteLock && typeof remoteLock === "object" && "pid" in remoteLock ? remoteLock.pid : NaN
-  );
-  const details = [
-    chatId ? `chat ${chatId}` : null,
-    Number.isInteger(pid) && pid > 0 ? `pid ${pid}` : null
-  ].filter(Boolean).join(", ");
-  return new Error(
-    details ? `Remote mode already active for this workspace root (${details}).` : "Remote mode already active for this workspace root."
-  );
-}
-async function readRemoteHostLock() {
-  try {
-    return JSON.parse(await fs5.readFile(REMOTE_HOST_LOCK_PATH, "utf8"));
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    return null;
-  }
 }
 function createEmptyChat() {
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -1118,72 +1060,6 @@ async function loadWorldChatById(chatId) {
     messages
   };
 }
-async function assertNoActiveRemoteHost() {
-  await ensureWorkspaceWorld();
-  const remoteLock = await readRemoteHostLock();
-  if (!remoteLock) {
-    return null;
-  }
-  if (isActiveRemoteHostLock(remoteLock)) {
-    throw buildRemoteHostConflictError(remoteLock);
-  }
-  await fs5.rm(REMOTE_HOST_LOCK_PATH, { force: true });
-  return null;
-}
-async function acquireRemoteHostLock({ chat }) {
-  await ensureWorkspaceWorld();
-  await ensureRemoteHostLockDirectory();
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const remoteLock = {
-    chatId: chat.id,
-    pid: process.pid,
-    startedAt: now,
-    updatedAt: now
-  };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await fs5.writeFile(
-        REMOTE_HOST_LOCK_PATH,
-        `${JSON.stringify(remoteLock, null, 2)}
-`,
-        { encoding: "utf8", flag: "wx" }
-      );
-      return remoteLock;
-    } catch (error) {
-      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") {
-        throw error;
-      }
-      const existingRemoteLock = await readRemoteHostLock();
-      if (isActiveRemoteHostLock(existingRemoteLock)) {
-        throw buildRemoteHostConflictError(existingRemoteLock);
-      }
-      await fs5.rm(REMOTE_HOST_LOCK_PATH, { force: true });
-    }
-  }
-  throw new Error("Failed to acquire the remote host lock for this workspace root.");
-}
-async function releaseRemoteHostLock() {
-  await ensureWorkspaceWorld();
-  const remoteLock = await readRemoteHostLock();
-  if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
-    return false;
-  }
-  await fs5.rm(REMOTE_HOST_LOCK_PATH, { force: true });
-  return true;
-}
-async function updateRemoteHostLock({ chatId }) {
-  await ensureWorkspaceWorld();
-  const remoteLock = await readRemoteHostLock();
-  if (!remoteLock || Number(remoteLock.pid) !== process.pid) {
-    return false;
-  }
-  await writeJsonAtomic2(REMOTE_HOST_LOCK_PATH, {
-    ...remoteLock,
-    chatId,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
-  return true;
-}
 async function loadChatById(chatId) {
   await ensureWorldBootstrap();
   const normalizedChatId = String(chatId ?? "").trim();
@@ -1303,717 +1179,6 @@ async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
     createdAt: normalizeTimestamp(event.createdAt, (/* @__PURE__ */ new Date()).toISOString())
   })));
   return eventsPath;
-}
-async function persistRemoteSessionState({ chatId, remoteSession }) {
-  const world = await ensureWorldBootstrap();
-  const statePath = buildAgentStatePath(String(world.defaultAgentId));
-  const existingState = await readJsonIfPresent2(statePath);
-  const currentChatId = String(chatId ?? world.currentChatId ?? "").trim();
-  await writeJsonAtomic2(statePath, {
-    ...existingState && typeof existingState === "object" ? existingState : {},
-    id: String(world.defaultAgentId),
-    currentChatId,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    remoteSession
-  });
-  return statePath;
-}
-
-// core/relay-client.ts
-var relay_client_exports = {};
-__export(relay_client_exports, {
-  RelayClientError: () => RelayClientError,
-  createRelayIdempotencyKey: () => createRelayIdempotencyKey,
-  createRelayPairingInvite: () => createRelayPairingInvite,
-  createRelaySession: () => createRelaySession,
-  normalizeRelayServerUrl: () => normalizeRelayServerUrl,
-  pairRelaySession: () => pairRelaySession,
-  pollRelayCommands: () => pollRelayCommands,
-  postRelayEvent: () => postRelayEvent,
-  readRelayEvents: () => readRelayEvents,
-  readRelayNotifications: () => readRelayNotifications,
-  revokeRelaySession: () => revokeRelaySession,
-  sendRelayCommand: () => sendRelayCommand
-});
-import { randomUUID as randomUUID3 } from "node:crypto";
-function normalizeRelayServerUrl(rawUrl) {
-  const normalized = String(rawUrl ?? "").trim();
-  if (!normalized) {
-    throw new Error("Missing relay server URL.");
-  }
-  const url = new URL(normalized);
-  if (!/^https?:$/.test(url.protocol)) {
-    throw new Error(`Unsupported relay server protocol: ${url.protocol}`);
-  }
-  return url.toString().replace(/\/$/, "");
-}
-var RelayClientError = class extends Error {
-  /**
-   * @param {number} statusCode
-   * @param {string} message
-   */
-  constructor(statusCode, message) {
-    super(message);
-    this.name = "RelayClientError";
-    this.statusCode = statusCode;
-  }
-};
-function createRelayIdempotencyKey(prefix) {
-  return `${prefix}-${randomUUID3()}`;
-}
-function buildUrl(relayServer, pathname, query = {}) {
-  const url = new URL(pathname, `${normalizeRelayServerUrl(relayServer)}/`);
-  for (const [key, value] of Object.entries(query)) {
-    if (value === void 0 || value === "") {
-      continue;
-    }
-    url.searchParams.set(key, String(value));
-  }
-  return url;
-}
-async function readJsonResponse(response) {
-  const rawText = await response.text();
-  const trimmedText = rawText.trim();
-  const parsed = trimmedText ? JSON.parse(trimmedText) : {};
-  if (!response.ok) {
-    throw new RelayClientError(response.status, String(parsed.error ?? response.statusText));
-  }
-  return parsed;
-}
-async function postJson(relayServer, pathname, body) {
-  const response = await fetch(buildUrl(relayServer, pathname), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-  return await readJsonResponse(response);
-}
-async function getJson(relayServer, pathname, query) {
-  const response = await fetch(buildUrl(relayServer, pathname, query));
-  return await readJsonResponse(response);
-}
-async function createRelaySession(input) {
-  return await postJson(input.relayServer, "/v1/sessions", {
-    localSessionId: input.localSessionId,
-    chatId: input.chatId,
-    ttlMs: input.ttlMs,
-    pairingTtlMs: input.pairingTtlMs,
-    metadata: input.metadata ?? {}
-  });
-}
-async function pairRelaySession(input) {
-  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/pair`, {
-    pairingToken: input.pairingToken,
-    idempotencyKey: input.idempotencyKey,
-    mobileName: input.mobileName
-  });
-}
-async function createRelayPairingInvite(input) {
-  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/pairing-invites`, {
-    token: input.token,
-    idempotencyKey: input.idempotencyKey
-  });
-}
-async function postRelayEvent(input) {
-  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/events`, {
-    desktopToken: input.desktopToken,
-    type: input.type,
-    payload: input.payload ?? {},
-    idempotencyKey: input.idempotencyKey,
-    targetClientId: input.targetClientId
-  });
-}
-async function pollRelayCommands(input) {
-  return await getJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/commands/poll`, {
-    desktopToken: input.desktopToken,
-    after: input.after,
-    timeoutMs: input.timeoutMs
-  });
-}
-async function readRelayEvents(input) {
-  return await getJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/events`, {
-    mobileToken: input.mobileToken,
-    after: input.after
-  });
-}
-async function sendRelayCommand(input) {
-  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/commands`, {
-    mobileToken: input.mobileToken,
-    type: input.type,
-    payload: input.payload ?? {},
-    idempotencyKey: input.idempotencyKey
-  });
-}
-async function revokeRelaySession(input) {
-  return await postJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/revoke`, {
-    token: input.token,
-    reason: input.reason
-  });
-}
-async function readRelayNotifications(input) {
-  return await getJson(input.relayServer, `/v1/sessions/${encodeURIComponent(input.sessionId)}/notifications`, {
-    mobileToken: input.mobileToken,
-    after: input.after
-  });
-}
-
-// core/remote-control.ts
-import QRCode from "qrcode";
-var SENSITIVE_KEY_PATTERN = /(path|file|content|token|secret|key|env|authorization|password|prompt|workspace|memory)/i;
-function isInteractiveTerminal(stdout) {
-  return Boolean(stdout && stdout.isTTY);
-}
-async function renderConnectionQrCode(connectionUrl) {
-  return await QRCode.toString(connectionUrl, {
-    type: "terminal",
-    small: true,
-    margin: 1,
-    errorCorrectionLevel: "M"
-  });
-}
-async function buildRemoteSessionReadyText(relaySession, stdout, stderr) {
-  const clientConnectionUrl = String(relaySession.clientConnectionUrl ?? "");
-  const expiresAt = typeof relaySession.expiresAt === "string" && relaySession.expiresAt.trim() ? relaySession.expiresAt : "No timeout";
-  const lines = [
-    "Remote relay session ready.",
-    `Session ID: ${String(relaySession.sessionId ?? "")}`,
-    `Client connection URL: ${clientConnectionUrl}`,
-    `Pairing token: ${String(relaySession.pairingToken ?? "")}`,
-    `Expires at: ${expiresAt}`
-  ];
-  if (clientConnectionUrl && isInteractiveTerminal(stdout)) {
-    try {
-      lines.push("Scan this QR code from the client to connect:");
-      lines.push((await renderConnectionQrCode(clientConnectionUrl)).trimEnd());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      stderr?.write(`Warning: failed to render remote connection QR code: ${message}
-`);
-    }
-  }
-  lines.push("Remote host is running and will keep responding until the client disconnects or you press Ctrl+C.");
-  lines.push("");
-  return lines.join("\n");
-}
-function isPlainObject2(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-function summarizeArgumentEntry(key, value) {
-  if (SENSITIVE_KEY_PATTERN.test(key)) {
-    return {
-      key,
-      type: Array.isArray(value) ? "array" : typeof value,
-      summary: "[redacted]"
-    };
-  }
-  if (typeof value === "string") {
-    return {
-      key,
-      type: "string",
-      summary: value.length > 80 ? `${value.slice(0, 77)}...` : value
-    };
-  }
-  if (typeof value === "number" || typeof value === "boolean" || value === null) {
-    return {
-      key,
-      type: value === null ? "null" : typeof value,
-      summary: value
-    };
-  }
-  if (Array.isArray(value)) {
-    return {
-      key,
-      type: "array",
-      summary: `[array:${value.length}]`
-    };
-  }
-  if (isPlainObject2(value)) {
-    return {
-      key,
-      type: "object",
-      summary: `[object:${Object.keys(value).length}]`
-    };
-  }
-  return {
-    key,
-    type: typeof value,
-    summary: `[${typeof value}]`
-  };
-}
-function buildRemoteArgumentSummary(rawArguments) {
-  const argumentEntries = Object.entries(isPlainObject2(rawArguments) ? rawArguments : {});
-  return {
-    argumentCount: argumentEntries.length,
-    entries: argumentEntries.map(([key, value]) => summarizeArgumentEntry(key, value))
-  };
-}
-function buildRemoteFailureSummary(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  const loweredMessage = message.toLowerCase();
-  if (loweredMessage.includes("cancel")) {
-    return {
-      category: "cancelled",
-      message: "Run cancelled on the local host."
-    };
-  }
-  if (loweredMessage.includes("reject")) {
-    return {
-      category: "rejected",
-      message: "A local action was rejected."
-    };
-  }
-  return {
-    category: "failed",
-    message: "Run failed on the local host."
-  };
-}
-function buildRemoteChatSummary(chat) {
-  return {
-    id: String(chat.id ?? ""),
-    createdAt: String(chat.createdAt ?? ""),
-    updatedAt: String(chat.updatedAt ?? ""),
-    messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0
-  };
-}
-function buildRemoteChatMessages(messages) {
-  return (Array.isArray(messages) ? messages : []).map((message) => ({
-    role: String(message?.role ?? ""),
-    content: String(message?.content ?? ""),
-    createdAt: typeof message?.createdAt === "string" ? message.createdAt : void 0,
-    ...typeof message?.tool_call_id === "string" ? { toolCallId: message.tool_call_id } : {}
-  }));
-}
-function buildRemoteSlashHelpText() {
-  return [
-    "Available remote slash commands:",
-    "/help - show this help",
-    "/chats - list persisted chats",
-    "/messages <chatId> - load persisted messages for a chat",
-    "/new - create and select a new chat",
-    "/use <chatId> - switch the active chat"
-  ].join("\n");
-}
-function parseRemoteSlashCommand(text) {
-  const normalizedText = String(text ?? "").trim();
-  if (!normalizedText.startsWith("/")) {
-    return null;
-  }
-  const [rawName = "", ...rawArguments] = normalizedText.slice(1).trim().split(/\s+/u);
-  return {
-    commandName: rawName.toLowerCase(),
-    argumentText: rawArguments.join(" ").trim(),
-    rawText: normalizedText
-  };
-}
-function createRemoteApprovalGate({ postEvent, signal }) {
-  const pendingApprovals = /* @__PURE__ */ new Map();
-  signal.addEventListener("abort", () => {
-    for (const pending of pendingApprovals.values()) {
-      pending.reject(new Error("Approval wait cancelled."));
-    }
-    pendingApprovals.clear();
-  }, { once: true });
-  return {
-    async requestApproval(request) {
-      if (signal.aborted) {
-        throw new Error("Approval wait cancelled.");
-      }
-      const approvalId = String(request.toolCallId ?? createRelayIdempotencyKey("approval"));
-      await postEvent("tool_approval_request", {
-        approvalId,
-        toolCallId: request.toolCallId,
-        toolName: request.toolName,
-        argumentSummary: buildRemoteArgumentSummary(
-          isPlainObject2(request.arguments) ? request.arguments : {}
-        )
-      });
-      return await new Promise((resolve, reject) => {
-        pendingApprovals.set(approvalId, { resolve, reject });
-      });
-    },
-    resolveDecision(approvalId, decision) {
-      const pending = pendingApprovals.get(approvalId);
-      if (!pending) {
-        return false;
-      }
-      pendingApprovals.delete(approvalId);
-      pending.resolve(decision);
-      return true;
-    }
-  };
-}
-async function runRemoteControlSession(params) {
-  let activeChat = params.chat;
-  const relaySession = await params.relayClient.createRelaySession({
-    relayServer: params.relayServer,
-    localSessionId: activeChat.id,
-    chatId: activeChat.id,
-    ttlMs: params.ttlMs ?? 0,
-    pairingTtlMs: params.pairingTtlMs ?? 0,
-    metadata: {
-      mode: "remote-control"
-    }
-  });
-  await params.onSessionReady?.(relaySession);
-  params.io.stdout.write(await buildRemoteSessionReadyText(
-    relaySession,
-    params.io.stdout,
-    params.io.stderr
-  ));
-  let active = true;
-  let waitingForInput = false;
-  let commandCursor = 0;
-  let relaySessionClosed = false;
-  let finalRevokeReason = "session_closed";
-  const queuedMessages = [];
-  let nextMessageResolver = null;
-  let activeRunController = null;
-  const remoteControlAbort = new AbortController();
-  const approvalGate = createRemoteApprovalGate({
-    postEvent: async (type, payload = {}) => {
-      await params.relayClient.postRelayEvent({
-        relayServer: params.relayServer,
-        sessionId: relaySession.sessionId,
-        desktopToken: relaySession.desktopToken,
-        type,
-        payload,
-        idempotencyKey: createRelayIdempotencyKey(`event-${type}`)
-      });
-    },
-    signal: remoteControlAbort.signal
-  });
-  const postEvent = async (type, payload = {}, options = {}) => {
-    await params.relayClient.postRelayEvent({
-      relayServer: params.relayServer,
-      sessionId: relaySession.sessionId,
-      desktopToken: relaySession.desktopToken,
-      type,
-      payload,
-      idempotencyKey: createRelayIdempotencyKey(`event-${type}`),
-      targetClientId: options.targetClientId
-    });
-  };
-  const publishSessionSnapshot = async () => {
-    await postEvent("session_snapshot", {
-      activeChatId: activeChat.id,
-      chat: buildRemoteChatSummary(activeChat),
-      waitingForInput
-    });
-  };
-  const syncActiveChatState = async () => {
-    await params.chatStore?.updateRemoteHostLock?.({ chatId: activeChat.id });
-    await params.chatStore?.persistRemoteSessionState?.({ remoteSession: relaySession });
-  };
-  const postCommandError = async (clientId, requestId, code, message) => {
-    await postEvent("command_error", {
-      requestId,
-      code,
-      message,
-      activeChatId: activeChat.id
-    }, {
-      targetClientId: clientId
-    });
-  };
-  const postCommandResult = async (clientId, payload) => {
-    await postEvent("command_result", {
-      activeChatId: activeChat.id,
-      ...payload
-    }, {
-      targetClientId: clientId
-    });
-  };
-  const executeSlashCommand = async ({ clientId, requestId, text }) => {
-    const parsedCommand = parseRemoteSlashCommand(text);
-    if (!parsedCommand || !parsedCommand.commandName) {
-      throw new Error("Missing slash command. Try /help.");
-    }
-    if (parsedCommand.commandName === "help") {
-      await postCommandResult(clientId, {
-        requestId,
-        kind: "text",
-        commandText: parsedCommand.rawText,
-        title: "Remote commands",
-        text: buildRemoteSlashHelpText()
-      });
-      return;
-    }
-    if (parsedCommand.commandName === "chats") {
-      if (!params.chatStore?.listChats) {
-        throw new Error("Remote chat listing is unavailable.");
-      }
-      const chats = await params.chatStore.listChats();
-      await postCommandResult(clientId, {
-        requestId,
-        kind: "chat_list",
-        commandText: parsedCommand.rawText,
-        text: `Loaded ${chats.length} chats.`,
-        chats
-      });
-      return;
-    }
-    if (parsedCommand.commandName === "messages") {
-      if (!params.chatStore?.loadChatById) {
-        throw new Error("Remote chat history is unavailable.");
-      }
-      const chatId = parsedCommand.argumentText || activeChat.id;
-      const chat = await params.chatStore.loadChatById(chatId);
-      await postCommandResult(clientId, {
-        requestId,
-        kind: "chat_messages",
-        commandText: parsedCommand.rawText,
-        text: `Loaded ${Array.isArray(chat.messages) ? chat.messages.length : 0} messages from ${chat.id}.`,
-        chatId: chat.id,
-        chat: buildRemoteChatSummary(chat),
-        messages: buildRemoteChatMessages(chat.messages)
-      });
-      return;
-    }
-    if (parsedCommand.commandName === "new") {
-      if (!params.chatStore?.createChat) {
-        throw new Error("Remote chat creation is unavailable.");
-      }
-      if (activeRunController) {
-        throw new Error("Cannot switch chats while a run is still active.");
-      }
-      activeChat = await params.chatStore.createChat({ setCurrent: true });
-      await syncActiveChatState();
-      await postCommandResult(clientId, {
-        requestId,
-        kind: "chat_selected",
-        commandText: parsedCommand.rawText,
-        text: `Created and selected ${activeChat.id}.`,
-        chatId: activeChat.id,
-        chat: buildRemoteChatSummary(activeChat)
-      });
-      await publishSessionSnapshot();
-      return;
-    }
-    if (parsedCommand.commandName === "use" || parsedCommand.commandName === "select") {
-      if (!params.chatStore?.setCurrentChat) {
-        throw new Error("Remote chat selection is unavailable.");
-      }
-      if (activeRunController) {
-        throw new Error("Cannot switch chats while a run is still active.");
-      }
-      const chatId = parsedCommand.argumentText;
-      if (!chatId) {
-        throw new Error("Usage: /use <chatId>");
-      }
-      activeChat = await params.chatStore.setCurrentChat(chatId);
-      await syncActiveChatState();
-      await postCommandResult(clientId, {
-        requestId,
-        kind: "chat_selected",
-        commandText: parsedCommand.rawText,
-        text: `Selected ${activeChat.id}.`,
-        chatId: activeChat.id,
-        chat: buildRemoteChatSummary(activeChat)
-      });
-      await publishSessionSnapshot();
-      return;
-    }
-    throw new Error(`Unknown slash command: /${parsedCommand.commandName}. Try /help.`);
-  };
-  const enqueueMessage = (entry) => {
-    queuedMessages.push(entry);
-    if (nextMessageResolver) {
-      const resolve = nextMessageResolver;
-      nextMessageResolver = null;
-      resolve(queuedMessages.shift() ?? null);
-    }
-  };
-  const commandPump = (async () => {
-    while (active) {
-      const commandResponse = await params.relayClient.pollRelayCommands({
-        relayServer: params.relayServer,
-        sessionId: relaySession.sessionId,
-        desktopToken: relaySession.desktopToken,
-        after: commandCursor,
-        timeoutMs: 25e3
-      });
-      if (commandResponse.revoked) {
-        active = false;
-        relaySessionClosed = true;
-        remoteControlAbort.abort();
-        if (nextMessageResolver) {
-          const resolve = nextMessageResolver;
-          nextMessageResolver = null;
-          resolve(null);
-        }
-        break;
-      }
-      for (const command of commandResponse.commands ?? []) {
-        commandCursor = Math.max(commandCursor, Number(command.sequence) || commandCursor);
-        const clientId = typeof command.clientId === "string" ? command.clientId : "";
-        const requestId = String(command.payload?.requestId ?? "");
-        if (command.type === "input") {
-          const text = String(command.payload?.text ?? "").trim();
-          if (!text) {
-            await postCommandError(clientId, requestId, "invalid_input", "Remote input text is required.");
-            continue;
-          }
-          if (text.startsWith("/")) {
-            try {
-              await executeSlashCommand({ clientId, requestId, text });
-            } catch (error) {
-              await postCommandError(clientId, requestId, "command_failed", error instanceof Error ? error.message : String(error));
-            }
-            continue;
-          }
-          enqueueMessage({
-            kind: "message",
-            text,
-            source: "remote",
-            commandId: String(command.sequence)
-          });
-          continue;
-        }
-        if (command.type === "approval_decision") {
-          approvalGate.resolveDecision(
-            String(command.payload?.approvalId ?? ""),
-            {
-              approved: Boolean(command.payload?.approved),
-              reason: String(command.payload?.reason ?? ""),
-              source: "remote",
-              decidedAt: command.createdAt
-            }
-          );
-          continue;
-        }
-        if (command.type === "cancel") {
-          activeRunController?.abort();
-          await postEvent("run_status", {
-            status: "cancel_requested",
-            source: "remote"
-          });
-          continue;
-        }
-        if (command.type === "resume") {
-          if (waitingForInput) {
-            waitingForInput = false;
-            enqueueMessage({ kind: "resume" });
-          }
-          continue;
-        }
-        if (command.type === "disconnect") {
-          active = false;
-          finalRevokeReason = "remote_disconnect";
-          activeRunController?.abort();
-          remoteControlAbort.abort();
-          if (nextMessageResolver) {
-            const resolve = nextMessageResolver;
-            nextMessageResolver = null;
-            resolve(null);
-          }
-          break;
-        }
-        if (clientId) {
-          await postCommandError(clientId, requestId, "unsupported_command", `Unsupported remote command type: ${command.type}`);
-        }
-      }
-    }
-  })();
-  await postEvent("run_status", {
-    status: "remote_session_started",
-    sessionId: relaySession.sessionId,
-    activeChatId: activeChat.id
-  });
-  await publishSessionSnapshot();
-  if (params.initialMessage) {
-    enqueueMessage({
-      kind: "message",
-      text: params.initialMessage,
-      source: "local"
-    });
-  }
-  while (active) {
-    if (queuedMessages.length === 0) {
-      waitingForInput = true;
-      await postEvent("run_status", {
-        status: "waiting_for_input"
-      });
-    }
-    const nextMessage = queuedMessages.length > 0 ? queuedMessages.shift() ?? null : await new Promise((resolve) => {
-      nextMessageResolver = resolve;
-    });
-    waitingForInput = false;
-    if (!nextMessage || !active) {
-      break;
-    }
-    if (nextMessage.kind === "resume") {
-      continue;
-    }
-    activeRunController = new AbortController();
-    try {
-      await postEvent("run_status", {
-        status: "started",
-        source: nextMessage.source,
-        commandId: nextMessage.commandId
-      });
-      const result = await params.executeTurn({
-        chat: activeChat,
-        message: nextMessage.text,
-        approvalGate,
-        abortSignal: activeRunController.signal,
-        commandSource: nextMessage.source,
-        onAssistantChunk: async (chunkText) => {
-          await postEvent("assistant_output", {
-            text: chunkText,
-            source: nextMessage.source
-          });
-        }
-      });
-      activeChat.messages = result.messages;
-      await postEvent("completion", {
-        text: result.assistantText,
-        source: nextMessage.source
-      });
-      await postEvent("run_status", {
-        status: "completed",
-        source: nextMessage.source
-      });
-    } catch (error) {
-      const wasCancelled = activeRunController.signal.aborted;
-      if (!wasCancelled) {
-        await postEvent("failure", {
-          ...buildRemoteFailureSummary(error),
-          source: nextMessage.source
-        });
-      }
-      await postEvent("run_status", {
-        status: wasCancelled ? "cancelled" : "failed",
-        source: nextMessage.source
-      });
-      if (wasCancelled) {
-        continue;
-      }
-    } finally {
-      activeRunController = null;
-    }
-  }
-  active = false;
-  remoteControlAbort.abort();
-  await commandPump;
-  if (!relaySessionClosed) {
-    try {
-      await params.relayClient.revokeRelaySession({
-        relayServer: params.relayServer,
-        sessionId: relaySession.sessionId,
-        token: relaySession.desktopToken,
-        reason: finalRevokeReason
-      });
-    } catch (error) {
-      const statusCode = Number(
-        error && typeof error === "object" && "statusCode" in error ? error.statusCode : 0
-      );
-      if (statusCode !== 404 && statusCode !== 410) {
-        throw error;
-      }
-    }
-  }
-  return relaySession;
 }
 
 // core/agent-runtime.ts
@@ -3572,13 +2737,11 @@ function createTurnExecutor(options) {
 }
 
 // cli/src/agent-cli.ts
-var REMOTE_RELAY_SERVER_ENV_KEY = "AGENT_CLI_RELAY_SERVER_URL";
 var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
 var DEFAULT_AGENT_ID2 = "default";
 function usageText() {
   return [
     "Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
-    "       agent-cli [--workspace <path>] --remote [--new-chat] [initial message]",
     "",
     "Runtime options override world.json and agent.json defaults when provided:",
     "  --provider <name>                 --model <name>",
@@ -3588,9 +2751,6 @@ function usageText() {
     "  --web-search <true|false|low|medium|high>",
     "  --agent-id <id>                  --new-agent <id>",
     "  --workspace <path>               --world <id>",
-    "  --remote",
-    "",
-    `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
     "",
     "Examples:",
     '  agent-cli --new-chat "Map my next financial move"',
@@ -3599,8 +2759,7 @@ function usageText() {
     '  agent-cli --stream-off "What should I do first?"',
     '  agent-cli --workspace /path/to/workspace "Summarize this repo"',
     "  agent-cli --new-agent research --provider ollama --model gemma4:e4b",
-    '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
-    "  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote"
+    '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"'
   ].join("\n");
 }
 function startupText(cwd = WORKSPACE_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings, scopedSkills) {
@@ -3639,13 +2798,6 @@ function createDefaultInteractivePrompt() {
     output: process.stdout
   });
 }
-function readRemoteRelayServerUrl(environment = process.env) {
-  const relayServer = String(environment[REMOTE_RELAY_SERVER_ENV_KEY] ?? "").trim();
-  if (!relayServer) {
-    throw new Error(`Missing environment variable: ${REMOTE_RELAY_SERVER_ENV_KEY}`);
-  }
-  return normalizeRelayServerUrl(relayServer);
-}
 function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url) {
   if (!argvPath) {
     return false;
@@ -3660,7 +2812,6 @@ function parseArguments(argv) {
   let newChat = false;
   let streamOff = false;
   let help = false;
-  let remoteControl = false;
   let verbose = false;
   let agentId;
   let newAgentId;
@@ -3732,10 +2883,6 @@ function parseArguments(argv) {
     }
     if (arg === "--stream-off") {
       streamOff = true;
-      continue;
-    }
-    if (arg === "--remote") {
-      remoteControl = true;
       continue;
     }
     if (arg.startsWith("--")) {
@@ -3845,7 +2992,6 @@ function parseArguments(argv) {
     ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
     ...worldId !== void 0 ? { worldId } : {},
-    remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
@@ -4024,7 +3170,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     workspaceRoot,
     projectRoot,
     worldId,
-    remoteControl,
     runtimeOverrides,
     streamOff,
     verbose,
@@ -4040,7 +3185,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
     ...worldId !== void 0 ? { worldId } : {},
-    remoteControl,
     runtimeOverrides,
     streamOff,
     verbose,
@@ -4079,9 +3223,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
       model: normalizeOptionalText(agentConfig.model)
     });
   }
-  if (!remoteControl) {
-    await assertNoActiveRemoteHost();
-  }
   const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
@@ -4108,49 +3249,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     workspaceSystemPrompt,
     skillInventory
   });
-  if (remoteControl) {
-    if (!options.interactivePrompt) {
-      agentSetupPrompt?.close?.();
-    }
-    await acquireRemoteHostLock({ chat });
-    const relayServer = readRemoteRelayServerUrl(process.env);
-    try {
-      await persistCompletedChat({
-        chat,
-        messages: chat.messages,
-        agentId: selectedAgentId
-      });
-      const relaySession = await runRemoteControlSession({
-        relayServer,
-        chat,
-        chatStore: {
-          listChats: listPersistedChats,
-          loadChatById,
-          createChat: createPersistedChat,
-          setCurrentChat,
-          persistRemoteSessionState,
-          updateRemoteHostLock
-        },
-        io,
-        initialMessage: message || void 0,
-        onSessionReady: async (startedRelaySession) => {
-          await persistRemoteSessionState({
-            chatId: chat.id,
-            remoteSession: startedRelaySession
-          });
-        },
-        executeTurn,
-        relayClient: relay_client_exports
-      });
-      await persistRemoteSessionState({
-        chatId: chat.id,
-        remoteSession: relaySession
-      });
-      return relaySession;
-    } finally {
-      await releaseRemoteHostLock();
-    }
-  }
   if (!message) {
     agentSetupPromptPassedToInteractive = Boolean(agentSetupPrompt);
     return await runInteractiveSession({
@@ -4192,12 +3290,10 @@ if (isCliEntrypoint()) {
   await runCli();
 }
 export {
-  REMOTE_RELAY_SERVER_ENV_KEY,
   WORKSPACE_ENV_KEY,
   isCliEntrypoint,
   main,
   parseArguments,
-  readRemoteRelayServerUrl,
   runCli,
   runtimeSelectionText,
   skillStartupText,

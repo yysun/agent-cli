@@ -2,16 +2,17 @@
  * Agent CLI
  *
  * Purpose:
- * - Parse CLI arguments and route execution into one-shot, remote, or interactive chat modes.
+ * - Parse CLI arguments and route execution into one-shot or interactive chat modes.
  *
  * Key features:
  * - Applies workspace-root and runtime overrides before loading workspace-local resources.
- * - Selects the active world before resolving world-owned chats, agents, queues, or remote locks.
- * - Keeps normal message turns, remote relay hosting, and no-argument interactive mode in one shell layer.
+ * - Selects the active world before resolving world-owned chats, agents, and queues.
+ * - Keeps normal message turns and no-argument interactive mode in one shell layer.
  * - Selects and initializes named agents before resolving runtime config.
  * - Prints startup diagnostics for workspace root and selected agent id.
  *
  * Recent changes:
+ * - 2026-05-26: Removed remote relay hosting and kept `agent-cli` as the sole CLI surface.
  * - 2026-05-24: Updated runtime help to describe world.json and agent.json defaults.
  * - 2026-05-23: Added --world selection for multi-world workspaces.
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
@@ -39,29 +40,19 @@ import {
 import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
 import { ensureWorkspaceWorld } from '../../core/workspace-store.js';
 import {
-  acquireRemoteHostLock,
-  assertNoActiveRemoteHost,
   createPersistedChat,
   ensureAgentSelection,
   loadAgentMetadata,
-  loadChatById,
   loadRequestedChat,
   listPersistedChats,
-  persistCompletedChat,
-  persistRemoteSessionState,
-  releaseRemoteHostLock,
   setCurrentChat,
-  updateRemoteHostLock,
 } from '../../core/world-store.js';
-import * as relayClient from '../../core/relay-client.js';
-import { runRemoteControlSession } from '../../core/remote-control.js';
 import {
   type CliIo,
   createTurnExecutor,
   resolveEffectiveAgentConfig,
 } from './turn-executor.js';
 
-export const REMOTE_RELAY_SERVER_ENV_KEY = 'AGENT_CLI_RELAY_SERVER_URL';
 export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
 const DEFAULT_AGENT_ID = 'default';
 
@@ -70,7 +61,6 @@ export interface ParsedArguments {
   agentId?: string;
   newChat: boolean;
   newAgentId?: string;
-  remoteControl: boolean;
   runtimeOverrides: Record<string, unknown>;
   workspaceRoot?: string;
   projectRoot?: string;
@@ -95,7 +85,6 @@ export interface InteractivePrompt {
 export function usageText(): string {
   return [
     'Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
-    '       agent-cli [--workspace <path>] --remote [--new-chat] [initial message]',
     '',
     'Runtime options override world.json and agent.json defaults when provided:',
     '  --provider <name>                 --model <name>',
@@ -105,9 +94,6 @@ export function usageText(): string {
     '  --web-search <true|false|low|medium|high>',
     '  --agent-id <id>                  --new-agent <id>',
     '  --workspace <path>               --world <id>',
-    '  --remote',
-    '',
-    `Remote mode requires ${REMOTE_RELAY_SERVER_ENV_KEY} in the environment.`,
     '',
     'Examples:',
     '  agent-cli --new-chat "Map my next financial move"',
@@ -117,7 +103,6 @@ export function usageText(): string {
     '  agent-cli --workspace /path/to/workspace "Summarize this repo"',
     '  agent-cli --new-agent research --provider ollama --model gemma4:e4b',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
-    '  AGENT_CLI_RELAY_SERVER_URL=http://127.0.0.1:8787 agent-cli --remote',
   ].join('\n');
 }
 
@@ -177,18 +162,6 @@ function createDefaultInteractivePrompt(): InteractivePrompt {
   });
 }
 
-export function readRemoteRelayServerUrl(
-  environment: NodeJS.ProcessEnv | Record<string, unknown> = process.env,
-): string {
-  const relayServer = String(environment[REMOTE_RELAY_SERVER_ENV_KEY] ?? '').trim();
-
-  if (!relayServer) {
-    throw new Error(`Missing environment variable: ${REMOTE_RELAY_SERVER_ENV_KEY}`);
-  }
-
-  return relayClient.normalizeRelayServerUrl(relayServer);
-}
-
 export function isCliEntrypoint(
   argvPath = process.argv[1],
   moduleUrl = import.meta.url,
@@ -208,7 +181,6 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let newChat = false;
   let streamOff = false;
   let help = false;
-  let remoteControl = false;
   let verbose = false;
   let agentId: string | undefined;
   let newAgentId: string | undefined;
@@ -309,11 +281,6 @@ export function parseArguments(argv: string[]): ParsedArguments {
 
     if (arg === '--stream-off') {
       streamOff = true;
-      continue;
-    }
-
-    if (arg === '--remote') {
-      remoteControl = true;
       continue;
     }
 
@@ -442,7 +409,6 @@ export function parseArguments(argv: string[]): ParsedArguments {
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
     ...(worldId !== undefined ? { worldId } : {}),
-    remoteControl,
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
@@ -676,7 +642,6 @@ export async function main(
     workspaceRoot,
     projectRoot,
     worldId,
-    remoteControl,
     runtimeOverrides,
     streamOff,
     verbose,
@@ -692,7 +657,6 @@ export async function main(
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
     ...(worldId !== undefined ? { worldId } : {}),
-    remoteControl,
     runtimeOverrides,
     streamOff,
     verbose,
@@ -738,10 +702,6 @@ export async function main(
     });
   }
 
-  if (!remoteControl) {
-    await assertNoActiveRemoteHost();
-  }
-
   const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
@@ -769,55 +729,6 @@ export async function main(
     workspaceSystemPrompt,
     skillInventory,
   });
-
-  if (remoteControl) {
-    if (!options.interactivePrompt) {
-      agentSetupPrompt?.close?.();
-    }
-
-    await acquireRemoteHostLock({ chat });
-    const relayServer = readRemoteRelayServerUrl(process.env);
-
-    try {
-      await persistCompletedChat({
-        chat,
-        messages: chat.messages,
-        agentId: selectedAgentId,
-      });
-
-      const relaySession = await runRemoteControlSession({
-        relayServer,
-        chat,
-        chatStore: {
-          listChats: listPersistedChats,
-          loadChatById,
-          createChat: createPersistedChat,
-          setCurrentChat,
-          persistRemoteSessionState,
-          updateRemoteHostLock,
-        },
-        io,
-        initialMessage: message || undefined,
-        onSessionReady: async (startedRelaySession) => {
-          await persistRemoteSessionState({
-            chatId: chat.id,
-            remoteSession: startedRelaySession,
-          });
-        },
-        executeTurn,
-        relayClient,
-      });
-
-      await persistRemoteSessionState({
-        chatId: chat.id,
-        remoteSession: relaySession,
-      });
-
-      return relaySession;
-    } finally {
-      await releaseRemoteHostLock();
-    }
-  }
 
   if (!message) {
     agentSetupPromptPassedToInteractive = Boolean(agentSetupPrompt);

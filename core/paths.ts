@@ -11,6 +11,7 @@
  * - Separates workspace-owned paths from selected-world paths under `.agent-world/worlds/{worldId}`.
  *
  * Recent changes:
+ * - 2026-05-26: Removed remote-host lock path support with the relay product surface.
  * - 2026-05-24: Removed legacy root-env support and canonicalized cwd fallback into `AGENT_CLI_WORKSPACE`.
  * - 2026-05-23: Renamed the loaded root terminology from project to workspace.
  * - 2026-05-07: Added shared path helpers for the CLI implementation.
@@ -54,7 +55,6 @@ export let AGENT_WORLD_CHATS_ROOT = '';
 export let AGENT_WORLD_AGENTS_ROOT = '';
 export let AGENT_WORLD_QUEUES_ROOT = '';
 export let WORLD_SKILLS_ROOT = '';
-export let REMOTE_HOST_LOCK_PATH = '';
 
 function configureActiveWorldPaths(worldId = 'default'): string {
   ACTIVE_WORLD_ID = String(worldId || 'default').trim() || 'default';
@@ -64,7 +64,6 @@ function configureActiveWorldPaths(worldId = 'default'): string {
   AGENT_WORLD_AGENTS_ROOT = path.join(ACTIVE_WORLD_ROOT, 'agents');
   AGENT_WORLD_QUEUES_ROOT = path.join(ACTIVE_WORLD_ROOT, 'queues');
   WORLD_SKILLS_ROOT = path.join(ACTIVE_WORLD_ROOT, 'skills');
-  REMOTE_HOST_LOCK_PATH = path.join(ACTIVE_WORLD_ROOT, 'remote-host.lock.json');
 
   return ACTIVE_WORLD_ROOT;
 }

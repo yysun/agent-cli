@@ -6,14 +6,15 @@
  *
  * Key features:
  * - Preserves root precedence across explicit flags, `AGENT_CLI_WORKSPACE`, and cwd.
- * - Resolves `.env` from the process cwd for root discovery, credentials, and relay configuration.
+ * - Resolves `.env` from the process cwd for root discovery and credentials.
  * - Creates a cwd `.env.example` template when no cwd `.env` exists and no template is present.
- * - Limits `.env` imports to provider credentials and relay configuration.
+ * - Limits `.env` imports to provider credentials and optional workspace selection.
  *
  * Recent changes:
+ * - 2026-05-26: Removed relay configuration from `.env` handling.
  * - 2026-05-24: Removed legacy root-env handling.
  * - 2026-05-24: Resolved credential `.env` from cwd instead of the selected workspace root.
- * - 2026-05-23: Extracted shared workspace preparation for `agent-cli` and `agent-world-cli`.
+ * - 2026-05-23: Extracted shared workspace preparation for CLI entrypoints.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,10 +37,9 @@ export const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'AZURE_OPENAI_RESOURCE_NAME',
   'AZURE_OPENAI_DEPLOYMENT_NAME',
   'AZURE_OPENAI_API_VERSION',
-  'AGENT_CLI_RELAY_SERVER_URL',
 ]);
 
-const DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional relay settings.
+const DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional workspace selection.
 # Runtime defaults belong in .agent-world/worlds/{worldId}/world.json,
 # .agent-world/worlds/{worldId}/agents/{agentId}/agent.json, or CLI flags.
 
@@ -61,9 +61,6 @@ AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_RESOURCE_NAME=
 AZURE_OPENAI_DEPLOYMENT_NAME=
 # AZURE_OPENAI_API_VERSION=
-
-# Remote relay
-AGENT_CLI_RELAY_SERVER_URL=
 
 # Optional workspace selection from the invocation directory
 # AGENT_CLI_WORKSPACE=
