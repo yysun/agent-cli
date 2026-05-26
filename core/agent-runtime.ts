@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-05-26: Aligned runtime `load_skill` roots with opt-in global skill discovery.
  * - 2026-05-26: Point runtime defaults at `.env` and CLI flags.
  * - 2026-05-23: Renamed workspace root and AGENTS.md prompt parameters while preserving compatibility aliases.
  * - 2026-05-07: Added `llm-runtime` orchestration for the CLI.
@@ -26,8 +27,8 @@ import {
   runCompletionLoop,
 } from 'llm-runtime';
 
-import { buildSkillInventoryMessage } from './agent-files.js';
-import { SKILLS_ROOT, USER_SKILLS_ROOT, WORKSPACE_ROOT } from './paths.js';
+import { buildSkillInventoryMessage, isGlobalSkillLoadingEnabled } from './agent-files.js';
+import { GLOBAL_SKILLS_ROOTS, SKILLS_ROOT, WORKSPACE_ROOT } from './paths.js';
 
 /** @typedef {import('llm-runtime').LLMChatMessage} LLMChatMessage */
 /** @typedef {import('llm-runtime').LLMEnvironmentOptions} LLMEnvironmentOptions */
@@ -250,6 +251,13 @@ export function validateRuntimeEnvironment(environment = process.env, agentConfi
   };
 }
 
+export function buildRuntimeSkillRoots() {
+  return [
+    ...(isGlobalSkillLoadingEnabled() ? GLOBAL_SKILLS_ROOTS : []),
+    SKILLS_ROOT,
+  ];
+}
+
 /**
  * @param {string} builtInSystemPrompt
  * @param {string | undefined} workspaceSystemPrompt
@@ -413,7 +421,7 @@ export async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: [USER_SKILLS_ROOT, SKILLS_ROOT],
+    skillRoots: buildRuntimeSkillRoots(),
     ...(Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}),
   });
 

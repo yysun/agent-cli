@@ -1019,6 +1019,12 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
     providers
   };
 }
+function buildRuntimeSkillRoots() {
+  return [
+    ...isGlobalSkillLoadingEnabled() ? GLOBAL_SKILLS_ROOTS : [],
+    SKILLS_ROOT
+  ];
+}
 function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, skillInventory) {
   const layers = [builtInSystemPrompt.trim()];
   if (String(workspaceSystemPrompt ?? "").trim()) {
@@ -1117,7 +1123,7 @@ async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: [USER_SKILLS_ROOT, SKILLS_ROOT],
+    skillRoots: buildRuntimeSkillRoots(),
     ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
   });
   const pendingUserMessage = {

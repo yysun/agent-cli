@@ -11,6 +11,7 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-05-26: Covered runtime skill roots for opt-in global skill loading.
  * - 2026-05-26: Updated missing-model guidance for `.env` runtime defaults.
  * - 2026-05-16: Added coverage for runtime tool-result callbacks.
  * - 2026-05-23: Added coverage for CLI-handled tool-call results.
@@ -40,6 +41,7 @@ const ENV_KEYS = [
   'AZURE_OPENAI_RESOURCE_NAME',
   'AZURE_OPENAI_API_VERSION',
   'AZURE_OPENAI_DEPLOYMENT_NAME',
+  'AGENT_CLI_GLOBAL_SKILLS',
 ];
 const originalEnvironment = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
@@ -151,6 +153,24 @@ describe('agent-runtime', () => {
       provider: 'anthropic',
       model: '',
     })).toThrow('Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider anthropic.');
+  });
+
+  it('uses the same opt-in global skill roots for load_skill runtime tools', async () => {
+    process.env.AGENT_CLI_GLOBAL_SKILLS = 'false';
+
+    const { buildRuntimeSkillRoots } = await import('../../core/agent-runtime.js');
+
+    expect(buildRuntimeSkillRoots()).toEqual([
+      expect.stringContaining(path.join('.agent-world', 'skills')),
+    ]);
+
+    process.env.AGENT_CLI_GLOBAL_SKILLS = 'true';
+
+    expect(buildRuntimeSkillRoots()).toEqual([
+      expect.stringContaining(path.join('.agent-world', 'skills')),
+      expect.stringContaining(path.join('.agents', 'skills')),
+      expect.stringContaining(path.join('.agent-world', 'skills')),
+    ]);
   });
 
   it('runs a chat turn through llm-runtime with normalized runtime settings', async () => {
