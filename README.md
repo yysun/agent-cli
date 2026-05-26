@@ -161,7 +161,7 @@ Supported credential keys include:
 ## Validation
 
 ```sh
-npm run test:syntax
+npm run check
 npm run test:unit
 npm run test:e2e
 npm run electron:build

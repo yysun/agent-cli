@@ -580,9 +580,28 @@ button:disabled {
 
 .aw-message-card p,
 .aw-tool-card p {
+  margin: 0;
   color: #333333;
   font-size: 13px;
   line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.aw-message-actions button {
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #1d4ed8;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .aw-tool-card {
@@ -703,6 +722,10 @@ button:disabled {
   font-size: 18px;
 }
 
+.aw-send-button:disabled {
+  opacity: 0.55;
+}
+
 .aw-working-status {
   width: min(calc(100% - 32px), 860px);
   min-height: 24px;
@@ -729,6 +752,30 @@ button:disabled {
   background: var(--sidebar);
   color: var(--sidebar-foreground);
   padding: 16px;
+}
+
+.aw-empty-state {
+  width: min(100%, 860px);
+  margin: 0 auto;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  padding: 14px;
+  font-size: 13px;
+}
+
+.aw-runtime-meta,
+.aw-panel-copy {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.aw-runtime-meta {
+  display: grid;
+  gap: 4px;
 }
 
 .aw-panel-header {
