@@ -1051,23 +1051,20 @@ function parseToolArguments(argumentsText) {
     };
   }
 }
+var DEFAULT_BUILT_INS = "all";
 function createToolExecutor(runtime) {
   return {
     executeToolCall: async (toolCall, context, options = {}) => executeRuntimeToolCall({
       toolCall,
       environment: runtime,
-      builtIns: {
-        load_skill: true
-      },
+      builtIns: DEFAULT_BUILT_INS,
       ...context ? { context } : {},
       ...options.errorMode ? { errorMode: options.errorMode } : {}
     }),
     executeToolCalls: async (toolCalls, context, options = {}) => executeRuntimeToolCalls({
       toolCalls,
       environment: runtime,
-      builtIns: {
-        load_skill: true
-      },
+      builtIns: DEFAULT_BUILT_INS,
       ...context ? { context } : {},
       ...options.errorMode ? { errorMode: options.errorMode } : {}
     })
@@ -1151,10 +1148,7 @@ async function runChatTurn({
         ...typeof agentConfig.temperature === "number" ? { temperature: agentConfig.temperature } : {},
         ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
         ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
-        builtIns: {
-          load_skill: true,
-          ask_user_input: true
-        },
+        builtIns: DEFAULT_BUILT_INS,
         context: executionContext
       },
       ...abortSignal ? { abortSignal } : {},

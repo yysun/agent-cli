@@ -299,6 +299,8 @@ function parseToolArguments(argumentsText) {
   }
 }
 
+const DEFAULT_BUILT_INS = 'all';
+
 /**
  * @param {ReturnType<typeof createRuntime>} runtime
  */
@@ -307,18 +309,14 @@ function createToolExecutor(runtime) {
     executeToolCall: async (toolCall, context, options = {}) => executeRuntimeToolCall({
       toolCall,
       environment: runtime,
-      builtIns: {
-        load_skill: true,
-      },
+      builtIns: DEFAULT_BUILT_INS,
       ...(context ? { context } : {}),
       ...(options.errorMode ? { errorMode: options.errorMode } : {}),
     }),
     executeToolCalls: async (toolCalls, context, options = {}) => executeRuntimeToolCalls({
       toolCalls,
       environment: runtime,
-      builtIns: {
-        load_skill: true,
-      },
+      builtIns: DEFAULT_BUILT_INS,
       ...(context ? { context } : {}),
       ...(options.errorMode ? { errorMode: options.errorMode } : {}),
     }),
@@ -451,10 +449,7 @@ export async function runChatTurn({
         ...(typeof agentConfig.temperature === 'number' ? { temperature: agentConfig.temperature } : {}),
         ...(typeof agentConfig.maxTokens === 'number' ? { maxTokens: agentConfig.maxTokens } : {}),
         ...(agentConfig.webSearch !== undefined ? { webSearch: agentConfig.webSearch } : {}),
-        builtIns: {
-          load_skill: true,
-          ask_user_input: true,
-        },
+        builtIns: DEFAULT_BUILT_INS,
         context: executionContext,
       },
       ...(abortSignal ? { abortSignal } : {}),

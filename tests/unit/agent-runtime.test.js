@@ -255,10 +255,7 @@ describe('agent-runtime', () => {
         webSearch: {
           searchContextSize: 'low',
         },
-        builtIns: {
-          load_skill: true,
-          ask_user_input: true,
-        },
+        builtIns: 'all',
         context: expect.objectContaining({
           workingDirectory: expect.any(String),
           reasoningEffort: 'medium',
@@ -650,9 +647,7 @@ describe('agent-runtime', () => {
         },
       },
       environment: expect.objectContaining({ runtimeId: 'runtime-1' }),
-      builtIns: {
-        load_skill: true,
-      },
+      builtIns: 'all',
       context: expect.objectContaining({
         toolCallId: 'tool-1',
       }),
