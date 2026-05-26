@@ -6,6 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-05-26: Covered `.env` workspace selection creating `.agent-world` under the workspace, not cwd.
  * - 2026-05-26: Asserted generated initial `.env.example` exactly matches the checked-in example.
  * - 2026-05-26: Added coverage for omitting empty startup skill scopes.
  * - 2026-05-26: Added `.env` and startup coverage for opt-in global skill loading.
@@ -493,6 +494,10 @@ describe('agent-cli entrypoint', () => {
     expect(process.env.AGENT_CLI_GLOBAL_SKILLS).toBe('true');
     expect(process.env.AGENT_CLI_WORKSPACE).toBe(path.resolve('workspace-from-dotenv'));
     expect(startupText()).toBe(`Agent CLI starting in ${path.resolve('workspace-from-dotenv')}`);
+    expect(await readdir(path.join(cwdRoot, 'workspace-from-dotenv', '.agent-world'))).toEqual(
+      expect.arrayContaining(['chats', 'skills']),
+    );
+    await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
 
     const { main: missingEnvMain } = await loadCliModule(emptyCwdRoot);
     await missingEnvMain(['--help'], createIoCapture());

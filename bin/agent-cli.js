@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // cli/src/agent-cli.ts
-import path5 from "node:path";
+import path6 from "node:path";
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -207,7 +207,7 @@ function loadPersistedRuntimeConfig() {
 
 // core/agent-files.ts
 import { promises as fs2 } from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // core/paths.ts
 import path from "node:path";
@@ -265,7 +265,19 @@ function buildWorldChatEventsPath(chatId) {
 
 // core/workspace-store.ts
 import { promises as fs } from "node:fs";
+import path2 from "node:path";
+function syncWorkspaceRootFromEnvironment() {
+  const configuredWorkspaceRoot = String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
+  if (!configuredWorkspaceRoot) {
+    return;
+  }
+  const resolvedWorkspaceRoot = path2.resolve(configuredWorkspaceRoot);
+  if (resolvedWorkspaceRoot !== WORKSPACE_ROOT) {
+    configureWorkspaceRoot(resolvedWorkspaceRoot);
+  }
+}
 async function ensureWorkspaceStorage() {
+  syncWorkspaceRootFromEnvironment();
   await Promise.all([
     fs.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
     fs.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
@@ -359,7 +371,7 @@ async function collectSkillFilePaths(rootPath) {
     const entries = await fs2.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const entryPath = path2.join(currentPath, entry.name);
+      const entryPath = path3.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         queue.push(entryPath);
         continue;
@@ -454,7 +466,7 @@ function buildSkillInventoryMessage(skills) {
 
 // core/workspace-environment.ts
 import fs3 from "node:fs";
-import path3 from "node:path";
+import path4 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
@@ -521,13 +533,13 @@ AZURE_OPENAI_DEPLOYMENT_NAME=
 `;
 var loadedDotEnvPaths = /* @__PURE__ */ new Set();
 function resolveCwdDotEnvPath() {
-  return path3.join(process.cwd(), ".env");
+  return path4.join(process.cwd(), ".env");
 }
 function ensureDotEnvExampleFile(dotEnvPath) {
   if (fs3.existsSync(dotEnvPath)) {
     return;
   }
-  const examplePath = path3.join(path3.dirname(dotEnvPath), ".env.example");
+  const examplePath = path4.join(path4.dirname(dotEnvPath), ".env.example");
   if (fs3.existsSync(examplePath)) {
     return;
   }
@@ -580,10 +592,10 @@ function prepareWorkspaceEnvironment(workspaceRoot) {
   return resolvedRoot;
 }
 
-// core/world-store.ts
+// core/chat-store.ts
 import { randomUUID } from "node:crypto";
 import { promises as fs4 } from "node:fs";
-import path4 from "node:path";
+import path5 from "node:path";
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   return `${timestamp}-${randomUUID().slice(0, 8)}`;
@@ -638,18 +650,18 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
   };
 }
 async function writeJsonAtomic(filePath, value) {
-  const directoryPath = path4.dirname(filePath);
-  const fileName = path4.basename(filePath);
-  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const directoryPath = path5.dirname(filePath);
+  const fileName = path5.basename(filePath);
+  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs4.mkdir(directoryPath, { recursive: true });
   await fs4.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
   await fs4.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
-  const directoryPath = path4.dirname(filePath);
-  const fileName = path4.basename(filePath);
-  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  const directoryPath = path5.dirname(filePath);
+  const fileName = path5.basename(filePath);
+  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
   await fs4.mkdir(directoryPath, { recursive: true });
   await fs4.writeFile(temporaryPath, text, "utf8");
   await fs4.rename(temporaryPath, filePath);
@@ -663,7 +675,7 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs4.mkdir(path4.dirname(filePath), { recursive: true });
+  await fs4.mkdir(path5.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
   await fs4.appendFile(filePath, serialized, "utf8");
@@ -839,10 +851,10 @@ async function setCurrentChat(chatId) {
   return chat;
 }
 async function loadRequestedChat({ newChat }) {
+  await ensureChatStorage();
   if (newChat) {
     return createEmptyChat();
   }
-  await ensureChatStorage();
   const chatId = await readCurrentChatId();
   if (!chatId) {
     return createEmptyChat();
@@ -1846,10 +1858,10 @@ function summarizePathExistsResult(result, forcedDurationMs) {
   const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const exists = readFirstBoolean(record, "exists");
-  const path6 = readFirstString(record, "path", "filePath");
+  const path7 = readFirstString(record, "path", "filePath");
   const type = readFirstString(record, "type", "kind");
   const preview = [
-    path6 ? truncateOneLine(`path: ${path6}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    path7 ? truncateOneLine(`path: ${path7}`, MAX_PREVIEW_LINE_WIDTH) : null,
     type ? `type: ${type}` : null
   ].filter((line) => line !== null);
   return {
@@ -2004,7 +2016,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
   const data = parseJsonRecord2(readDataField(result));
   const contentType = readFirstString(data, "contentType") ?? "content";
   const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
-  const path6 = readFirstString(data, "path");
+  const path7 = readFirstString(data, "path");
   const content = readFirstString(data, "content");
   const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
   const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
@@ -2013,7 +2025,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
     ok: true,
     durationMs,
     summary,
-    preview: path6 ? [`path: ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    preview: path7 ? [`path: ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
     raw: result
   };
 }
@@ -2025,13 +2037,13 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
   const data = isRecord2(record?.data) ? record.data : null;
-  const path6 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const path7 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
     name: toolName,
     ok: true,
     durationMs,
-    summary: path6 ? `${summary} \xB7 ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    summary: path7 ? `${summary} \xB7 ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH)}` : summary,
     raw: result
   };
 }
@@ -2507,7 +2519,7 @@ function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url
   try {
     return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
   } catch {
-    return pathToFileURL(path5.resolve(argvPath)).href === moduleUrl;
+    return pathToFileURL(path6.resolve(argvPath)).href === moduleUrl;
   }
 }
 function parseArguments(argv) {

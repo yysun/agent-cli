@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Agent CLI World Store
+ * Agent CLI Chat Store
  *
  * Purpose:
  * - Persist local chat history under the flat `.agent-world/chats` layout.
@@ -11,6 +11,7 @@
  * - Does not persist worlds, world ids, agents, `agent.json`, or runtime defaults.
  *
  * Recent changes:
+ * - 2026-05-26: Ensured new chat requests also initialize workspace storage.
  * - 2026-05-26: Flattened storage to `.agent-world/chats` and removed persisted agent/world state.
  */
 import { randomUUID } from 'node:crypto';
@@ -433,11 +434,12 @@ export async function setCurrentChat(chatId) {
  * @param {{ newChat: boolean }} params
  */
 export async function loadRequestedChat({ newChat }) {
+  await ensureChatStorage();
+
   if (newChat) {
     return createEmptyChat();
   }
 
-  await ensureChatStorage();
   const chatId = await readCurrentChatId();
 
   if (!chatId) {

@@ -39,7 +39,7 @@ import {
   loadRequestedChat,
   persistCompletedChat,
   setCurrentChat,
-} from '../core/world-store.js';
+} from '../core/chat-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

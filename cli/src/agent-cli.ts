@@ -10,6 +10,7 @@
  * - Prints startup diagnostics for workspace root and runtime selection.
  *
  * Recent changes:
+ * - 2026-05-26: Renamed chat persistence import to chat-store.
  * - 2026-05-26: Omit empty skill scopes from verbose startup diagnostics.
  * - 2026-05-26: Removed world, agent selection, and persisted `agent.json` runtime config.
  * - 2026-05-26: Removed remote relay hosting and kept `agent-cli` as the sole CLI surface.
@@ -40,7 +41,7 @@ import {
   loadRequestedChat,
   listPersistedChats,
   setCurrentChat,
-} from '../../core/world-store.js';
+} from '../../core/chat-store.js';
 import {
   type CliIo,
   createTurnExecutor,

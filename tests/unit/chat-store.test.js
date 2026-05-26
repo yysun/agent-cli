@@ -1,15 +1,16 @@
 // @ts-check
 /**
- * Agent CLI World Store Unit Tests
+ * Agent CLI Chat Store Unit Tests
  *
  * Purpose:
  * - Validate flat `.agent-world/chats` persistence.
  *
  * Recent changes:
+ * - 2026-05-26: Covered post-import `AGENT_CLI_WORKSPACE` changes before storage creation.
  * - 2026-05-26: Removed world and agent metadata expectations.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.js';
@@ -18,11 +19,11 @@ import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.j
 const rootsToClean = [];
 const originalCwd = process.cwd();
 
-async function loadWorldStore(rootPath) {
+async function loadChatStore(rootPath) {
   process.chdir(rootPath);
   process.env.AGENT_CLI_WORKSPACE = rootPath;
   vi.resetModules();
-  return await import('../../core/world-store.js');
+  return await import('../../core/chat-store.js');
 }
 
 afterEach(async () => {
@@ -39,12 +40,31 @@ afterEach(async () => {
   }
 });
 
-describe('world-store', () => {
+describe('chat-store', () => {
+  it('creates .agent-world under AGENT_CLI_WORKSPACE even when the env var changes after import', async () => {
+    const cwdRoot = await createTestRoot();
+    const workspaceRoot = await createTestRoot();
+    rootsToClean.push(cwdRoot, workspaceRoot);
+    process.chdir(cwdRoot);
+    delete process.env.AGENT_CLI_WORKSPACE;
+    vi.resetModules();
+
+    const { loadRequestedChat } = await import('../../core/chat-store.js');
+    process.env.AGENT_CLI_WORKSPACE = workspaceRoot;
+
+    await loadRequestedChat({ newChat: true });
+
+    expect(await readdir(path.join(workspaceRoot, '.agent-world'))).toEqual(
+      expect.arrayContaining(['chats', 'skills']),
+    );
+    await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
+  });
+
   it('persists chats under .agent-world/chats and tracks the current chat there', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat } = await loadWorldStore(rootPath);
+    const { loadRequestedChat, persistCompletedChat } = await loadChatStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -86,7 +106,7 @@ describe('world-store', () => {
       loadRequestedChat,
       persistCompletedChat,
       setCurrentChat,
-    } = await loadWorldStore(rootPath);
+    } = await loadChatStore(rootPath);
     const firstChat = await loadRequestedChat({ newChat: true });
     await persistCompletedChat({
       chat: firstChat,
@@ -118,7 +138,7 @@ describe('world-store', () => {
       listPersistedChats,
       loadRequestedChat,
       persistCompletedChat,
-    } = await loadWorldStore(rootPath);
+    } = await loadChatStore(rootPath);
     const activeChat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -158,7 +178,7 @@ describe('world-store', () => {
       loadChatById,
       loadRequestedChat,
       persistCompletedChat,
-    } = await loadWorldStore(rootPath);
+    } = await loadChatStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
 
     await persistCompletedChat({
@@ -185,7 +205,7 @@ describe('world-store', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
-    const { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } = await loadWorldStore(rootPath);
+    const { loadRequestedChat, persistCompletedChat, persistStreamTraceEvents } = await loadChatStore(rootPath);
     const chat = await loadRequestedChat({ newChat: true });
     await persistCompletedChat({ chat, messages: [] });
 
@@ -220,7 +240,7 @@ describe('world-store', () => {
     );
     await writeFile(path.join(rootPath, '.chats', 'current.json'), `${JSON.stringify({ chatId: 'legacy-chat-1' }, null, 2)}\n`, 'utf8');
 
-    const { listPersistedChats, loadRequestedChat } = await loadWorldStore(rootPath);
+    const { listPersistedChats, loadRequestedChat } = await loadChatStore(rootPath);
     const current = await loadRequestedChat({ newChat: false });
     expect(current.id).not.toBe('legacy-chat-1');
     expect(current.messages).toEqual([]);

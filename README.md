@@ -9,7 +9,7 @@ The supported boundary is intentionally small: run agents locally through `agent
 - `cli/src/agent-cli.ts`: CLI argument parsing, one-shot turns, and interactive terminal chat.
 - `cli/src/turn-executor.ts`: terminal turn execution and stream-trace persistence.
 - `core/agent-runtime.ts`: provider/runtime integration.
-- `core/world-store.ts`: flat chat storage under `.agent-world/chats`.
+- `core/chat-store.ts`: flat chat storage under `.agent-world/chats`.
 - `core/agent-files.ts`: built-in prompt, workspace `AGENTS.md`, and skill inventory loading.
 - `electron/`: Electron main/preload code and the Electron-owned renderer.
 - `bin/agent-cli.js`: generated CLI executable.

@@ -21,7 +21,7 @@ import { getBuiltInSystemPrompt } from '../../core/agent-files.js';
 import {
   persistCompletedChat,
   persistStreamTraceEvents,
-} from '../../core/world-store.js';
+} from '../../core/chat-store.js';
 import { runChatTurn } from '../../core/agent-runtime.js';
 import {
   collectHumanInputAnswer,
