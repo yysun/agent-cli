@@ -6,20 +6,15 @@
  *
  * Key features:
  * - Applies workspace-root and runtime overrides before loading workspace-local resources.
- * - Selects the active world before resolving world-owned chats, agents, and queues.
  * - Keeps normal message turns and no-argument interactive mode in one shell layer.
- * - Selects and initializes named agents before resolving runtime config.
- * - Prints startup diagnostics for workspace root and selected agent id.
+ * - Prints startup diagnostics for workspace root and runtime selection.
  *
  * Recent changes:
+ * - 2026-05-26: Removed world, agent selection, and persisted `agent.json` runtime config.
  * - 2026-05-26: Removed remote relay hosting and kept `agent-cli` as the sole CLI surface.
- * - 2026-05-24: Updated runtime help to describe world.json and agent.json defaults.
- * - 2026-05-23: Added --world selection for multi-world workspaces.
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
  * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
  * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
- * - 2026-05-20: Added startup agent-id output.
- * - 2026-05-20: Added --agent-id and --new-agent agent selection.
  * - 2026-05-20: Added startup root output and cwd .env fallback.
  */
 import path from 'node:path';
@@ -41,8 +36,6 @@ import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js
 import { ensureWorkspaceWorld } from '../../core/workspace-store.js';
 import {
   createPersistedChat,
-  ensureAgentSelection,
-  loadAgentMetadata,
   loadRequestedChat,
   listPersistedChats,
   setCurrentChat,
@@ -54,17 +47,13 @@ import {
 } from './turn-executor.js';
 
 export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
-const DEFAULT_AGENT_ID = 'default';
 
 export interface ParsedArguments {
   help: boolean;
-  agentId?: string;
   newChat: boolean;
-  newAgentId?: string;
   runtimeOverrides: Record<string, unknown>;
   workspaceRoot?: string;
   projectRoot?: string;
-  worldId?: string;
   streamOff: boolean;
   verbose: boolean;
   message: string;
@@ -72,7 +61,6 @@ export interface ParsedArguments {
 
 export interface MainOptions {
   agentConfig?: Record<string, unknown>;
-  agentId?: string;
   interactivePrompt?: InteractivePrompt;
   startupDiagnostics?: boolean;
 }
@@ -86,14 +74,13 @@ export function usageText(): string {
   return [
     'Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
     '',
-    'Runtime options override world.json and agent.json defaults when provided:',
+    'Runtime options override AGENT_CLI_PROVIDER and AGENT_CLI_MODEL from .env when provided:',
     '  --provider <name>                 --model <name>',
     '  --temperature <number>            --max-tokens <number>',
     '  --tool-permission <auto|ask|read> --reasoning-effort <level>',
     '  --past-messages <count>           --stream-trace <true|false>',
     '  --web-search <true|false|low|medium|high>',
-    '  --agent-id <id>                  --new-agent <id>',
-    '  --workspace <path>               --world <id>',
+    '  --workspace <path>',
     '',
     'Examples:',
     '  agent-cli --new-chat "Map my next financial move"',
@@ -101,20 +88,17 @@ export function usageText(): string {
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
     '  agent-cli --workspace /path/to/workspace "Summarize this repo"',
-    '  agent-cli --new-agent research --provider ollama --model gemma4:e4b',
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"',
   ].join('\n');
 }
 
 export function startupText(
   cwd = WORKSPACE_ROOT,
-  agentId = DEFAULT_AGENT_ID,
   runtimeSettings?: { provider: string; model: string },
   scopedSkills?: SkillScopesForStartup,
 ): string {
   const lines = [
     `Agent CLI starting in ${cwd}`,
-    `Agent CLI agent id: ${agentId}`,
   ];
 
   if (runtimeSettings) {
@@ -135,7 +119,6 @@ export function runtimeSelectionText(runtimeSettings: { provider: string; model:
 type SkillScopesForStartup = {
   user: Array<{ skillId: string }>;
   project: Array<{ skillId: string }>;
-  world: Array<{ skillId: string }>;
 };
 
 function formatSkillIds(skills: Array<{ skillId: string }>): string {
@@ -151,7 +134,6 @@ export function skillStartupText(scopedSkills: SkillScopesForStartup): string {
     'Skills available:',
     `  user: ${formatSkillIds(scopedSkills.user)}`,
     `  project: ${formatSkillIds(scopedSkills.project)}`,
-    `  world: ${formatSkillIds(scopedSkills.world)}`,
   ].join('\n');
 }
 
@@ -182,11 +164,8 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let streamOff = false;
   let help = false;
   let verbose = false;
-  let agentId: string | undefined;
-  let newAgentId: string | undefined;
   let workspaceRoot: string | undefined;
   let projectRoot: string | undefined;
-  let worldId: string | undefined;
   const messageParts: string[] = [];
   const runtimeOverrides: Record<string, unknown> = {};
 
@@ -298,33 +277,12 @@ export function parseArguments(argv: string[]): ParsedArguments {
         continue;
       }
 
-      if (flagName === 'agent-id') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        agentId = String(result.value);
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'new-agent') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        newAgentId = String(result.value);
-        index = result.nextIndex;
-        continue;
-      }
-
       if (flagName === 'workspace' || flagName === 'project') {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         workspaceRoot = String(result.value);
         if (flagName === 'project') {
           projectRoot = String(result.value);
         }
-        index = result.nextIndex;
-        continue;
-      }
-
-      if (flagName === 'world') {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        worldId = String(result.value);
         index = result.nextIndex;
         continue;
       }
@@ -403,12 +361,9 @@ export function parseArguments(argv: string[]): ParsedArguments {
 
   return {
     help,
-    ...(agentId !== undefined ? { agentId } : {}),
     newChat,
-    ...(newAgentId !== undefined ? { newAgentId } : {}),
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     ...(projectRoot !== undefined ? { projectRoot } : {}),
-    ...(worldId !== undefined ? { worldId } : {}),
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
@@ -430,87 +385,6 @@ function runtimeSettingsForStartup(agentConfig: Record<string, unknown>): { prov
   const model = normalizeOptionalText(agentConfig.model) || defaultModelForProvider(provider);
 
   return { provider, model };
-}
-
-async function askAgentField({
-  prompt,
-  label,
-  fallback,
-}: {
-  prompt?: InteractivePrompt,
-  label: string,
-  fallback: string,
-}): Promise<string> {
-  if (!prompt) {
-    return fallback;
-  }
-
-  const suffix = fallback ? ` (${fallback})` : '';
-  const answer = (await prompt.question(`${label}${suffix}: `)).trim();
-
-  return answer || fallback;
-}
-
-async function prepareSelectedAgent({
-  parsed,
-  prompt,
-}: {
-  parsed: ParsedArguments,
-  prompt?: InteractivePrompt,
-}): Promise<string> {
-  const selectedAgentId = normalizeOptionalText(parsed.newAgentId ?? parsed.agentId) || DEFAULT_AGENT_ID;
-  const explicitAgentSelection = Boolean(parsed.newAgentId || parsed.agentId);
-
-  if (!explicitAgentSelection) {
-    return selectedAgentId;
-  }
-
-  const existingMetadata = await loadAgentMetadata(selectedAgentId);
-  const creatingAgent = Boolean(parsed.newAgentId) || !existingMetadata;
-  const overrideProvider = normalizeOptionalText(parsed.runtimeOverrides.provider);
-  const overrideModel = normalizeOptionalText(parsed.runtimeOverrides.model);
-  let name = normalizeOptionalText(existingMetadata?.name);
-  let provider = normalizeOptionalText(existingMetadata?.provider);
-  let model = normalizeOptionalText(existingMetadata?.model);
-
-  if (creatingAgent || !name) {
-    name = prompt
-      ? await askAgentField({
-        prompt,
-        label: 'Agent name',
-        fallback: name || `${selectedAgentId} agent`,
-      })
-      : name || `${selectedAgentId} agent`;
-  }
-
-  if (creatingAgent || !provider) {
-    provider = prompt
-      ? await askAgentField({
-        prompt,
-        label: 'Provider',
-        fallback: provider || overrideProvider || 'openai',
-      })
-      : provider || overrideProvider;
-  }
-
-  if (creatingAgent || !model) {
-    model = prompt
-      ? await askAgentField({
-        prompt,
-        label: 'Model',
-        fallback: model || overrideModel || defaultModelForProvider(provider),
-      })
-      : model || overrideModel;
-  }
-
-  await ensureAgentSelection({
-    agentId: selectedAgentId,
-    name,
-    provider,
-    model,
-  });
-
-  return selectedAgentId;
 }
 
 function formatChatListItem(chat: {
@@ -636,76 +510,35 @@ export async function main(
 ) {
   const {
     help,
-    agentId,
     newChat,
-    newAgentId,
     workspaceRoot,
     projectRoot,
-    worldId,
     runtimeOverrides,
     streamOff,
     verbose,
     message,
   } = parseArguments(argv);
   prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
-  await ensureWorkspaceWorld(worldId ? { worldId } : {});
-  const parsedArguments = {
-    help,
-    ...(agentId !== undefined ? { agentId } : {}),
-    newChat,
-    ...(newAgentId !== undefined ? { newAgentId } : {}),
-    ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
-    ...(projectRoot !== undefined ? { projectRoot } : {}),
-    ...(worldId !== undefined ? { worldId } : {}),
-    runtimeOverrides,
-    streamOff,
-    verbose,
-    message,
-  };
-
-  if (help && !newAgentId && !agentId) {
-    io.stdout.write(`${usageText()}\n`);
-    return null;
-  }
-
-  const shouldCreateAgentPrompt = Boolean((newAgentId || agentId) && process.stdin.isTTY);
-  const agentSetupPrompt = options.interactivePrompt
-    ?? (shouldCreateAgentPrompt ? createDefaultInteractivePrompt() : undefined);
-  let agentSetupPromptPassedToInteractive = false;
-
-  const selectedAgentId = await prepareSelectedAgent({
-    parsed: parsedArguments,
-    prompt: agentSetupPrompt,
-  });
+  await ensureWorkspaceWorld();
 
   if (help) {
-    if (!options.interactivePrompt) {
-      agentSetupPrompt?.close?.();
-    }
-
     io.stdout.write(`${usageText()}\n`);
     return null;
   }
+
+  const agentSetupPrompt = options.interactivePrompt;
+  let agentSetupPromptPassedToInteractive = false;
 
   const agentConfig = await resolveEffectiveAgentConfig({
     optionAgentConfig: options.agentConfig,
     runtimeOverrides,
-    agentId: options.agentId ?? selectedAgentId,
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
-
-  if (!newAgentId && !agentId) {
-    await ensureAgentSelection({
-      agentId: selectedAgentId,
-      provider: normalizeOptionalText(agentConfig.provider),
-      model: normalizeOptionalText(agentConfig.model),
-    });
-  }
 
   const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
-    loadRequestedChat({ newChat, agentId: selectedAgentId }),
+    loadRequestedChat({ newChat }),
   ]);
   const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
 
@@ -713,7 +546,6 @@ export async function main(
     (io.stderr ?? process.stderr).write(
       `${startupText(
         WORKSPACE_ROOT,
-        selectedAgentId,
         runtimeSettingsForStartup(agentConfig),
         scopedSkillInventory,
       )}\n`,
@@ -724,7 +556,6 @@ export async function main(
     io,
     verbose,
     streamOff: effectiveStreamOff,
-    agentId: selectedAgentId,
     agentConfig,
     workspaceSystemPrompt,
     skillInventory,
@@ -769,7 +600,7 @@ export async function runCli(
   try {
     const parsed = parseArguments(argv);
     prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
-    await ensureWorkspaceWorld(parsed.worldId ? { worldId: parsed.worldId } : {});
+    await ensureWorkspaceWorld();
 
     await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {

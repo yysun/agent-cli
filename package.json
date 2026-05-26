@@ -12,7 +12,7 @@
     "build": "npm run build:core && npm run build:cli",
     "prepare": "npm run build",
     "test": "npm run test:syntax && npm run test:unit && npm run test:e2e",
-    "test:syntax": "npm run build && node --check ./bin/agent-cli.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-cli.test.js && node --check ./tests/unit/agent-config.test.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/paths.test.js && node --check ./tests/unit/world-store.test.js && node --check ./tests/unit/agent-runtime.test.js && node --check ./tests/unit/agent-world-runtime.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js",
+    "test:syntax": "npm run build && node --check ./bin/agent-cli.js && node --check ./vitest.config.js && node --check ./tests/helpers/test-root.js && node --check ./tests/unit/agent-cli.test.js && node --check ./tests/unit/agent-config.test.js && node --check ./tests/unit/agent-files.test.js && node --check ./tests/unit/paths.test.js && node --check ./tests/unit/world-store.test.js && node --check ./tests/unit/agent-runtime.test.js && node --check ./tests/e2e/agent-cli.e2e.test.js",
     "test:unit": "npm run build && vitest run tests/unit",
     "test:e2e": "npm run build && vitest run tests/e2e/agent-cli.e2e.test.js",
     "agent-cli": "npm run build && node ./bin/agent-cli.js",

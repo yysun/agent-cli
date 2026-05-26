@@ -7,11 +7,11 @@
  *
  * Key features:
  * - Creates temporary Agent CLI roots with AGENTS/.agent-world fixtures on demand.
- * - Provides helpers for selected-world fixture paths.
+ * - Provides helpers for flat `.agent-world` fixture paths.
  * - Provides JSON and stdout helpers used by both unit and e2e suites.
  *
  * Recent changes:
- * - 2026-05-23: Added default-world path helper for multi-world storage tests.
+ * - 2026-05-26: Switched workspace skill fixtures to `.agent-world/skills`.
  * - 2026-05-07: Added shared test-fixture helpers for unit and e2e coverage.
  * - 2026-05-23: Added optional TTY flags to output capture helpers.
  */
@@ -47,7 +47,7 @@ export async function ensureSkillsRoot(rootPath) {
  * @param {string} [worldId]
  */
 export function buildWorldRoot(rootPath, worldId = 'default') {
-  return path.join(rootPath, '.agent-world', 'worlds', worldId);
+  return path.join(rootPath, '.agent-world');
 }
 
 /**

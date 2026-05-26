@@ -11,7 +11,7 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
- * - 2026-05-24: Updated missing-model guidance for world.json and agent.json runtime settings.
+ * - 2026-05-26: Updated missing-model guidance for `.env` runtime defaults.
  * - 2026-05-16: Added coverage for runtime tool-result callbacks.
  * - 2026-05-23: Added coverage for CLI-handled tool-call results.
  * - 2026-05-16: Migrated agent-runtime coverage to the `llm-runtime` 0.5.0 loop API.
@@ -150,7 +150,7 @@ describe('agent-runtime', () => {
     expect(() => validateRuntimeEnvironment(process.env, {
       provider: 'anthropic',
       model: '',
-    })).toThrow('Missing LLM model. Set it in world.json, agent.json, or pass --model for provider anthropic.');
+    })).toThrow('Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider anthropic.');
   });
 
   it('runs a chat turn through llm-runtime with normalized runtime settings', async () => {
@@ -216,7 +216,6 @@ describe('agent-runtime', () => {
       },
       skillRoots: expect.arrayContaining([
         expect.stringContaining(path.join('.agent-world', 'skills')),
-        expect.stringContaining(path.join('.agent-world', 'worlds', 'default', 'skills')),
       ]),
       defaults: {
         reasoningEffort: 'medium',

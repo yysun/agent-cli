@@ -10,14 +10,14 @@
  * - Verifies persisted session files rather than only internal helper behavior.
  *
  * Recent changes:
- * - 2026-05-24: Moved live runtime fixture setup from runtime.json to world.json.
+ * - 2026-05-26: Moved live runtime fixture setup from world.json to environment defaults.
  * - 2026-05-07: Switched e2e coverage from a mocked runtime to live LLM-backed turns.
  * - 2026-05-07: Made `test:e2e` require a usable live provider and moved deterministic CLI checks to unit tests.
  */
 import 'dotenv/config';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -43,6 +43,8 @@ const RUNTIME_ENVIRONMENT_KEYS = [
   'AZURE_OPENAI_RESOURCE_NAME',
   'AZURE_OPENAI_DEPLOYMENT_NAME',
   'AZURE_OPENAI_API_VERSION',
+  'AGENT_CLI_PROVIDER',
+  'AGENT_CLI_MODEL',
 ];
 const WORKSPACE_ENVIRONMENT_KEYS = [
   'AGENT_CLI_WORKSPACE',
@@ -130,7 +132,7 @@ function resolveRequiredLiveRuntimeConfig(environment) {
   }
 
   throw new Error(
-    'test:e2e requires a usable live LLM provider configuration. Configure credentials for any supported provider so the test can write matching world.json runtime settings.',
+    'test:e2e requires a usable live LLM provider configuration. Configure credentials for any supported provider.',
   );
 }
 
@@ -166,16 +168,9 @@ function restoreWorkspaceEnvironment(snapshot) {
   }
 }
 
-/** @param {string} rootPath */
-async function writeLiveRuntimeConfig(rootPath) {
-  await mkdir(path.join(rootPath, '.agent-world', 'worlds', 'default'), { recursive: true });
-  await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'), `${JSON.stringify({
-    id: 'world-1',
-    name: 'Live E2E World',
-    defaultAgentId: 'default',
-    currentChatId: '',
-    ...liveRuntimeConfig.runtimeConfig,
-  }, null, 2)}\n`, 'utf8');
+function applyLiveRuntimeConfig() {
+  process.env.AGENT_CLI_PROVIDER = liveRuntimeConfig.runtimeConfig.provider;
+  process.env.AGENT_CLI_MODEL = liveRuntimeConfig.runtimeConfig.model;
 }
 
 /** @param {string} filePath */
@@ -276,7 +271,7 @@ describe('agent-cli CLI', () => {
       'You are a terse test assistant. Reply in a single plain sentence without markdown.',
     );
     await ensureSkillsRoot(rootPath);
-    await writeLiveRuntimeConfig(rootPath);
+    applyLiveRuntimeConfig();
 
     const { main } = await loadCli(rootPath);
     const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
@@ -288,8 +283,8 @@ describe('agent-cli CLI', () => {
 
     expect(assistantText.length).toBeGreaterThan(0);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
-    const chatFilePath = path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', world.currentChatId, 'messages.jsonl');
+    const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const chatFilePath = path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl');
     const chatMessages = await readJsonl(chatFilePath);
     const rawChatFile = await readFile(chatFilePath, 'utf8');
 
@@ -327,7 +322,7 @@ describe('agent-cli CLI', () => {
         'Keep the answer to one short sentence.',
       ].join('\n'),
     });
-    await writeLiveRuntimeConfig(rootPath);
+    applyLiveRuntimeConfig();
 
     const { main } = await loadCli(rootPath);
     const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
@@ -340,8 +335,8 @@ describe('agent-cli CLI', () => {
     expect(assistantText).toContain(systemProbeToken);
     expect(assistantText).toContain(skillProbeToken);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
-    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', world.currentChatId, 'messages.jsonl'));
+    const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'));
     const loadSkillMessage = chatMessages.find(
       /** @param {{ role?: string, tool_calls?: Array<{ function?: { name?: string, arguments?: string } }> }} message */
       (message) => message.role === 'assistant'
@@ -363,7 +358,7 @@ describe('agent-cli CLI', () => {
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Keep responses under 20 words.');
     await ensureSkillsRoot(rootPath);
-    await writeLiveRuntimeConfig(rootPath);
+    applyLiveRuntimeConfig();
 
     const { main } = await loadCli(rootPath);
 
@@ -371,13 +366,13 @@ describe('agent-cli CLI', () => {
       ['--new-chat', 'Say hello briefly.'],
       /** @type {import('../../cli/src/turn-executor.js').CliIo} */(createIoCapture()),
     );
-    const firstWorld = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
+    const firstCurrent = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
 
     const secondIo = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
     await main(['Now say goodbye briefly.'], secondIo);
 
-    const secondWorld = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
-    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', secondWorld.currentChatId, 'messages.jsonl'));
+    const secondCurrent = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', secondCurrent.chatId, 'messages.jsonl'));
     const secondAssistantText = extractAssistantTextFromCliStdout(secondIo.getStdout());
     const userMessages = chatMessages
       .filter(
@@ -389,7 +384,7 @@ describe('agent-cli CLI', () => {
         (message) => message.content,
       );
 
-    expect(secondWorld.currentChatId).toBe(firstWorld.currentChatId);
+    expect(secondCurrent.chatId).toBe(firstCurrent.chatId);
     expect(userMessages).toEqual(['Say hello briefly.', 'Now say goodbye briefly.']);
     expect(secondAssistantText.length).toBeGreaterThan(0);
     expect(chatMessages.at(-1)?.role).toBe('assistant');
@@ -402,15 +397,15 @@ describe('agent-cli CLI', () => {
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'You are a terse test assistant. Reply in one short sentence.');
     await ensureSkillsRoot(rootPath);
-    await writeLiveRuntimeConfig(rootPath);
+    applyLiveRuntimeConfig();
 
     const { main } = await loadCli(rootPath);
     const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
 
     await main(['follow up'], io);
 
-    const world = await readJson(path.join(rootPath, '.agent-world', 'worlds', 'default', 'world.json'));
-    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'worlds', 'default', 'chats', world.currentChatId, 'messages.jsonl'));
+    const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'));
     const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);

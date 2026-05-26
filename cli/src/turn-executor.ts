@@ -10,6 +10,7 @@
  * - Formats verbose tool activity through a dedicated trace renderer.
  *
  * Recent changes:
+ * - 2026-05-26: Removed agent-id-specific persisted runtime config and chat persistence.
  * - 2026-05-23: Renamed from agent-runtime to clarify this is the CLI turn executor.
  * - 2026-05-23: Renamed root prompt option from project to workspace terminology.
  * - 2026-05-16: Added structured verbose tool-call and tool-result rendering.
@@ -76,14 +77,12 @@ export interface StreamTraceEvent {
 export interface ResolveEffectiveAgentConfigOptions {
   optionAgentConfig?: Record<string, unknown>;
   runtimeOverrides?: Record<string, unknown>;
-  agentId?: string;
 }
 
 export interface CreateTurnExecutorOptions {
   io: CliIo;
   verbose: boolean;
   streamOff: boolean;
-  agentId?: string;
   agentConfig: Record<string, unknown>;
   workspaceSystemPrompt?: string;
   projectSystemPrompt?: string;
@@ -116,9 +115,7 @@ function writeDiagnostic(stderr: WritableSink, kind: string, text: string): void
 export async function resolveEffectiveAgentConfig(
   options: ResolveEffectiveAgentConfigOptions = {},
 ): Promise<Record<string, unknown>> {
-  const persistedAgentConfig = await loadPersistedRuntimeConfig({
-    agentId: options.agentId,
-  });
+  const persistedAgentConfig = loadPersistedRuntimeConfig();
   const baseAgentConfig = {
     ...persistedAgentConfig,
     ...(options.optionAgentConfig ?? {}),
@@ -313,7 +310,6 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       await persistCompletedChat({
         chat,
         messages: turnResult.messages,
-        agentId: options.agentId,
       });
 
       if (streamTraceEnabled) {

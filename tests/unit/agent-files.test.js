@@ -3,19 +3,10 @@
  * Agent CLI Agent File Unit Tests
  *
  * Purpose:
- * - Validate system-prompt loading and `SKILL.md` inventory behavior in isolation.
- *
- * Key features:
- * - Exercises recursive skill discovery and front matter parsing.
- * - Verifies workspace and selected-world skill inventory layering.
- * - Verifies the helper text exposed to the runtime.
+ * - Validate AGENTS.md prompt loading and `SKILL.md` inventory behavior.
  *
  * Recent changes:
- * - 2026-05-23: Added selected-world skill override coverage.
- * - 2026-05-23: Renamed AGENTS.md prompt tests from project to workspace terminology.
- * - 2026-05-07: Added targeted Vitest coverage for agent file loading.
- * - 2026-05-11: Added coverage for separate built-in and workspace prompt sources.
- * - 2026-05-16: Added assertions for the stronger built-in workspace guidance.
+ * - 2026-05-26: Removed selected-world skills and switched workspace skills to `.agent-world/skills`.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -41,7 +32,6 @@ async function loadAgentFiles(rootPath, homePath = rootPath) {
 
 afterEach(async () => {
   process.chdir(originalCwd);
-  delete process.env.AGENT_CLI_WORLD;
   if (typeof originalHome === 'undefined') {
     delete process.env.HOME;
   } else {
@@ -50,12 +40,16 @@ afterEach(async () => {
   vi.doUnmock('node:fs');
 
   while (rootsToClean.length > 0) {
-    await removeTestRoot(rootsToClean.pop());
+    const rootPath = rootsToClean.pop();
+
+    if (rootPath) {
+      await removeTestRoot(rootPath);
+    }
   }
 });
 
 describe('agent-files', () => {
-  it('loads the workspace system prompt and skill inventory in lexical path order', async () => {
+  it('loads AGENTS.md and workspace skills from .agent-world/skills in lexical order', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
 
@@ -82,21 +76,21 @@ describe('agent-files', () => {
       expect.objectContaining({
         skillId: 'alpha-skill',
         description: 'Loaded first.',
+        sourceScope: 'project',
       }),
       expect.objectContaining({
         skillId: 'zeta-skill',
         description: 'Loaded last.',
+        sourceScope: 'project',
       }),
     ]);
   });
 
-  it('layers user, workspace, and selected-world skills while keeping AGENTS.md workspace-only', async () => {
+  it('layers user and workspace skills, with workspace overriding duplicate ids', async () => {
     const rootPath = await createTestRoot();
     const homeRoot = await createTestRoot();
     rootsToClean.push(rootPath, homeRoot);
-    process.env.HOME = homeRoot;
 
-    await writeSystemPrompt(rootPath, 'Workspace-only prompt');
     await mkdir(path.join(homeRoot, '.agent-world', 'skills', 'user-only'), { recursive: true });
     await writeFile(
       path.join(homeRoot, '.agent-world', 'skills', 'user-only', 'SKILL.md'),
@@ -117,25 +111,9 @@ describe('agent-files', () => {
       name: 'duplicate-skill',
       description: 'Workspace duplicate.',
     });
-    const worldSkillsRoot = path.join(rootPath, '.agent-world', 'worlds', 'research', 'skills');
-    await mkdir(path.join(worldSkillsRoot, 'world-only'), { recursive: true });
-    await writeFile(
-      path.join(worldSkillsRoot, 'world-only', 'SKILL.md'),
-      ['---', 'name: world-skill', 'description: World only.', '---', '', '# World', ''].join('\n'),
-      'utf8',
-    );
-    await mkdir(path.join(worldSkillsRoot, 'duplicate'), { recursive: true });
-    await writeFile(
-      path.join(worldSkillsRoot, 'duplicate', 'SKILL.md'),
-      ['---', 'name: duplicate-skill', 'description: World duplicate.', '---', '', '# Override', ''].join('\n'),
-      'utf8',
-    );
-    await writeFile(path.join(rootPath, '.agent-world', 'worlds', 'research', 'AGENTS.md'), 'Wrong prompt\n', 'utf8');
-    process.env.AGENT_CLI_WORLD = 'research';
 
-    const { loadSkillInventory, loadSkillInventoryByScope, loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath, homeRoot);
+    const { loadSkillInventory, loadSkillInventoryByScope } = await loadAgentFiles(rootPath, homeRoot);
 
-    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('Workspace-only prompt');
     await expect(loadSkillInventoryByScope()).resolves.toMatchObject({
       user: [
         expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'user' }),
@@ -145,21 +123,15 @@ describe('agent-files', () => {
         expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'project' }),
         expect.objectContaining({ skillId: 'shared-skill', sourceScope: 'project' }),
       ],
-      world: [
-        expect.objectContaining({ skillId: 'duplicate-skill', sourceScope: 'world' }),
-        expect.objectContaining({ skillId: 'world-skill', sourceScope: 'world' }),
-      ],
     });
     await expect(loadSkillInventory()).resolves.toEqual([
       expect.objectContaining({
         skillId: 'duplicate-skill',
-        description: 'World duplicate.',
-        sourceScope: 'world',
-        sourcePath: expect.stringContaining(path.join('worlds', 'research', 'skills')),
+        description: 'Workspace duplicate.',
+        sourceScope: 'project',
       }),
       expect.objectContaining({ skillId: 'shared-skill', description: 'Workspace shared.' }),
       expect.objectContaining({ skillId: 'user-skill', description: 'User only.' }),
-      expect.objectContaining({ skillId: 'world-skill', description: 'World only.' }),
     ]);
   });
 
@@ -176,23 +148,14 @@ describe('agent-files', () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain('Do not reveal secret values by default');
   });
 
-  it('returns an empty workspace prompt when AGENTS.md is missing', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
+  it('returns an empty workspace prompt when AGENTS.md is missing or empty', async () => {
+    const missingRoot = await createTestRoot();
+    const emptyRoot = await createTestRoot();
+    rootsToClean.push(missingRoot, emptyRoot);
+    await writeSystemPrompt(emptyRoot, '   ');
 
-    const { loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
-
-    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('');
-  });
-
-  it('returns an empty workspace prompt when AGENTS.md is empty', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, '   ');
-
-    const { loadWorkspaceSystemPrompt } = await loadAgentFiles(rootPath);
-
-    await expect(loadWorkspaceSystemPrompt()).resolves.toBe('');
+    await expect((await loadAgentFiles(missingRoot)).loadWorkspaceSystemPrompt()).resolves.toBe('');
+    await expect((await loadAgentFiles(emptyRoot)).loadWorkspaceSystemPrompt()).resolves.toBe('');
   });
 
   it('preserves non-missing filesystem errors when loading AGENTS.md', async () => {
@@ -244,20 +207,19 @@ describe('agent-files', () => {
     ).toContain('agent-cli-core');
   });
 
-  it('returns an empty inventory when the skills root is missing', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
+  it('returns an empty inventory when the skill root is missing or empty', async () => {
+    const missingRoot = await createTestRoot();
+    const emptyRoot = await createTestRoot();
+    rootsToClean.push(missingRoot, emptyRoot);
+    await ensureSkillsRoot(emptyRoot);
 
-    const { loadSkillInventory } = await loadAgentFiles(rootPath);
-
-    await expect(loadSkillInventory()).resolves.toEqual([]);
+    await expect((await loadAgentFiles(missingRoot)).loadSkillInventory()).resolves.toEqual([]);
+    await expect((await loadAgentFiles(emptyRoot)).loadSkillInventory()).resolves.toEqual([]);
   });
 
-  it('preserves non-missing filesystem errors when loading the skills root', async () => {
+  it('preserves non-missing filesystem errors when loading the skill root', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
 
     vi.resetModules();
     vi.doMock('node:fs', async () => {
@@ -284,16 +246,5 @@ describe('agent-files', () => {
     const { loadSkillInventory } = await loadAgentFiles(rootPath);
 
     await expect(loadSkillInventory()).rejects.toThrow('Permission denied');
-  });
-
-  it('accepts an existing but empty skills root', async () => {
-    const rootPath = await createTestRoot();
-    rootsToClean.push(rootPath);
-    await writeSystemPrompt(rootPath, 'Prompt');
-    await ensureSkillsRoot(rootPath);
-
-    const { loadSkillInventory } = await loadAgentFiles(rootPath);
-
-    await expect(loadSkillInventory()).resolves.toEqual([]);
   });
 });

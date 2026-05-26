@@ -3,19 +3,10 @@
  * Agent CLI Path Resolution Unit Tests
  *
  * Purpose:
- * - Validate how the CLI resolves its workspace root across real runs and isolated tests.
- *
- * Key features:
- * - Prefers `process.cwd()` for normal execution.
- * - Prefers `AGENT_CLI_WORKSPACE` over `process.cwd()` when the override is present.
- * - Publishes the resolved default cwd back to `AGENT_CLI_WORKSPACE`.
- * - Verifies selected-world paths live under `.agent-world/worlds/default`.
+ * - Validate workspace root and flat `.agent-world` path resolution.
  *
  * Recent changes:
- * - 2026-05-26: Removed remote-host lock path expectations.
- * - 2026-05-24: Removed legacy root-env expectations.
- * - 2026-05-24: Removed runtime.json path expectations.
- * - 2026-05-23: Updated expectations for multi-world workspace paths.
+ * - 2026-05-26: Removed world-id path expectations and switched workspace skills to `.agent-world/skills`.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
@@ -43,7 +34,8 @@ describe('paths', () => {
     expect(paths.USER_SKILLS_ROOT).toBe(path.join(os.homedir(), '.agent-world', 'skills'));
     expect(paths.AGENT_WORLD_ROOT).toBe(path.join(cwdRoot, '.agent-world'));
     expect(paths.SKILLS_ROOT).toBe(path.join(cwdRoot, '.agent-world', 'skills'));
-    expect(paths.WORLD_STATE_PATH).toBe(path.join(cwdRoot, '.agent-world', 'worlds', 'default', 'world.json'));
+    expect(paths.AGENT_WORLD_CHATS_ROOT).toBe(path.join(cwdRoot, '.agent-world', 'chats'));
+    expect(paths.CURRENT_CHAT_PATH).toBe(path.join(cwdRoot, '.agent-world', 'chats', 'current.json'));
   });
 
   it('publishes cwd to AGENT_CLI_WORKSPACE when explicitly configured without an override', async () => {
@@ -72,7 +64,7 @@ describe('paths', () => {
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'AGENTS.md'));
     expect(paths.USER_SKILLS_ROOT).toBe(path.join(os.homedir(), '.agent-world', 'skills'));
     expect(paths.SKILLS_ROOT).toBe(path.join(overrideRoot, '.agent-world', 'skills'));
-    expect(paths.WORLD_STATE_PATH).toBe(path.join(overrideRoot, '.agent-world', 'worlds', 'default', 'world.json'));
+    expect(paths.AGENT_WORLD_CHATS_ROOT).toBe(path.join(overrideRoot, '.agent-world', 'chats'));
   });
 
   it('uses cwd when AGENT_CLI_WORKSPACE is empty', async () => {

@@ -3,27 +3,17 @@
  * Agent CLI Agent Config Loading
  *
  * Purpose:
- * - Normalize runtime overrides from CLI flags plus world and agent metadata.
+ * - Normalize runtime defaults from `.env` plus overrides from CLI flags.
  *
  * Key features:
- * - Normalizes common aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
- * - Loads selected-world defaults from `world.json`.
- * - Applies selected-world agent metadata overrides from `agent.json`.
- * - Validates supported enum values before runtime calls.
- * - Keeps runtime override parsing separate from provider credential environment variables.
+ * - Reads LLM-time defaults from `AGENT_CLI_*` environment variables.
+ * - Normalizes common CLI aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
+ * - Keeps runtime defaults out of `.agent-world`; there is no `world.json` or `agent.json`.
  *
  * Recent changes:
- * - 2026-05-24: Retired runtime.json loading in favor of world.json and agent.json.
- * - 2026-05-23: Resolve selected-world state before reading persisted runtime defaults.
+ * - 2026-05-26: Added `.env` defaults for temperature, max tokens, permissions, reasoning, history, stream, trace, and web search.
+ * - 2026-05-26: Removed persisted runtime config loading from world and agent metadata.
  */
-
-import { promises as fs } from 'node:fs';
-
-import {
-  buildAgentMetadataPath,
-  WORLD_STATE_PATH,
-} from './paths.js';
-import { ensureWorkspaceWorld } from './workspace-store.js';
 
 const REASONING_EFFORTS = new Set(['default', 'none', 'low', 'medium', 'high']);
 const TOOL_PERMISSIONS = new Set(['auto', 'ask', 'read']);
@@ -314,79 +304,17 @@ export function normalizeAgentConfig(source) {
   );
 }
 
-/**
- * @param {string} filePath
- * @param {string} label
- */
-async function readJsonFileIfPresent(filePath, label) {
-  let content;
-
-  try {
-    content = await fs.readFile(filePath, 'utf8');
-  } catch (error) {
-    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      return null;
-    }
-
-    throw error;
-  }
-
-  let parsed;
-
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error(`Invalid ${label}: ${filePath}`);
-  }
-
-  if (!isPlainObject(parsed)) {
-    throw new Error(`Invalid ${label}: ${filePath}`);
-  }
-
-  return parsed;
-}
-
-/** @param {string | undefined} agentId */
-function normalizeAgentId(agentId) {
-  if (agentId === undefined || agentId === null) {
-    return '';
-  }
-
-  const normalizedAgentId = String(agentId).trim();
-  return normalizedAgentId;
-}
-
-async function loadDefaultAgentIdFromWorld() {
-  await ensureWorkspaceWorld();
-  const world = await readJsonFileIfPresent(WORLD_STATE_PATH, 'world metadata');
-
-  if (!world) {
-    return '';
-  }
-
-  return normalizeAgentId(world.defaultAgentId);
-}
-
-/**
- * @param {{ agentId?: string }} [options]
- */
-export async function loadPersistedRuntimeConfig(options = {}) {
-  await ensureWorkspaceWorld();
-  const worldMetadata = await readJsonFileIfPresent(WORLD_STATE_PATH, 'world metadata') ?? {};
-  const worldRuntimeConfig = normalizeAgentConfig(worldMetadata);
-  const configuredAgentId = normalizeAgentId(options.agentId);
-  const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
-
-  if (!defaultAgentId) {
-    return worldRuntimeConfig;
-  }
-
-  const agentMetadataConfig = normalizeAgentConfig(
-    await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), 'agent metadata') ?? {},
-  );
-
-  return {
-    ...worldRuntimeConfig,
-    ...agentMetadataConfig,
-  };
+export function loadPersistedRuntimeConfig() {
+  return normalizeAgentConfig({
+    provider: process.env.AGENT_CLI_PROVIDER,
+    model: process.env.AGENT_CLI_MODEL,
+    temperature: process.env.AGENT_CLI_TEMPERATURE,
+    maxTokens: process.env.AGENT_CLI_MAX_TOKENS,
+    toolPermission: process.env.AGENT_CLI_TOOL_PERMISSION,
+    reasoningEffort: process.env.AGENT_CLI_REASONING_EFFORT,
+    pastMessages: process.env.AGENT_CLI_PAST_MESSAGES,
+    stream: process.env.AGENT_CLI_STREAM,
+    streamTrace: process.env.AGENT_CLI_STREAM_TRACE,
+    webSearch: process.env.AGENT_CLI_WEB_SEARCH,
+  });
 }

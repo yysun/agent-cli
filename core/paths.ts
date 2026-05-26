@@ -3,29 +3,21 @@
  * Agent CLI Path Constants
  *
  * Purpose:
- * - Centralize workspace-local filesystem paths used by the CLI and world store.
+ * - Centralize workspace-local filesystem paths used by the CLI and store.
  *
  * Key features:
  * - Resolves workspace-local resources from `AGENT_CLI_WORKSPACE` when set, otherwise cwd.
- * - Keeps path construction in one place for CLI helpers.
- * - Separates workspace-owned paths from selected-world paths under `.agent-world/worlds/{worldId}`.
+ * - Keeps durable storage directly under `.agent-world` with no world-id folder layer.
+ * - Uses `.agent-world/chats` for chat state and `.agent-world/skills` for workspace skills.
  *
  * Recent changes:
- * - 2026-05-26: Removed remote-host lock path support with the relay product surface.
- * - 2026-05-24: Removed legacy root-env support and canonicalized cwd fallback into `AGENT_CLI_WORKSPACE`.
- * - 2026-05-23: Renamed the loaded root terminology from project to workspace.
- * - 2026-05-07: Added shared path helpers for the CLI implementation.
- * - 2026-05-07: Switched prompt, skills, and chat storage to AGENTS/.agents/.chats.
- * - 2026-05-24: Removed runtime.json path helpers from active configuration.
- * - 2026-05-14: Added `.agent-world` chat and agent persistence paths.
- * - 2026-05-23: Moved skills under `.agent-world/skills`.
- * - 2026-05-23: Added workspace registry and selected-world path roots for multi-world storage.
+ * - 2026-05-26: Flattened storage by removing workspace registry, worlds, world ids, and agent paths.
+ * - 2026-05-26: Switched workspace skill storage back to `.agent-world/skills`.
  */
 import path from 'node:path';
 import os from 'node:os';
 
 export const WORKSPACE_ROOT_ENV_KEY = 'AGENT_CLI_WORKSPACE';
-export const WORLD_ID_ENV_KEY = 'AGENT_CLI_WORLD';
 
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
   const configuredRoot = [
@@ -46,27 +38,8 @@ export let SYSTEM_PROMPT_PATH = '';
 export let USER_SKILLS_ROOT = '';
 export let SKILLS_ROOT = '';
 export let AGENT_WORLD_ROOT = '';
-export let WORKSPACE_REGISTRY_PATH = '';
-export let AGENT_WORLD_WORLDS_ROOT = '';
-export let ACTIVE_WORLD_ID = '';
-export let ACTIVE_WORLD_ROOT = '';
-export let WORLD_STATE_PATH = '';
 export let AGENT_WORLD_CHATS_ROOT = '';
-export let AGENT_WORLD_AGENTS_ROOT = '';
-export let AGENT_WORLD_QUEUES_ROOT = '';
-export let WORLD_SKILLS_ROOT = '';
-
-function configureActiveWorldPaths(worldId = 'default'): string {
-  ACTIVE_WORLD_ID = String(worldId || 'default').trim() || 'default';
-  ACTIVE_WORLD_ROOT = path.join(AGENT_WORLD_WORLDS_ROOT, ACTIVE_WORLD_ID);
-  WORLD_STATE_PATH = path.join(ACTIVE_WORLD_ROOT, 'world.json');
-  AGENT_WORLD_CHATS_ROOT = path.join(ACTIVE_WORLD_ROOT, 'chats');
-  AGENT_WORLD_AGENTS_ROOT = path.join(ACTIVE_WORLD_ROOT, 'agents');
-  AGENT_WORLD_QUEUES_ROOT = path.join(ACTIVE_WORLD_ROOT, 'queues');
-  WORLD_SKILLS_ROOT = path.join(ACTIVE_WORLD_ROOT, 'skills');
-
-  return ACTIVE_WORLD_ROOT;
-}
+export let CURRENT_CHAT_PATH = '';
 
 export function configureWorkspaceRoot(
   workspaceRoot?: string,
@@ -76,21 +49,16 @@ export function configureWorkspaceRoot(
   if (options.publishEnvironment ?? true) {
     process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
   }
+
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, 'AGENTS.md');
   USER_SKILLS_ROOT = path.join(os.homedir(), '.agent-world', 'skills');
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, '.agent-world');
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, 'skills');
-  WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, 'registry.json');
-  AGENT_WORLD_WORLDS_ROOT = path.join(AGENT_WORLD_ROOT, 'worlds');
-  configureActiveWorldPaths(ACTIVE_WORLD_ID || 'default');
+  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, 'chats');
+  CURRENT_CHAT_PATH = path.join(AGENT_WORLD_CHATS_ROOT, 'current.json');
 
   return WORKSPACE_ROOT;
-}
-
-/** @param {string} worldId */
-export function configureActiveWorld(worldId) {
-  return configureActiveWorldPaths(worldId);
 }
 
 export function configureProjectRoot(projectRoot?: string): string {
@@ -119,42 +87,7 @@ export function buildWorldChatSummaryPath(chatId) {
   return path.join(buildWorldChatDirectoryPath(chatId), 'summary.md');
 }
 
-/** @param {string} agentId */
-export function buildAgentDirectoryPath(agentId) {
-  return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
-}
-
-/** @param {string} agentId */
-export function buildAgentMetadataPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'agent.json');
-}
-
-/** @param {string} agentId */
-export function buildAgentInboxPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'inbox.jsonl');
-}
-
-/** @param {string} agentId */
-export function buildAgentStatePath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'state.json');
-}
-
-/** @param {string} agentId */
-export function buildAgentEventsPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'events.jsonl');
-}
-
-/** @param {string} agentId */
-export function buildAgentMemoryPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'memory.md');
-}
-
-/** @param {string} agentId */
-export function buildAgentMemoryLogPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), 'memory.jsonl');
-}
-
 /** @param {string} chatId */
-export function buildWorldQueuePath(chatId) {
-  return path.join(AGENT_WORLD_QUEUES_ROOT, `${chatId}.json`);
+export function buildWorldChatEventsPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), 'events.jsonl');
 }

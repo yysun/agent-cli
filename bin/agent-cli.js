@@ -1,233 +1,10 @@
 #!/usr/bin/env node
 
 // cli/src/agent-cli.ts
-import path6 from "node:path";
+import path5 from "node:path";
 import { realpathSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-// core/agent-config.ts
-import { promises as fs2 } from "node:fs";
-
-// core/paths.ts
-import path from "node:path";
-import os from "node:os";
-var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
-var WORLD_ID_ENV_KEY = "AGENT_CLI_WORLD";
-function resolveWorkspaceRoot(workspaceRoot) {
-  const configuredRoot = [
-    workspaceRoot,
-    process.env[WORKSPACE_ROOT_ENV_KEY]
-  ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
-  return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
-}
-var WORKSPACE_ROOT = "";
-var REPO_ROOT = "";
-var SYSTEM_PROMPT_PATH = "";
-var USER_SKILLS_ROOT = "";
-var SKILLS_ROOT = "";
-var AGENT_WORLD_ROOT = "";
-var WORKSPACE_REGISTRY_PATH = "";
-var AGENT_WORLD_WORLDS_ROOT = "";
-var ACTIVE_WORLD_ID = "";
-var ACTIVE_WORLD_ROOT = "";
-var WORLD_STATE_PATH = "";
-var AGENT_WORLD_CHATS_ROOT = "";
-var AGENT_WORLD_AGENTS_ROOT = "";
-var AGENT_WORLD_QUEUES_ROOT = "";
-var WORLD_SKILLS_ROOT = "";
-function configureActiveWorldPaths(worldId = "default") {
-  ACTIVE_WORLD_ID = String(worldId || "default").trim() || "default";
-  ACTIVE_WORLD_ROOT = path.join(AGENT_WORLD_WORLDS_ROOT, ACTIVE_WORLD_ID);
-  WORLD_STATE_PATH = path.join(ACTIVE_WORLD_ROOT, "world.json");
-  AGENT_WORLD_CHATS_ROOT = path.join(ACTIVE_WORLD_ROOT, "chats");
-  AGENT_WORLD_AGENTS_ROOT = path.join(ACTIVE_WORLD_ROOT, "agents");
-  AGENT_WORLD_QUEUES_ROOT = path.join(ACTIVE_WORLD_ROOT, "queues");
-  WORLD_SKILLS_ROOT = path.join(ACTIVE_WORLD_ROOT, "skills");
-  return ACTIVE_WORLD_ROOT;
-}
-function configureWorkspaceRoot(workspaceRoot, options = {}) {
-  WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
-  if (options.publishEnvironment ?? true) {
-    process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
-  }
-  REPO_ROOT = WORKSPACE_ROOT;
-  SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
-  USER_SKILLS_ROOT = path.join(os.homedir(), ".agent-world", "skills");
-  AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
-  SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
-  WORKSPACE_REGISTRY_PATH = path.join(AGENT_WORLD_ROOT, "registry.json");
-  AGENT_WORLD_WORLDS_ROOT = path.join(AGENT_WORLD_ROOT, "worlds");
-  configureActiveWorldPaths(ACTIVE_WORLD_ID || "default");
-  return WORKSPACE_ROOT;
-}
-function configureActiveWorld(worldId) {
-  return configureActiveWorldPaths(worldId);
-}
-configureWorkspaceRoot(void 0, { publishEnvironment: false });
-function buildWorldChatDirectoryPath(chatId) {
-  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
-}
-function buildWorldChatMetadataPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), "chat.json");
-}
-function buildWorldChatMessagesPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
-}
-function buildWorldChatSummaryPath(chatId) {
-  return path.join(buildWorldChatDirectoryPath(chatId), "summary.md");
-}
-function buildAgentDirectoryPath(agentId) {
-  return path.join(AGENT_WORLD_AGENTS_ROOT, agentId);
-}
-function buildAgentMetadataPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "agent.json");
-}
-function buildAgentInboxPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "inbox.jsonl");
-}
-function buildAgentStatePath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "state.json");
-}
-function buildAgentEventsPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "events.jsonl");
-}
-function buildAgentMemoryPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "memory.md");
-}
-function buildAgentMemoryLogPath(agentId) {
-  return path.join(buildAgentDirectoryPath(agentId), "memory.jsonl");
-}
-
-// core/workspace-store.ts
-import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
-import path2 from "node:path";
-var DEFAULT_WORLD_ID = "default";
-var REGISTRY_SCHEMA_VERSION = 1;
-var pinnedWorldId = "";
-function normalizeWorldId(value) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  const slug = normalized.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return slug || DEFAULT_WORLD_ID;
-}
-function pinWorkspaceWorld(worldId) {
-  pinnedWorldId = normalizeWorldId(worldId);
-  configureActiveWorld(pinnedWorldId);
-  return pinnedWorldId;
-}
-function defaultWorldName() {
-  return path2.basename(WORKSPACE_ROOT) || "Default";
-}
-async function writeJsonAtomic(filePath, value) {
-  const directoryPath = path2.dirname(filePath);
-  const fileName = path2.basename(filePath);
-  const temporaryPath = path2.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs.mkdir(directoryPath, { recursive: true });
-  await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
-`, "utf8");
-  await fs.rename(temporaryPath, filePath);
-}
-async function readJsonIfPresent(filePath) {
-  try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-function normalizeRegistry(value) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const registry = value && typeof value === "object" ? value : {};
-  const rawWorlds = Array.isArray(registry.worlds) ? registry.worlds : [];
-  const worlds = rawWorlds.map((world) => {
-    if (!world || typeof world !== "object") {
-      return null;
-    }
-    const id = normalizeWorldId(world.id);
-    return {
-      id,
-      name: String(world.name ?? id).trim() || id,
-      createdAt: String(world.createdAt ?? now),
-      updatedAt: String(world.updatedAt ?? world.createdAt ?? now)
-    };
-  }).filter(Boolean);
-  if (!worlds.some((world) => world?.id === DEFAULT_WORLD_ID)) {
-    worlds.unshift({
-      id: DEFAULT_WORLD_ID,
-      name: defaultWorldName(),
-      createdAt: now,
-      updatedAt: now
-    });
-  }
-  const currentWorldId = normalizeWorldId(registry.currentWorldId);
-  const selectedWorldId = worlds.some((world) => world?.id === currentWorldId) ? currentWorldId : DEFAULT_WORLD_ID;
-  return {
-    schemaVersion: REGISTRY_SCHEMA_VERSION,
-    currentWorldId: selectedWorldId,
-    worlds,
-    createdAt: String(registry.createdAt ?? now),
-    updatedAt: String(registry.updatedAt ?? now)
-  };
-}
-async function readWorkspaceRegistry() {
-  const registry = await readJsonIfPresent(WORKSPACE_REGISTRY_PATH);
-  return normalizeRegistry(registry);
-}
-async function writeWorkspaceRegistry(registry) {
-  const nextRegistry = {
-    ...registry,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  await writeJsonAtomic(WORKSPACE_REGISTRY_PATH, nextRegistry);
-  return nextRegistry;
-}
-async function ensureWorldDirectories(worldId) {
-  const worldRoot = path2.join(AGENT_WORLD_WORLDS_ROOT, normalizeWorldId(worldId));
-  await Promise.all([
-    fs.mkdir(worldRoot, { recursive: true }),
-    fs.mkdir(path2.join(worldRoot, "agents"), { recursive: true }),
-    fs.mkdir(path2.join(worldRoot, "chats"), { recursive: true }),
-    fs.mkdir(path2.join(worldRoot, "queues"), { recursive: true }),
-    fs.mkdir(path2.join(worldRoot, "skills"), { recursive: true })
-  ]);
-  return worldRoot;
-}
-async function ensureWorkspaceWorld(options = {}) {
-  await fs.mkdir(AGENT_WORLD_ROOT, { recursive: true });
-  await fs.mkdir(path2.join(AGENT_WORLD_ROOT, "skills"), { recursive: true });
-  await fs.mkdir(AGENT_WORLD_WORLDS_ROOT, { recursive: true });
-  let registry = await readWorkspaceRegistry();
-  const envWorldId = String(process.env[WORLD_ID_ENV_KEY] ?? "").trim();
-  const requestedWorldId = options.worldId ? pinWorkspaceWorld(options.worldId) : envWorldId ? pinWorkspaceWorld(envWorldId) : pinnedWorldId;
-  if (requestedWorldId && !registry.worlds.some((world) => world.id === requestedWorldId)) {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    registry.worlds.push({
-      id: requestedWorldId,
-      name: String(options.name ?? requestedWorldId).trim() || requestedWorldId,
-      createdAt: now,
-      updatedAt: now
-    });
-  }
-  const selectedWorldId = requestedWorldId || normalizeWorldId(registry.currentWorldId);
-  const nextCurrentWorldId = options.select || !registry.currentWorldId ? selectedWorldId : normalizeWorldId(registry.currentWorldId);
-  registry = {
-    ...registry,
-    currentWorldId: nextCurrentWorldId
-  };
-  registry = await writeWorkspaceRegistry(registry);
-  const activeWorldId = selectedWorldId || registry.currentWorldId || DEFAULT_WORLD_ID;
-  await ensureWorldDirectories(activeWorldId);
-  configureActiveWorld(activeWorldId);
-  return {
-    workspaceRoot: WORKSPACE_ROOT,
-    worldId: ACTIVE_WORLD_ID,
-    worldRoot: ACTIVE_WORLD_ROOT,
-    registry
-  };
-}
 
 // core/agent-config.ts
 var REASONING_EFFORTS = /* @__PURE__ */ new Set(["default", "none", "low", "medium", "high"]);
@@ -413,63 +190,95 @@ function normalizeAgentConfig(source) {
     Object.entries(normalizedConfig).filter(([, value]) => value !== void 0)
   );
 }
-async function readJsonFileIfPresent(filePath, label) {
-  let content;
-  try {
-    content = await fs2.readFile(filePath, "utf8");
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error(`Invalid ${label}: ${filePath}`);
-  }
-  if (!isPlainObject(parsed)) {
-    throw new Error(`Invalid ${label}: ${filePath}`);
-  }
-  return parsed;
-}
-function normalizeAgentId(agentId) {
-  if (agentId === void 0 || agentId === null) {
-    return "";
-  }
-  const normalizedAgentId = String(agentId).trim();
-  return normalizedAgentId;
-}
-async function loadDefaultAgentIdFromWorld() {
-  await ensureWorkspaceWorld();
-  const world = await readJsonFileIfPresent(WORLD_STATE_PATH, "world metadata");
-  if (!world) {
-    return "";
-  }
-  return normalizeAgentId(world.defaultAgentId);
-}
-async function loadPersistedRuntimeConfig(options = {}) {
-  await ensureWorkspaceWorld();
-  const worldMetadata = await readJsonFileIfPresent(WORLD_STATE_PATH, "world metadata") ?? {};
-  const worldRuntimeConfig = normalizeAgentConfig(worldMetadata);
-  const configuredAgentId = normalizeAgentId(options.agentId);
-  const defaultAgentId = configuredAgentId || await loadDefaultAgentIdFromWorld();
-  if (!defaultAgentId) {
-    return worldRuntimeConfig;
-  }
-  const agentMetadataConfig = normalizeAgentConfig(
-    await readJsonFileIfPresent(buildAgentMetadataPath(defaultAgentId), "agent metadata") ?? {}
-  );
-  return {
-    ...worldRuntimeConfig,
-    ...agentMetadataConfig
-  };
+function loadPersistedRuntimeConfig() {
+  return normalizeAgentConfig({
+    provider: process.env.AGENT_CLI_PROVIDER,
+    model: process.env.AGENT_CLI_MODEL,
+    temperature: process.env.AGENT_CLI_TEMPERATURE,
+    maxTokens: process.env.AGENT_CLI_MAX_TOKENS,
+    toolPermission: process.env.AGENT_CLI_TOOL_PERMISSION,
+    reasoningEffort: process.env.AGENT_CLI_REASONING_EFFORT,
+    pastMessages: process.env.AGENT_CLI_PAST_MESSAGES,
+    stream: process.env.AGENT_CLI_STREAM,
+    streamTrace: process.env.AGENT_CLI_STREAM_TRACE,
+    webSearch: process.env.AGENT_CLI_WEB_SEARCH
+  });
 }
 
 // core/agent-files.ts
-import { promises as fs3 } from "node:fs";
-import path3 from "node:path";
+import { promises as fs2 } from "node:fs";
+import path2 from "node:path";
+
+// core/paths.ts
+import path from "node:path";
+import os from "node:os";
+var WORKSPACE_ROOT_ENV_KEY = "AGENT_CLI_WORKSPACE";
+function resolveWorkspaceRoot(workspaceRoot) {
+  const configuredRoot = [
+    workspaceRoot,
+    process.env[WORKSPACE_ROOT_ENV_KEY]
+  ].map((value) => String(value ?? "").trim()).find((value) => value.length > 0) ?? "";
+  return configuredRoot ? path.resolve(configuredRoot) : process.cwd();
+}
+var WORKSPACE_ROOT = "";
+var REPO_ROOT = "";
+var SYSTEM_PROMPT_PATH = "";
+var USER_SKILLS_ROOT = "";
+var SKILLS_ROOT = "";
+var AGENT_WORLD_ROOT = "";
+var AGENT_WORLD_CHATS_ROOT = "";
+var CURRENT_CHAT_PATH = "";
+function configureWorkspaceRoot(workspaceRoot, options = {}) {
+  WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
+  if (options.publishEnvironment ?? true) {
+    process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
+  }
+  REPO_ROOT = WORKSPACE_ROOT;
+  SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, "AGENTS.md");
+  USER_SKILLS_ROOT = path.join(os.homedir(), ".agent-world", "skills");
+  AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
+  SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
+  AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
+  CURRENT_CHAT_PATH = path.join(AGENT_WORLD_CHATS_ROOT, "current.json");
+  return WORKSPACE_ROOT;
+}
+configureWorkspaceRoot(void 0, { publishEnvironment: false });
+function buildWorldChatDirectoryPath(chatId) {
+  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
+}
+function buildWorldChatMetadataPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "chat.json");
+}
+function buildWorldChatMessagesPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "messages.jsonl");
+}
+function buildWorldChatSummaryPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "summary.md");
+}
+function buildWorldChatEventsPath(chatId) {
+  return path.join(buildWorldChatDirectoryPath(chatId), "events.jsonl");
+}
+
+// core/workspace-store.ts
+import { promises as fs } from "node:fs";
+async function ensureWorkspaceStorage() {
+  await Promise.all([
+    fs.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs.mkdir(SKILLS_ROOT, { recursive: true })
+  ]);
+  return {
+    workspaceRoot: WORKSPACE_ROOT,
+    storageRoot: AGENT_WORLD_ROOT,
+    chatsRoot: AGENT_WORLD_CHATS_ROOT,
+    skillsRoot: SKILLS_ROOT
+  };
+}
+async function ensureWorkspaceWorld() {
+  return ensureWorkspaceStorage();
+}
+
+// core/agent-files.ts
 var DEFAULT_SYSTEM_PROMPT = [
   "You are Agent CLI.",
   "Be concise, factual, and action-oriented.",
@@ -485,7 +294,7 @@ function getBuiltInSystemPrompt() {
 async function assertReadableFile(filePath, label) {
   let stats;
   try {
-    stats = await fs3.stat(filePath);
+    stats = await fs2.stat(filePath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -499,7 +308,7 @@ async function assertReadableFile(filePath, label) {
 async function assertReadableDirectory(directoryPath, label) {
   let stats;
   try {
-    stats = await fs3.stat(directoryPath);
+    stats = await fs2.stat(directoryPath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -542,10 +351,10 @@ async function collectSkillFilePaths(rootPath) {
     if (!currentPath) {
       continue;
     }
-    const entries = await fs3.readdir(currentPath, { withFileTypes: true });
+    const entries = await fs2.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
-      const entryPath = path3.join(currentPath, entry.name);
+      const entryPath = path2.join(currentPath, entry.name);
       if (entry.isDirectory()) {
         queue.push(entryPath);
         continue;
@@ -566,7 +375,7 @@ async function loadWorkspaceSystemPrompt() {
     }
     throw error;
   }
-  const content = (await fs3.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+  const content = (await fs2.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
   return content;
 }
 async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
@@ -581,7 +390,7 @@ async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   const skillFilePaths = await collectSkillFilePaths(skillsRoot);
   const skills = [];
   for (const skillFilePath of skillFilePaths) {
-    const content = await fs3.readFile(skillFilePath, "utf8");
+    const content = await fs2.readFile(skillFilePath, "utf8");
     const metadata = parseSkillFrontMatter(content);
     if (!metadata.skillId) {
       continue;
@@ -599,8 +408,7 @@ async function loadSkillInventoryByScope() {
   await ensureWorkspaceWorld();
   return {
     user: await loadSkillInventoryFromRoot(USER_SKILLS_ROOT, "user"),
-    project: await loadSkillInventoryFromRoot(SKILLS_ROOT, "project"),
-    world: await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT, "world")
+    project: await loadSkillInventoryFromRoot(SKILLS_ROOT, "project")
   };
 }
 function flattenSkillInventoryByPrecedence(scopedInventory) {
@@ -609,9 +417,6 @@ function flattenSkillInventoryByPrecedence(scopedInventory) {
     skillsById.set(skill.skillId, skill);
   }
   for (const skill of scopedInventory.project) {
-    skillsById.set(skill.skillId, skill);
-  }
-  for (const skill of scopedInventory.world) {
     skillsById.set(skill.skillId, skill);
   }
   return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
@@ -633,8 +438,8 @@ function buildSkillInventoryMessage(skills) {
 }
 
 // core/workspace-environment.ts
-import fs4 from "node:fs";
-import path4 from "node:path";
+import fs3 from "node:fs";
+import path3 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "OPENAI_API_KEY",
@@ -647,11 +452,33 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AZURE_OPENAI_API_KEY",
   "AZURE_OPENAI_RESOURCE_NAME",
   "AZURE_OPENAI_DEPLOYMENT_NAME",
-  "AZURE_OPENAI_API_VERSION"
+  "AZURE_OPENAI_API_VERSION",
+  "AGENT_CLI_PROVIDER",
+  "AGENT_CLI_MODEL",
+  "AGENT_CLI_TEMPERATURE",
+  "AGENT_CLI_MAX_TOKENS",
+  "AGENT_CLI_TOOL_PERMISSION",
+  "AGENT_CLI_REASONING_EFFORT",
+  "AGENT_CLI_PAST_MESSAGES",
+  "AGENT_CLI_STREAM",
+  "AGENT_CLI_STREAM_TRACE",
+  "AGENT_CLI_WEB_SEARCH",
+  WORKSPACE_ROOT_ENV_KEY
 ]);
-var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and optional workspace selection.
-# Runtime defaults belong in .agent-world/worlds/{worldId}/world.json,
-# .agent-world/worlds/{worldId}/agents/{agentId}/agent.json, or CLI flags.
+var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials, Agent CLI runtime defaults, and optional workspace selection.
+# CLI flags override these runtime defaults.
+
+# Agent CLI runtime
+AGENT_CLI_PROVIDER=openai
+AGENT_CLI_MODEL=gpt-5
+# AGENT_CLI_TEMPERATURE=0.2
+# AGENT_CLI_MAX_TOKENS=4096
+# AGENT_CLI_TOOL_PERMISSION=ask
+# AGENT_CLI_REASONING_EFFORT=medium
+# AGENT_CLI_PAST_MESSAGES=20
+# AGENT_CLI_STREAM=true
+# AGENT_CLI_STREAM_TRACE=false
+# AGENT_CLI_WEB_SEARCH=false
 
 # Provider credentials
 OPENAI_API_KEY=
@@ -677,18 +504,18 @@ AZURE_OPENAI_DEPLOYMENT_NAME=
 `;
 var loadedDotEnvPaths = /* @__PURE__ */ new Set();
 function resolveCwdDotEnvPath() {
-  return path4.join(process.cwd(), ".env");
+  return path3.join(process.cwd(), ".env");
 }
 function ensureDotEnvExampleFile(dotEnvPath) {
-  if (fs4.existsSync(dotEnvPath)) {
+  if (fs3.existsSync(dotEnvPath)) {
     return;
   }
-  const examplePath = path4.join(path4.dirname(dotEnvPath), ".env.example");
-  if (fs4.existsSync(examplePath)) {
+  const examplePath = path3.join(path3.dirname(dotEnvPath), ".env.example");
+  if (fs3.existsSync(examplePath)) {
     return;
   }
   try {
-    fs4.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: "utf8", flag: "wx" });
+    fs3.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") {
       return;
@@ -737,26 +564,12 @@ function prepareWorkspaceEnvironment(workspaceRoot) {
 }
 
 // core/world-store.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { promises as fs5 } from "node:fs";
-import path5 from "node:path";
-var DEFAULT_AGENT_ID = "default";
-function defaultWorldName2() {
-  return path5.basename(WORKSPACE_ROOT) || "agent-world";
-}
-function normalizeAgentId2(agentId) {
-  const normalizedAgentId = String(agentId ?? "").trim();
-  if (!normalizedAgentId) {
-    return DEFAULT_AGENT_ID;
-  }
-  return normalizedAgentId;
-}
+import { randomUUID } from "node:crypto";
+import { promises as fs4 } from "node:fs";
+import path4 from "node:path";
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  return `${timestamp}-${randomUUID2().slice(0, 8)}`;
-}
-function createWorldId() {
-  return randomUUID2();
+  return `${timestamp}-${randomUUID().slice(0, 8)}`;
 }
 function normalizeTimestamp(value, fallbackTimestamp) {
   if (typeof value === "string" && value.trim()) {
@@ -807,22 +620,22 @@ function normalizePersistedMessage(message, fallbackTimestamp) {
     ...toolCalls ? { tool_calls: toolCalls } : {}
   };
 }
-async function writeJsonAtomic2(filePath, value) {
-  const directoryPath = path5.dirname(filePath);
-  const fileName = path5.basename(filePath);
-  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
-  await fs5.mkdir(directoryPath, { recursive: true });
-  await fs5.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+async function writeJsonAtomic(filePath, value) {
+  const directoryPath = path4.dirname(filePath);
+  const fileName = path4.basename(filePath);
+  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  await fs4.mkdir(directoryPath, { recursive: true });
+  await fs4.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
-  await fs5.rename(temporaryPath, filePath);
+  await fs4.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
-  const directoryPath = path5.dirname(filePath);
-  const fileName = path5.basename(filePath);
-  const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID2()}.tmp`);
-  await fs5.mkdir(directoryPath, { recursive: true });
-  await fs5.writeFile(temporaryPath, text, "utf8");
-  await fs5.rename(temporaryPath, filePath);
+  const directoryPath = path4.dirname(filePath);
+  const fileName = path4.basename(filePath);
+  const temporaryPath = path4.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  await fs4.mkdir(directoryPath, { recursive: true });
+  await fs4.writeFile(temporaryPath, text, "utf8");
+  await fs4.rename(temporaryPath, filePath);
 }
 async function writeJsonlAtomic(filePath, values) {
   const serialized = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}
@@ -833,27 +646,14 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs5.mkdir(path5.dirname(filePath), { recursive: true });
+  await fs4.mkdir(path4.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
-  await fs5.appendFile(filePath, serialized, "utf8");
+  await fs4.appendFile(filePath, serialized, "utf8");
 }
-async function readJson(filePath, missingMessage, invalidMessage) {
-  let rawContent;
+async function readJsonIfPresent(filePath) {
   try {
-    rawContent = await fs5.readFile(filePath, "utf8");
-  } catch {
-    throw new Error(missingMessage);
-  }
-  try {
-    return JSON.parse(rawContent);
-  } catch {
-    throw new Error(invalidMessage);
-  }
-}
-async function readJsonIfPresent2(filePath) {
-  try {
-    return JSON.parse(await fs5.readFile(filePath, "utf8"));
+    return JSON.parse(await fs4.readFile(filePath, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -863,7 +663,7 @@ async function readJsonIfPresent2(filePath) {
 }
 async function pathExists(filePath) {
   try {
-    await fs5.access(filePath);
+    await fs4.access(filePath);
     return true;
   } catch {
     return false;
@@ -878,7 +678,7 @@ async function ensureTextFile(filePath, defaultText = "") {
 async function readJsonl(filePath) {
   let rawContent;
   try {
-    rawContent = await fs5.readFile(filePath, "utf8");
+    rawContent = await fs4.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(`Missing chat session file: ${filePath}`);
@@ -892,14 +692,9 @@ async function readJsonl(filePath) {
     throw new Error(`Invalid chat session file: ${filePath}`);
   }
 }
-async function ensureAgentWorldDirectories() {
+async function ensureChatStorage() {
   await ensureWorkspaceWorld();
-  await Promise.all([
-    fs5.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
-    fs5.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs5.mkdir(AGENT_WORLD_AGENTS_ROOT, { recursive: true }),
-    fs5.mkdir(AGENT_WORLD_QUEUES_ROOT, { recursive: true })
-  ]);
+  await fs4.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true });
 }
 function createEmptyChat() {
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -910,59 +705,19 @@ function createEmptyChat() {
     messages: []
   };
 }
-async function inferDefaultAgentRuntime(agentId) {
-  const runtimeConfig = await loadPersistedRuntimeConfig({ agentId });
-  const provider = String(runtimeConfig.provider ?? "openai").trim() || "openai";
-  const model = String(runtimeConfig.model ?? (provider === "openai" ? "gpt-5" : "")).trim();
-  return {
-    provider,
-    model
-  };
+async function readCurrentChatId() {
+  const current = await readJsonIfPresent(CURRENT_CHAT_PATH);
+  return String(
+    current && typeof current === "object" && "chatId" in current ? current.chatId ?? "" : ""
+  ).trim();
 }
-async function ensureDefaultAgentFiles(agentId, metadata = {}) {
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const existingAgentMetadata = await readJsonIfPresent2(buildAgentMetadataPath(agentId));
-  const inferredRuntime = await inferDefaultAgentRuntime(agentId);
-  const name = String(metadata.name ?? existingAgentMetadata?.name ?? `${defaultWorldName2()} agent`).trim() || `${defaultWorldName2()} agent`;
-  const provider = String(metadata.provider ?? existingAgentMetadata?.provider ?? inferredRuntime.provider).trim() || inferredRuntime.provider;
-  const model = String(metadata.model ?? existingAgentMetadata?.model ?? inferredRuntime.model).trim() || inferredRuntime.model;
-  await writeJsonAtomic2(buildAgentMetadataPath(agentId), {
-    ...existingAgentMetadata && typeof existingAgentMetadata === "object" ? existingAgentMetadata : {},
-    id: agentId,
-    name,
-    provider,
-    model,
-    createdAt: String(existingAgentMetadata?.createdAt ?? now),
-    updatedAt: now
-  });
-  if (!await pathExists(buildAgentStatePath(agentId))) {
-    await writeJsonAtomic2(buildAgentStatePath(agentId), {
-      id: agentId,
-      updatedAt: now
-    });
-  }
-  await ensureTextFile(buildAgentEventsPath(agentId));
-  await ensureTextFile(buildAgentInboxPath(agentId));
-  await ensureTextFile(buildAgentMemoryPath(agentId));
-  await ensureTextFile(buildAgentMemoryLogPath(agentId));
-}
-async function readWorldState() {
-  const world = await readJsonIfPresent2(WORLD_STATE_PATH);
-  if (!world || typeof world !== "object") {
-    return null;
-  }
-  return world;
-}
-async function writeWorldState({ world, updates }) {
-  const nextWorld = {
-    ...world,
-    ...updates,
+async function writeCurrentChatId(chatId) {
+  await writeJsonAtomic(CURRENT_CHAT_PATH, {
+    chatId,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  await writeJsonAtomic2(WORLD_STATE_PATH, nextWorld);
-  return nextWorld;
+  });
 }
-async function persistWorldChat(chat, agentId) {
+async function persistWorldChat(chat) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const messages = chat.messages.map((message) => normalizePersistedMessage(message, now));
   const createdAt = normalizeTimestamp(chat.createdAt, now);
@@ -973,12 +728,11 @@ async function persistWorldChat(chat, agentId) {
   ]) || now;
   const metadata = {
     id: chat.id,
-    agentId,
     createdAt,
     updatedAt,
     messageCount: messages.length
   };
-  await writeJsonAtomic2(buildWorldChatMetadataPath(chat.id), metadata);
+  await writeJsonAtomic(buildWorldChatMetadataPath(chat.id), metadata);
   await writeJsonlAtomic(buildWorldChatMessagesPath(chat.id), messages);
   await ensureTextFile(buildWorldChatSummaryPath(chat.id));
   return {
@@ -986,65 +740,19 @@ async function persistWorldChat(chat, agentId) {
     messages
   };
 }
-async function ensureWorldBootstrap() {
-  await ensureAgentWorldDirectories();
-  let world = await readWorldState();
-  let changed = false;
-  if (!world) {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    world = {
-      id: createWorldId(),
-      name: defaultWorldName2(),
-      defaultAgentId: DEFAULT_AGENT_ID,
-      currentChatId: "",
-      createdAt: now,
-      updatedAt: now
-    };
-    changed = true;
-  }
-  if (!String(world.defaultAgentId ?? "").trim()) {
-    world.defaultAgentId = DEFAULT_AGENT_ID;
-    changed = true;
-  }
-  await ensureDefaultAgentFiles(String(world.defaultAgentId));
-  if (changed) {
-    world = await writeWorldState({ world, updates: {} });
-  }
-  return (
-    /** @type {{ id: string, name: string, defaultAgentId: string, currentChatId: string, createdAt?: string, updatedAt?: string }} */
-    world
-  );
-}
-async function loadAgentMetadata(agentId) {
-  const normalizedAgentId = normalizeAgentId2(agentId);
-  const metadata = await readJsonIfPresent2(buildAgentMetadataPath(normalizedAgentId));
-  return metadata && typeof metadata === "object" ? metadata : null;
-}
-async function ensureAgentSelection(options = {}) {
-  const agentId = normalizeAgentId2(options.agentId);
-  const world = await ensureWorldBootstrap();
-  await ensureDefaultAgentFiles(agentId, {
-    name: options.name,
-    provider: options.provider,
-    model: options.model
-  });
-  if (options.setDefault !== false && String(world.defaultAgentId ?? "") !== agentId) {
-    await writeWorldState({
-      world,
-      updates: {
-        defaultAgentId: agentId,
-        currentChatId: ""
-      }
-    });
-  }
-  return await loadAgentMetadata(agentId);
-}
 async function loadWorldChatMetadata(chatId) {
-  return await readJson(
-    buildWorldChatMetadataPath(chatId),
-    `Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`,
-    `Invalid chat session file: ${buildWorldChatMetadataPath(chatId)}`
-  );
+  const metadataPath = buildWorldChatMetadataPath(chatId);
+  let rawContent;
+  try {
+    rawContent = await fs4.readFile(metadataPath, "utf8");
+  } catch {
+    throw new Error(`Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`);
+  }
+  try {
+    return JSON.parse(rawContent);
+  } catch {
+    throw new Error(`Invalid chat session file: ${metadataPath}`);
+  }
 }
 async function loadWorldChatById(chatId) {
   const normalizedChatId = String(chatId ?? "").trim();
@@ -1061,17 +769,13 @@ async function loadWorldChatById(chatId) {
   };
 }
 async function loadChatById(chatId) {
-  await ensureWorldBootstrap();
-  const normalizedChatId = String(chatId ?? "").trim();
-  if (!normalizedChatId) {
-    throw new Error("Missing chat ID.");
-  }
-  return await loadWorldChatById(normalizedChatId);
+  await ensureChatStorage();
+  return await loadWorldChatById(chatId);
 }
 async function listPersistedChats() {
-  const world = await ensureWorldBootstrap();
-  const currentChatId = String(world.currentChatId ?? "").trim();
-  const entries = await fs5.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
+  await ensureChatStorage();
+  const currentChatId = await readCurrentChatId();
+  const entries = await fs4.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
   const chats = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -1081,7 +785,7 @@ async function listPersistedChats() {
     if (!chatId) {
       continue;
     }
-    const metadata = await readJsonIfPresent2(buildWorldChatMetadataPath(chatId));
+    const metadata = await readJsonIfPresent(buildWorldChatMetadataPath(chatId));
     if (!metadata || typeof metadata !== "object") {
       continue;
     }
@@ -1112,32 +816,21 @@ async function createPersistedChat(options = {}) {
   return chat;
 }
 async function setCurrentChat(chatId) {
-  const world = await ensureWorldBootstrap();
+  await ensureChatStorage();
   const chat = await loadChatById(chatId);
-  await writeWorldState({
-    world,
-    updates: {
-      currentChatId: chat.id
-    }
-  });
+  await writeCurrentChatId(chat.id);
   return chat;
 }
-async function loadRequestedChat({ newChat, agentId }) {
+async function loadRequestedChat({ newChat }) {
   if (newChat) {
     return createEmptyChat();
   }
-  const world = await ensureWorldBootstrap();
-  const selectedAgentId = normalizeAgentId2(agentId ?? world.defaultAgentId);
-  const chatId = String(world.currentChatId ?? "").trim();
+  await ensureChatStorage();
+  const chatId = await readCurrentChatId();
   if (!chatId) {
     return createEmptyChat();
   }
   try {
-    const metadata = await loadWorldChatMetadata(chatId);
-    const chatAgentId = String(metadata.agentId ?? "").trim();
-    if (chatAgentId && chatAgentId !== selectedAgentId) {
-      return createEmptyChat();
-    }
     return await loadChatById(chatId);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Missing chat session file: ")) {
@@ -1146,22 +839,16 @@ async function loadRequestedChat({ newChat, agentId }) {
     throw error;
   }
 }
-async function persistCompletedChat({ chat, messages, setCurrent = true, agentId }) {
-  const world = await ensureWorldBootstrap();
-  const selectedAgentId = normalizeAgentId2(agentId ?? world.defaultAgentId);
+async function persistCompletedChat({ chat, messages, setCurrent = true }) {
+  await ensureChatStorage();
   const persistedChat = await persistWorldChat({
     id: chat.id,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     messages
-  }, selectedAgentId);
+  });
   if (setCurrent) {
-    await writeWorldState({
-      world,
-      updates: {
-        currentChatId: chat.id
-      }
-    });
+    await writeCurrentChatId(chat.id);
   }
   return persistedChat;
 }
@@ -1169,8 +856,8 @@ async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
   if (!Array.isArray(streamTraceEvents) || streamTraceEvents.length === 0) {
     return null;
   }
-  const world = await ensureWorldBootstrap();
-  const eventsPath = buildAgentEventsPath(String(world.defaultAgentId));
+  await ensureChatStorage();
+  const eventsPath = buildWorldChatEventsPath(chat.id);
   await appendJsonl(eventsPath, streamTraceEvents.map((event) => ({
     kind: "stream_trace",
     chatId: chat.id,
@@ -1289,7 +976,7 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
     agentConfig.model ?? providerDefaultModel ?? ""
   ).trim();
   if (!model) {
-    throw new Error(`Missing LLM model. Set it in world.json, agent.json, or pass --model for provider ${provider}.`);
+    throw new Error(`Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider ${provider}.`);
   }
   const providers = (
     /** @type {LLMProviderConfigs} */
@@ -1401,7 +1088,7 @@ async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: [USER_SKILLS_ROOT, SKILLS_ROOT, WORLD_SKILLS_ROOT],
+    skillRoots: [USER_SKILLS_ROOT, SKILLS_ROOT],
     ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
   });
   const pendingUserMessage = {
@@ -2142,10 +1829,10 @@ function summarizePathExistsResult(result, forcedDurationMs) {
   const durationMs = forcedDurationMs ?? readFirstNumber(record, "duration_ms", "durationMs") ?? void 0;
   const ok = inferOk(record, true);
   const exists = readFirstBoolean(record, "exists");
-  const path7 = readFirstString(record, "path", "filePath");
+  const path6 = readFirstString(record, "path", "filePath");
   const type = readFirstString(record, "type", "kind");
   const preview = [
-    path7 ? truncateOneLine(`path: ${path7}`, MAX_PREVIEW_LINE_WIDTH) : null,
+    path6 ? truncateOneLine(`path: ${path6}`, MAX_PREVIEW_LINE_WIDTH) : null,
     type ? `type: ${type}` : null
   ].filter((line) => line !== null);
   return {
@@ -2300,7 +1987,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
   const data = parseJsonRecord2(readDataField(result));
   const contentType = readFirstString(data, "contentType") ?? "content";
   const contentEncoding = readFirstString(data, "contentEncoding") ?? "utf8";
-  const path7 = readFirstString(data, "path");
+  const path6 = readFirstString(data, "path");
   const content = readFirstString(data, "content");
   const sizeSummary = contentEncoding === "base64" ? "base64" : content === null ? null : formatLineCount(countLines(content));
   const summary = sizeSummary ? `${contentType} \xB7 ${sizeSummary}` : contentType;
@@ -2309,7 +1996,7 @@ function summarizeReadContentResult(result, forcedDurationMs) {
     ok: true,
     durationMs,
     summary,
-    preview: path7 ? [`path: ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
+    preview: path6 ? [`path: ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH - 6)}`] : void 0,
     raw: result
   };
 }
@@ -2321,13 +2008,13 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
   const data = isRecord2(record?.data) ? record.data : null;
-  const path7 = readFirstString(data, "path") ?? readFirstString(record, "path");
+  const path6 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
     name: toolName,
     ok: true,
     durationMs,
-    summary: path7 ? `${summary} \xB7 ${truncateOneLine(path7, MAX_PREVIEW_LINE_WIDTH)}` : summary,
+    summary: path6 ? `${summary} \xB7 ${truncateOneLine(path6, MAX_PREVIEW_LINE_WIDTH)}` : summary,
     raw: result
   };
 }
@@ -2538,9 +2225,7 @@ function writeDiagnostic(stderr, kind, text) {
 `);
 }
 async function resolveEffectiveAgentConfig(options = {}) {
-  const persistedAgentConfig = await loadPersistedRuntimeConfig({
-    agentId: options.agentId
-  });
+  const persistedAgentConfig = loadPersistedRuntimeConfig();
   const baseAgentConfig = {
     ...persistedAgentConfig,
     ...options.optionAgentConfig ?? {}
@@ -2697,8 +2382,7 @@ function createTurnExecutor(options) {
       });
       await persistCompletedChat({
         chat,
-        messages: turnResult.messages,
-        agentId: options.agentId
+        messages: turnResult.messages
       });
       if (streamTraceEnabled) {
         await persistStreamTraceEvents({
@@ -2738,19 +2422,17 @@ function createTurnExecutor(options) {
 
 // cli/src/agent-cli.ts
 var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
-var DEFAULT_AGENT_ID2 = "default";
 function usageText() {
   return [
     "Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
     "",
-    "Runtime options override world.json and agent.json defaults when provided:",
+    "Runtime options override AGENT_CLI_PROVIDER and AGENT_CLI_MODEL from .env when provided:",
     "  --provider <name>                 --model <name>",
     "  --temperature <number>            --max-tokens <number>",
     "  --tool-permission <auto|ask|read> --reasoning-effort <level>",
     "  --past-messages <count>           --stream-trace <true|false>",
     "  --web-search <true|false|low|medium|high>",
-    "  --agent-id <id>                  --new-agent <id>",
-    "  --workspace <path>               --world <id>",
+    "  --workspace <path>",
     "",
     "Examples:",
     '  agent-cli --new-chat "Map my next financial move"',
@@ -2758,14 +2440,12 @@ function usageText() {
     '  agent-cli --verbose "What should I do first?"',
     '  agent-cli --stream-off "What should I do first?"',
     '  agent-cli --workspace /path/to/workspace "Summarize this repo"',
-    "  agent-cli --new-agent research --provider ollama --model gemma4:e4b",
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"'
   ].join("\n");
 }
-function startupText(cwd = WORKSPACE_ROOT, agentId = DEFAULT_AGENT_ID2, runtimeSettings, scopedSkills) {
+function startupText(cwd = WORKSPACE_ROOT, runtimeSettings, scopedSkills) {
   const lines = [
-    `Agent CLI starting in ${cwd}`,
-    `Agent CLI agent id: ${agentId}`
+    `Agent CLI starting in ${cwd}`
   ];
   if (runtimeSettings) {
     lines.push(runtimeSelectionText(runtimeSettings));
@@ -2788,8 +2468,7 @@ function skillStartupText(scopedSkills) {
   return [
     "Skills available:",
     `  user: ${formatSkillIds(scopedSkills.user)}`,
-    `  project: ${formatSkillIds(scopedSkills.project)}`,
-    `  world: ${formatSkillIds(scopedSkills.world)}`
+    `  project: ${formatSkillIds(scopedSkills.project)}`
   ].join("\n");
 }
 function createDefaultInteractivePrompt() {
@@ -2805,7 +2484,7 @@ function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url
   try {
     return realpathSync(argvPath) === realpathSync(fileURLToPath(moduleUrl));
   } catch {
-    return pathToFileURL(path6.resolve(argvPath)).href === moduleUrl;
+    return pathToFileURL(path5.resolve(argvPath)).href === moduleUrl;
   }
 }
 function parseArguments(argv) {
@@ -2813,11 +2492,8 @@ function parseArguments(argv) {
   let streamOff = false;
   let help = false;
   let verbose = false;
-  let agentId;
-  let newAgentId;
   let workspaceRoot;
   let projectRoot;
-  let worldId;
   const messageParts = [];
   const runtimeOverrides = {};
   const normalizeFlagName = (rawValue) => rawValue.trim().toLowerCase();
@@ -2897,30 +2573,12 @@ function parseArguments(argv) {
         index = result.nextIndex;
         continue;
       }
-      if (flagName === "agent-id") {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        agentId = String(result.value);
-        index = result.nextIndex;
-        continue;
-      }
-      if (flagName === "new-agent") {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        newAgentId = String(result.value);
-        index = result.nextIndex;
-        continue;
-      }
       if (flagName === "workspace" || flagName === "project") {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         workspaceRoot = String(result.value);
         if (flagName === "project") {
           projectRoot = String(result.value);
         }
-        index = result.nextIndex;
-        continue;
-      }
-      if (flagName === "world") {
-        const result = readFlagValue(argv, index, inlineValue, flagName);
-        worldId = String(result.value);
         index = result.nextIndex;
         continue;
       }
@@ -2986,12 +2644,9 @@ function parseArguments(argv) {
   }
   return {
     help,
-    ...agentId !== void 0 ? { agentId } : {},
     newChat,
-    ...newAgentId !== void 0 ? { newAgentId } : {},
     ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
     ...projectRoot !== void 0 ? { projectRoot } : {},
-    ...worldId !== void 0 ? { worldId } : {},
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
@@ -3008,63 +2663,6 @@ function runtimeSettingsForStartup(agentConfig) {
   const provider = (normalizeOptionalText(agentConfig.provider) || "openai").toLowerCase();
   const model = normalizeOptionalText(agentConfig.model) || defaultModelForProvider(provider);
   return { provider, model };
-}
-async function askAgentField({
-  prompt,
-  label,
-  fallback
-}) {
-  if (!prompt) {
-    return fallback;
-  }
-  const suffix = fallback ? ` (${fallback})` : "";
-  const answer = (await prompt.question(`${label}${suffix}: `)).trim();
-  return answer || fallback;
-}
-async function prepareSelectedAgent({
-  parsed,
-  prompt
-}) {
-  const selectedAgentId = normalizeOptionalText(parsed.newAgentId ?? parsed.agentId) || DEFAULT_AGENT_ID2;
-  const explicitAgentSelection = Boolean(parsed.newAgentId || parsed.agentId);
-  if (!explicitAgentSelection) {
-    return selectedAgentId;
-  }
-  const existingMetadata = await loadAgentMetadata(selectedAgentId);
-  const creatingAgent = Boolean(parsed.newAgentId) || !existingMetadata;
-  const overrideProvider = normalizeOptionalText(parsed.runtimeOverrides.provider);
-  const overrideModel = normalizeOptionalText(parsed.runtimeOverrides.model);
-  let name = normalizeOptionalText(existingMetadata?.name);
-  let provider = normalizeOptionalText(existingMetadata?.provider);
-  let model = normalizeOptionalText(existingMetadata?.model);
-  if (creatingAgent || !name) {
-    name = prompt ? await askAgentField({
-      prompt,
-      label: "Agent name",
-      fallback: name || `${selectedAgentId} agent`
-    }) : name || `${selectedAgentId} agent`;
-  }
-  if (creatingAgent || !provider) {
-    provider = prompt ? await askAgentField({
-      prompt,
-      label: "Provider",
-      fallback: provider || overrideProvider || "openai"
-    }) : provider || overrideProvider;
-  }
-  if (creatingAgent || !model) {
-    model = prompt ? await askAgentField({
-      prompt,
-      label: "Model",
-      fallback: model || overrideModel || defaultModelForProvider(provider)
-    }) : model || overrideModel;
-  }
-  await ensureAgentSelection({
-    agentId: selectedAgentId,
-    name,
-    provider,
-    model
-  });
-  return selectedAgentId;
 }
 function formatChatListItem(chat) {
   const marker = chat.isCurrent ? "*" : " ";
@@ -3164,76 +2762,38 @@ async function runInteractiveSession({
 async function main(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }, options = {}) {
   const {
     help,
-    agentId,
     newChat,
-    newAgentId,
     workspaceRoot,
     projectRoot,
-    worldId,
     runtimeOverrides,
     streamOff,
     verbose,
     message
   } = parseArguments(argv);
   prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
-  await ensureWorkspaceWorld(worldId ? { worldId } : {});
-  const parsedArguments = {
-    help,
-    ...agentId !== void 0 ? { agentId } : {},
-    newChat,
-    ...newAgentId !== void 0 ? { newAgentId } : {},
-    ...workspaceRoot !== void 0 ? { workspaceRoot } : {},
-    ...projectRoot !== void 0 ? { projectRoot } : {},
-    ...worldId !== void 0 ? { worldId } : {},
-    runtimeOverrides,
-    streamOff,
-    verbose,
-    message
-  };
-  if (help && !newAgentId && !agentId) {
-    io.stdout.write(`${usageText()}
-`);
-    return null;
-  }
-  const shouldCreateAgentPrompt = Boolean((newAgentId || agentId) && process.stdin.isTTY);
-  const agentSetupPrompt = options.interactivePrompt ?? (shouldCreateAgentPrompt ? createDefaultInteractivePrompt() : void 0);
-  let agentSetupPromptPassedToInteractive = false;
-  const selectedAgentId = await prepareSelectedAgent({
-    parsed: parsedArguments,
-    prompt: agentSetupPrompt
-  });
+  await ensureWorkspaceWorld();
   if (help) {
-    if (!options.interactivePrompt) {
-      agentSetupPrompt?.close?.();
-    }
     io.stdout.write(`${usageText()}
 `);
     return null;
   }
+  const agentSetupPrompt = options.interactivePrompt;
+  let agentSetupPromptPassedToInteractive = false;
   const agentConfig = await resolveEffectiveAgentConfig({
     optionAgentConfig: options.agentConfig,
-    runtimeOverrides,
-    agentId: options.agentId ?? selectedAgentId
+    runtimeOverrides
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
-  if (!newAgentId && !agentId) {
-    await ensureAgentSelection({
-      agentId: selectedAgentId,
-      provider: normalizeOptionalText(agentConfig.provider),
-      model: normalizeOptionalText(agentConfig.model)
-    });
-  }
   const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
-    loadRequestedChat({ newChat, agentId: selectedAgentId })
+    loadRequestedChat({ newChat })
   ]);
   const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
   if (options.startupDiagnostics) {
     (io.stderr ?? process.stderr).write(
       `${startupText(
         WORKSPACE_ROOT,
-        selectedAgentId,
         runtimeSettingsForStartup(agentConfig),
         scopedSkillInventory
       )}
@@ -3244,7 +2804,6 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     io,
     verbose,
     streamOff: effectiveStreamOff,
-    agentId: selectedAgentId,
     agentConfig,
     workspaceSystemPrompt,
     skillInventory
@@ -3277,7 +2836,7 @@ async function runCli(argv = process.argv.slice(2), io = { stdout: process.stdou
   try {
     const parsed = parseArguments(argv);
     prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
-    await ensureWorkspaceWorld(parsed.worldId ? { worldId: parsed.worldId } : {});
+    await ensureWorkspaceWorld();
     await main(argv, io, { startupDiagnostics: !parsed.help });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

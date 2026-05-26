@@ -1,16 +1,16 @@
 # Agent CLI
 
-Local-first agent runtime, durable `.agent-world` storage, one CLI binary, and a minimal Electron shell.
+Local-first agent runtime, flat `.agent-world` chat storage, one CLI binary, and a minimal Electron shell.
 
-The project used to carry a relay server, Vite web client, and `agent-world-cli` shell. Those surfaces are gone. The supported product boundary is now smaller and clearer: run agents locally through `agent-cli`, keep state on disk, and build the desktop shell from `electron/`.
+The supported boundary is intentionally small: run agents locally through `agent-cli`, keep chat state on disk, load workspace instructions from `AGENTS.md`, and build the desktop shell from `electron/`.
 
 ## What Stays
 
 - `cli/src/agent-cli.ts`: CLI argument parsing, one-shot turns, and interactive terminal chat.
 - `cli/src/turn-executor.ts`: terminal turn execution and stream-trace persistence.
 - `core/agent-runtime.ts`: provider/runtime integration.
-- `core/world-store.ts` and `core/workspace-store.ts`: `.agent-world` workspace, world, agent, chat, queue, and memory storage.
-- `core/agent-world-runtime.ts`: runtime API over the local world store.
+- `core/world-store.ts`: flat chat storage under `.agent-world/chats`.
+- `core/agent-files.ts`: built-in prompt, workspace `AGENTS.md`, and skill inventory loading.
 - `electron/`: Electron main/preload code and the Electron-owned renderer.
 - `bin/agent-cli.js`: generated CLI executable.
 
@@ -20,7 +20,7 @@ The project used to carry a relay server, Vite web client, and `agent-world-cli`
 - No web app.
 - No `agent-world-cli` binary.
 - No `agent-cli --remote`.
-- No browser pairing, remote host locks, or relay session state.
+- No worlds, world ids, registry, `world.json`, agents folder, or `agent.json`.
 
 ## Install
 
@@ -33,8 +33,6 @@ npm install
 ```sh
 npm run build
 ```
-
-This type-checks `core/` and bundles `cli/src/agent-cli.ts` to `bin/agent-cli.js`.
 
 Build the Electron shell separately:
 
@@ -75,13 +73,22 @@ npm run electron:start
 
 ## Runtime Settings
 
-Runtime settings can come from:
+LLM-time defaults come from `.env`:
 
-1. CLI flags
-2. selected-world `agents/{agentId}/agent.json`
-3. selected-world `world.json`
+```sh
+AGENT_CLI_PROVIDER=openai
+AGENT_CLI_MODEL=gpt-5
+AGENT_CLI_TEMPERATURE=0.2
+AGENT_CLI_MAX_TOKENS=4096
+AGENT_CLI_TOOL_PERMISSION=ask
+AGENT_CLI_REASONING_EFFORT=medium
+AGENT_CLI_PAST_MESSAGES=20
+AGENT_CLI_STREAM=true
+AGENT_CLI_STREAM_TRACE=false
+AGENT_CLI_WEB_SEARCH=false
+```
 
-CLI flags win. Supported runtime flags include:
+CLI flags override `.env`:
 
 - `--provider <name>`
 - `--model <name>`
@@ -92,16 +99,17 @@ CLI flags win. Supported runtime flags include:
 - `--past-messages <count>`
 - `--stream-trace <true|false>`
 - `--web-search <true|false|low|medium|high>`
-- `--agent-id <id>`
-- `--new-agent <id>`
 - `--workspace <path>`
-- `--world <id>`
 
 Example:
 
 ```sh
-npm run agent-cli -- --new-agent research --provider openai --model gpt-5 "Inspect this repo"
+npm run agent-cli -- --provider openai --model gpt-5 "Inspect this repo"
 ```
+
+## Prompt Loading
+
+Agent CLI always uses its built-in system prompt. If the workspace has `AGENTS.md`, Agent CLI reads it from the selected workspace root and layers it into the system prompt for the model. `AGENTS.md` is instruction context, not persisted chat history.
 
 ## Workspace And Storage
 
@@ -115,31 +123,26 @@ Workspace root resolution:
 
 The resolved absolute root is published back to `AGENT_CLI_WORKSPACE`.
 
-Durable state lives under `.agent-world/`:
+Durable workspace state is flat:
 
 ```text
 .agent-world/
-  registry.json
+  chats/
+    current.json
+    {chatId}/
+      chat.json
+      messages.jsonl
+      summary.md
+      events.jsonl
   skills/
-  worlds/
-    {worldId}/
-      world.json
-      agents/{agentId}/agent.json
-      agents/{agentId}/state.json
-      agents/{agentId}/memory.jsonl
-      agents/{agentId}/events.jsonl
-      chats/{chatId}/chat.json
-      chats/{chatId}/messages.jsonl
-      chats/{chatId}/summary.md
-      queues/{chatId}.json
-      skills/
+    .../SKILL.md
 ```
 
-No `.chats` compatibility path is current. No singleton `.agent-world/world.json` layout is current.
+No `.chats` compatibility path is current. No `.agent-world/worlds`, registry, `world.json`, `agents`, or `agent.json` layout is current.
 
 ## Environment
 
-`.env` is loaded from the invocation cwd and is limited to credentials plus optional workspace selection. Runtime defaults belong in `.agent-world/worlds/{worldId}/world.json`, selected agent `agent.json`, or CLI flags.
+`.env` is loaded from the invocation cwd and is limited to credentials, `AGENT_CLI_*` runtime defaults, and optional workspace selection. CLI flags override `.env`.
 
 Supported credential keys include:
 

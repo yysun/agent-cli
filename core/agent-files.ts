@@ -7,11 +7,11 @@
  *
  * Key features:
  * - Reads optional `./AGENTS.md` prompt content without replacing the built-in prompt.
- * - Discovers recursive user, workspace, and selected-world `SKILL.md` files using deterministic lexical ordering.
+ * - Discovers recursive user and workspace `SKILL.md` files using deterministic lexical ordering.
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
- * - 2026-05-23: Layered workspace and selected-world skill discovery.
+ * - 2026-05-26: Removed selected-world skill discovery and switched workspace skills to `.agent-world/skills`.
  * - 2026-05-23: Renamed AGENTS.md prompt loading terminology from project to workspace.
  * - 2026-05-07: Added agent prompt and skill inventory helpers for the CLI.
  * - 2026-05-07: Switched prompt and skills loading to AGENTS/.agents conventions.
@@ -21,7 +21,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { SKILLS_ROOT, SYSTEM_PROMPT_PATH, USER_SKILLS_ROOT, WORLD_SKILLS_ROOT } from './paths.js';
+import { SKILLS_ROOT, SYSTEM_PROMPT_PATH, USER_SKILLS_ROOT } from './paths.js';
 import { ensureWorkspaceWorld } from './workspace-store.js';
 
 export const DEFAULT_SYSTEM_PROMPT = [
@@ -175,7 +175,7 @@ export async function loadProjectSystemPrompt() {
 
 /**
  * @param {string} skillsRoot
- * @param {'user' | 'project' | 'world'} sourceScope
+ * @param {'user' | 'project'} sourceScope
  */
 async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   try {
@@ -217,12 +217,11 @@ export async function loadSkillInventoryByScope() {
   return {
     user: await loadSkillInventoryFromRoot(USER_SKILLS_ROOT, 'user'),
     project: await loadSkillInventoryFromRoot(SKILLS_ROOT, 'project'),
-    world: await loadSkillInventoryFromRoot(WORLD_SKILLS_ROOT, 'world'),
   };
 }
 
 /**
- * @param {{ user: any[], project: any[], world: any[] }} scopedInventory
+ * @param {{ user: any[], project: any[] }} scopedInventory
  */
 export function flattenSkillInventoryByPrecedence(scopedInventory) {
   const skillsById = new Map();
@@ -232,10 +231,6 @@ export function flattenSkillInventoryByPrecedence(scopedInventory) {
   }
 
   for (const skill of scopedInventory.project) {
-    skillsById.set(skill.skillId, skill);
-  }
-
-  for (const skill of scopedInventory.world) {
     skillsById.set(skill.skillId, skill);
   }
 
