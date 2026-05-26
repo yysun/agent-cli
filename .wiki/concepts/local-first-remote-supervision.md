@@ -1,7 +1,7 @@
 ---
 title: "Local-First Remote Supervision"
 type: "concept"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "README.md"
@@ -10,10 +10,12 @@ source_paths:
   - "server/src/relay-server-cli.ts"
   - ".docs/done/2026/05/11/remote-control-relay.md"
   - ".docs/done/2026/05/13/pure-relay-slash-commands.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-26"
 ---
 
 # Local-First Remote Supervision
+
+> Stale: remote browser supervision was removed with the relay and web app. The current local-first boundary is CLI plus Electron on the local machine.
 
 Remote mode exists so a browser can watch and guide a local CLI session. It does not move the real work into the relay server.
 

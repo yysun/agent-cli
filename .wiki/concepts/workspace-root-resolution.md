@@ -4,33 +4,43 @@ type: "concept"
 status: "active"
 language: "default"
 source_paths:
-  - "core/paths.ts"
-  - "core/workspace-environment.ts"
-  - "cli/src/agent-cli.ts"
-  - "cli/src/agent-world-cli.ts"
   - "README.md"
   - "AGENTS.md"
-  - ".docs/done/2026/05/23/workspace-terminology.md"
-  - ".docs/done/2026/05/23/align-agent-world-workspace.md"
-updated_at: "2026-05-23"
+  - "cli/src/agent-cli.ts"
+  - "core/paths.ts"
+  - "core/workspace-environment.ts"
+  - "core/workspace-store.ts"
+updated_at: "2026-05-26"
 ---
 
 # Workspace Root Resolution
 
-The loaded root is now called the workspace root. That is not word polish: the root decides where prompts, runtime config, skills, `.env`, saved chats, agents, queues, and remote locks live.
+The workspace root decides where Agent CLI reads `AGENTS.md`, stores `.agent-world`, and finds workspace skills. It must not drift from the user's selected workspace.
 
 ## Precedence
 
-The preferred selector is `--workspace <path>`. Legacy `--project <path>` still works. Environment fallback is `AGENT_CLI_WORKSPACE`, then legacy `AGENT_CLI_ROOT`, then a root value read from the current directory's `.env`, then `cwd`.
+The current order is:
 
-Once resolved, `core/paths.ts` derives `AGENTS.md`, `runtime.json`, `.agent-world/skills`, `.agent-world`, and all world-store paths from the same root.
+1. `--workspace <path>`
+2. legacy `--project <path>`
+3. `AGENT_CLI_WORKSPACE`
+4. `AGENT_CLI_WORKSPACE` loaded from the invocation cwd `.env`
+5. current working directory
 
-## Shared Preparation
+After resolution, the absolute root is published back to `AGENT_CLI_WORKSPACE`.
 
-`core/workspace-environment.ts` is the shared setup path for both CLIs. It configures the root first, then loads allowed `.env` keys from that workspace. Allowed `.env` values are provider credentials and relay configuration only.
+## `.env` Location
 
-The business consequence is simple: switching workspaces switches the whole local world. It should not leave prompts in one root, chats in another, and provider keys from a third.
+`.env` is read from the invocation cwd, not from the selected workspace. This lets a launch directory choose a workspace and provide credentials or runtime defaults without requiring the selected workspace to contain secrets.
+
+Only allowlisted keys are copied into `process.env`; see [[configuration-and-runtime-precedence]].
+
+## Storage Guarantee
+
+`.agent-world` must be created under the resolved workspace root. `core/workspace-store.ts` re-syncs from `AGENT_CLI_WORKSPACE` before creating directories, which protects against modules imported before the env var is set.
+
+This is a fragile contract because a cwd/workspace mix-up silently writes chats to the wrong place. Tests cover both `--workspace` and `.env` workspace selection paths.
 
 ## Compatibility
 
-`--project`, `AGENT_CLI_ROOT`, `REPO_ROOT`, and `configureProjectRoot(...)` remain as compatibility names. New code should use workspace terminology unless it is preserving an existing public API.
+`--project` and `configureProjectRoot(...)` remain compatibility names. New code should use workspace terminology.

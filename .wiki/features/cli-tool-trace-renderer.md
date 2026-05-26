@@ -5,11 +5,11 @@ status: "active"
 language: "default"
 source_paths:
   - "cli/src/tool-trace-renderer.ts"
-  - "cli/src/agent-runtime.ts"
+  - "cli/src/turn-executor.ts"
   - "core/agent-runtime.ts"
   - "tests/unit/agent-cli.test.js"
   - ".docs/done/2026/05/16/port-trace-renderer.md"
-updated_at: "2026-05-20"
+updated_at: "2026-05-26"
 ---
 
 # CLI Tool Trace Renderer
@@ -34,6 +34,6 @@ Agent CLI currently routes normal `--verbose` streaming diagnostics through the 
 
 ## Runtime Boundary
 
-`cli/src/agent-runtime.ts` calls the renderer only for verbose stderr output. Stream trace persistence still records simple event text in `.agent-world/agents/{agentId}/events.jsonl`, so display formatting and saved trace shape do not drift together.
+`cli/src/turn-executor.ts` calls the renderer only for verbose stderr output. Stream trace persistence records simple event text in `.agent-world/chats/{chatId}/events.jsonl`, so display formatting and saved trace shape do not drift together.
 
 The renderer depends on [[model-runner-handoff]] forwarding tool results with duration and original arguments. That context lets it say what actually happened without parsing persisted chat messages after the fact.

@@ -5,71 +5,64 @@ status: "active"
 language: "default"
 source_paths:
   - "README.md"
-  - "runtime.json"
+  - ".env.example"
   - "cli/src/agent-cli.ts"
-  - "cli/src/agent-world-cli.ts"
   - "core/agent-config.ts"
   - "core/agent-runtime.ts"
-  - "core/paths.ts"
   - "core/workspace-environment.ts"
-  - ".docs/done/2026/05/14/agent-world-storage.md"
-  - ".docs/done/2026/05/20/agent-id-config.md"
-  - ".docs/done/2026/05/23/align-agent-world-workspace.md"
-  - ".docs/done/2026/05/23/workspace-terminology.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # Configuration And Runtime Precedence
 
-This page explains where the app gets its settings and which source wins when the same setting shows up in more than one place. It also separates everyday behavior settings from secrets such as API keys.
+This page explains where the app gets settings and which source wins. The important shift is that runtime defaults now live in `.env` and CLI flags, not in `runtime.json`, `world.json`, or `agent.json`.
 
-## Which Folder Counts As The Workspace?
+## Workspace Selection
 
-- The workspace root is `--workspace <path>` when the flag is provided.
-- Legacy `--project <path>` still works as an alias.
-- Otherwise it is `AGENT_CLI_WORKSPACE` when that environment variable is set.
-- Otherwise legacy `AGENT_CLI_ROOT` still works.
-- Otherwise it can fall back to either root key from the current working directory's `.env`.
-- Otherwise it is the real current working directory.
-- `AGENTS.md`, `.agent-world/skills`, `runtime.json`, `.env`, and `.agent-world` all resolve from that same root.
+The workspace root is selected first:
 
-This matters because the app reads prompts, skills, settings, and saved chat data from that one chosen folder. `core/workspace-environment.ts` now prepares that root for both CLIs, while `core/paths.ts` keeps compatibility aliases such as `configureProjectRoot(...)`. [[workspace-root-resolution]] and [[storage-layout]] show the boundary.
+1. `--workspace <path>`
+2. legacy `--project <path>`
+3. `AGENT_CLI_WORKSPACE`
+4. `AGENT_CLI_WORKSPACE` from the invocation cwd `.env`
+5. current working directory
+
+The resolved absolute path is published back to `AGENT_CLI_WORKSPACE`. [[workspace-root-resolution]] covers why this matters for storage and prompt loading.
 
 ## Runtime Layers
 
-The run settings are loaded in this order, from weakest to strongest:
+The effective runtime config is:
 
-1. Repo defaults in `runtime.json`.
-2. Selected agent metadata in `.agent-world/agents/{agentId}/agent.json`, currently useful as provider/model fallback.
-3. Selected agent overrides in `.agent-world/agents/{agentId}/runtime.json`.
-4. CLI flags such as `--provider`, `--model`, `--temperature`, `--past-messages`, and `--stream-off`.
+1. allowlisted `AGENT_CLI_*` defaults from `.env`
+2. programmatic options passed by Electron or tests
+3. CLI runtime flags
 
-The cleanup logic in [[runtime-config-loading-and-normalization]] converts older spellings such as `modal`, `tokens`, `permissions`, and `reasoning` into the current setting names so the rest of the app sees one consistent shape.
+`core/agent-config.ts` normalizes aliases and validates values such as temperature, max tokens, tool permission, reasoning effort, history count, stream flags, and web search. CLI flags override `.env`.
 
-`--agent-id <id>` and `--new-agent <id>` select the agent before this merge happens. [[named-agent-selection]] covers the creation and selection flow.
+## What `.env` Can Set
 
-## What `.env` Still Does
+`core/workspace-environment.ts` allowlists provider credentials, runtime defaults, and optional workspace selection. It also creates a cwd `.env.example` when neither `.env` nor `.env.example` exists.
 
-The CLI still reads `.env`, but only for provider credential keys. It does not use `.env` for normal behavior settings like model choice, temperature, tool mode, or search settings.
+Allowed runtime defaults include:
 
-That means:
+- `AGENT_CLI_PROVIDER`
+- `AGENT_CLI_MODEL`
+- `AGENT_CLI_TEMPERATURE`
+- `AGENT_CLI_MAX_TOKENS`
+- `AGENT_CLI_TOOL_PERMISSION`
+- `AGENT_CLI_REASONING_EFFORT`
+- `AGENT_CLI_PAST_MESSAGES`
+- `AGENT_CLI_STREAM`
+- `AGENT_CLI_STREAM_TRACE`
+- `AGENT_CLI_WEB_SEARCH`
+- `AGENT_CLI_GLOBAL_SKILLS`
 
-- use `runtime.json` or CLI flags for behavior
-- use `.env` or process environment variables for secrets such as API keys
-- export `AGENT_CLI_RELAY_SERVER_URL` in the process environment when running [[remote-session-lifecycle]]
+Provider validation still happens in `core/agent-runtime.ts` before a turn starts. Missing credentials or model settings fail early.
 
-This is stricter than the product description might suggest. `core/workspace-environment.ts` allow-lists provider credential variables and `AGENT_CLI_RELAY_SERVER_URL` from local `.env`; runtime behavior settings belong in runtime files or flags.
+## What Is Gone
 
-## Provider Validation
+There is no `runtime.json`, `agent.json`, `world.json`, selected-agent config, relay URL config, or remote mode in the current product. Pages that describe those layers are stale historical context.
 
-`core/agent-runtime.ts` validates the selected provider before any turn starts. The supported providers are `openai`, `anthropic`, `google`, `azure`, `xai`, `openai-compatible`, and `ollama`.
+## Why The Boundary Matters
 
-If the required environment variables are missing, the CLI fails early instead of starting and then failing later in the middle of a model call or tool run.
-
-## History And Streaming Settings
-
-- `pastMessages` limits how much earlier chat history is sent back to the model.
-- The full chat history on disk is still kept in `.agent-world`.
-- `stream` and `streamTrace` are normal behavior settings, not secret settings.
-
-Those settings are applied during [[chat-turn-lifecycle]] and persisted by [[world-store]].
+The `.env` loader is allowlist-based so secrets and supported runtime defaults can be read without turning arbitrary environment values into application state. That keeps local startup predictable and prevents stale product surfaces from sneaking back through config.

@@ -1,21 +1,23 @@
 ---
 title: "Agent World Runtime"
 type: "feature"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "core/agent-world-runtime.ts"
-  - "core/world-store.ts"
+  - "core/chat-store.ts"
   - "core/agent-runtime.ts"
   - "core/index.ts"
   - "core/agent-files.ts"
   - "tests/unit/agent-world-runtime.test.js"
   - ".docs/done/2026/05/23/world-api-runtime.md"
   - ".docs/done/2026/05/23/agent-world-runtime-boundary.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # Agent World Runtime
+
+> Stale: `core/agent-world-runtime.ts` and its tests were deleted when the repo was simplified to local `agent-cli`, core runtime, chat storage, and Electron.
 
 `core/agent-world-runtime.ts` is the concrete workspace-local API over Agent CLI's saved world. It gives higher-level callers a stable surface for worlds, agents, chats, messages, queues, skills, events, memory, and sends without replacing the existing chat turn engine.
 

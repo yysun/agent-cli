@@ -1,18 +1,20 @@
 ---
 title: "Agent-World Storage Migration"
 type: "bug-fix"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - ".docs/done/2026/05/14/agent-world-storage.md"
-  - "core/world-store.ts"
+  - "core/chat-store.ts"
   - "core/paths.ts"
-  - "tests/unit/world-store.test.js"
+  - "tests/unit/chat-store.test.js"
   - "tests/e2e/agent-cli-remote.e2e.test.js"
-updated_at: "2026-05-16"
+updated_at: "2026-05-26"
 ---
 
 # Agent-World Storage Migration
+
+> Stale: this page describes the older world/agent migration. The current storage model is flatter and is documented in [[storage-layout]] and [[chat-store]].
 
 The project recently moved from older chat-storage layouts to one clear save folder: `.agent-world`.
 
@@ -33,4 +35,4 @@ The previous layout mixed current selection state, chat data, and remote state i
 - runtime overrides can be split cleanly between repo-wide defaults and default-agent overrides
 - docs and build layout now match the real runtime paths
 
-This migration is the foundation behind [[storage-layout]] and the current [[world-store]] behavior.
+This migration is the foundation behind [[storage-layout]] and the current [[chat-store]] behavior.

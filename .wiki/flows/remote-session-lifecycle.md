@@ -1,21 +1,23 @@
 ---
 title: "Remote Session Lifecycle"
 type: "flow"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "cli/src/agent-cli.ts"
   - "core/remote-control.ts"
   - "core/relay-client.ts"
-  - "core/world-store.ts"
+  - "core/chat-store.ts"
   - "server/src/relay-server.ts"
   - "tests/e2e/agent-cli-remote.e2e.test.js"
   - ".docs/done/2026/05/11/remote-control-relay.md"
   - ".docs/done/2026/05/13/pure-relay-slash-commands.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-26"
 ---
 
 # Remote Session Lifecycle
+
+> Stale: `agent-cli --remote`, relay client/control code, relay server, and remote E2E tests were deleted. The current CLI is local only.
 
 This is the path for `agent-cli --remote`. In plain terms, it shows how a local terminal session becomes a browser-guided session without moving the real work off the machine.
 

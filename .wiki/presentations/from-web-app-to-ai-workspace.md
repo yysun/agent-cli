@@ -2,13 +2,13 @@
 marp: true
 title: From Web App to AI Workspace
 type: "note"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "README.md"
   - "web/src/App.tsx"
   - "server/src/relay-server.ts"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 paginate: true
 footer: 'Agent CLI - Web UI - Local runtime - Remote control'
 class: lead

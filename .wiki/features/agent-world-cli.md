@@ -1,7 +1,7 @@
 ---
 title: "Agent World CLI"
 type: "feature"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "package.json"
@@ -15,10 +15,12 @@ source_paths:
   - "tests/e2e/agent-world-cli-flow-matrix.e2e.test.js"
   - ".docs/done/2026/05/23/agent-world-cli-store-rename.md"
   - ".docs/done/2026/05/23/align-agent-world-workspace.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # Agent World CLI
+
+> Stale: `agent-world-cli`, its binary, source entrypoint, and direct tests were deleted. This page is historical context, not current product guidance.
 
 `agent-world-cli` is the local command surface for inspecting and mutating the saved Agent World state. It is not a replacement storage system. It opens the same workspace root as `agent-cli`, then delegates world, agent, chat, message, send, and queue behavior to [[agent-world-runtime]].
 
@@ -42,4 +44,4 @@ The CLI accepts `--workspace` as the canonical root flag and keeps `--project` a
 
 `send --queue` is intentionally provider-free. It persists a queued user message but does not dispatch it to the model. Direct `send` still uses the real runtime and can require provider credentials.
 
-That distinction matters because queues are local steering state, not hidden remote execution. The storage side lives in [[world-store]].
+That distinction matters because queues are local steering state, not hidden remote execution. The storage side lives in [[chat-store]].

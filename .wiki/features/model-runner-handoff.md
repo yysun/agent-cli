@@ -11,7 +11,7 @@ source_paths:
   - "README.md"
   - ".docs/done/2026/05/16/upgrade-llm-runtime-v0-5-0.md"
   - ".docs/done/2026/05/23/cli-input-ui.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # Core Agent Runtime
@@ -58,4 +58,4 @@ The `llm-runtime` environment is always disposed in a cleanup path, even on fail
 
 ## Core Export Surface
 
-`core/index.ts` re-exports both `agent-runtime` and `agent-world-runtime` as the public core package surface. That keeps embedding code away from old file names and gives the repo one obvious place to expose core runtime behavior.
+`core/index.ts` re-exports the kept core modules, including `agent-runtime`, `agent-config`, `agent-files`, `paths`, `workspace-environment`, `workspace-store`, and `chat-store`. The old `agent-world-runtime` export is gone with the deleted world API.

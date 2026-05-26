@@ -1,23 +1,25 @@
 ---
 title: "Named Agent Selection"
 type: "feature"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "README.md"
   - "cli/src/agent-cli.ts"
   - "core/agent-config.ts"
-  - "core/world-store.ts"
+  - "core/chat-store.ts"
   - "tests/unit/agent-cli.test.js"
   - "tests/unit/agent-config.test.js"
-  - "tests/unit/world-store.test.js"
+  - "tests/unit/chat-store.test.js"
   - ".docs/reqs/2026/05/20/req-agent-id-config.md"
   - ".docs/done/2026/05/20/agent-id-config.md"
   - ".docs/tests/test-agent-id-config.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # Named Agent Selection
+
+> Stale: persisted named agents, `agent.json`, agent folders, and related CLI flags were removed. Current runtime defaults come from `.env`, options, and CLI flags.
 
 Agent CLI now lets a workspace carry multiple named agents under `.agent-world/agents/{agentId}`. The old practical model was "the default agent plus optional runtime overrides"; the new model lets the user select or create an agent explicitly and have that choice drive metadata, runtime provider/model defaults, chat persistence, stream traces, and remote state.
 
@@ -60,6 +62,6 @@ That middle `agent.json` layer is intentional. It means provider/model values en
 
 ## Storage Boundary
 
-[[world-store]] owns the bootstrap behavior. It creates world metadata, selected agent files, and chat state under the configured workspace root. [[storage-layout]] documents the resulting on-disk shape.
+[[chat-store]] owns the bootstrap behavior. It creates world metadata, selected agent files, and chat state under the configured workspace root. [[storage-layout]] documents the resulting on-disk shape.
 
 The practical consequence is that named agents change which local agent state is active without moving the workspace, tools, credentials, or saved data off-machine.

@@ -1,7 +1,7 @@
 ---
 title: "Relay Server And Session Transport"
 type: "feature"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "server/src/relay-server.ts"
@@ -9,10 +9,12 @@ source_paths:
   - "README.md"
   - "tests/e2e/relay-server.e2e.test.js"
   - ".docs/done/2026/05/11/remote-control-relay.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-26"
 ---
 
 # Relay Server And Session Transport
+
+> Stale: the relay server, relay CLI, bundled server output, and relay tests were deleted. There is no current relay transport surface.
 
 The relay server is the optional middleman between a long-running local host and one or more paired browser clients.
 

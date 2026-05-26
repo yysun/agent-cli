@@ -3,60 +3,80 @@ title: "Project Wiki"
 type: "index"
 status: "active"
 language: "default"
-last_commit: "aa4bf954d718883fe223706f49535528bf17ea05"
-updated_at: "2026-05-23"
+last_commit: "ce93207529f3206c6306d9195f96a4236d57fca9"
+updated_at: "2026-05-26"
 ---
 
 # Agent CLI Wiki
 
 ## What is this?
 
-Agent CLI is a local-first command-line chat workspace. The main `agent-cli` binary runs model turns against the current workspace, saves chats and agent state under `.agent-world/`, and can optionally expose the live local session to a browser through a relay server.
+Agent CLI is a local-first command-line chat workspace with a minimal Electron shell. The supported product is intentionally narrow: one `agent-cli` binary, provider/runtime integration through `llm-runtime`, prompts and skills from the selected workspace, and durable chat state under `.agent-world/chats`.
 
-The newer `agent-world-cli` binary is the JSON-first control surface for the same saved world: inspect agents, chats, messages, queues, and send or queue work without inventing another storage layout. Start with [[cli-entry-and-host-modes]], [[agent-world-cli]], and [[world-store]].
+The old relay server, web app, `agent-world-cli`, worlds, persisted agents, queues, and remote host mode are gone. Start with [[cli-entry-and-host-modes]], [[chat-turn-lifecycle]], [[chat-store]], and [[storage-layout]].
 
 ## Get started
 
-Run the main chat CLI with `npm run agent-cli -- --new-chat "Summarize this repo"`. Run `npm run agent-cli --` for the interactive terminal prompt. Use `npm run agent-world-cli -- world` when you want a machine-readable snapshot of the saved world.
+Run a local turn with `npm run agent-cli -- "Summarize this workspace"`. Run `npm run agent-cli -- --new-chat "Map my next move"` to force a fresh chat, or omit the message with `npm run agent-cli --` to enter the interactive terminal prompt.
 
-You need provider credentials in the shell or in the workspace `.env`; `.env` is only for credentials and relay config. `AGENT_CLI_RELAY_SERVER_URL` is required only for `agent-cli --remote`. A successful local run prints assistant text on stdout and writes durable chat state under `.agent-world/chats/{chatId}`.
+You need provider credentials in the shell or invocation cwd `.env`. Runtime defaults can also come from `.env`: provider, model, temperature, max tokens, permissions, history count, streaming, stream trace, web search, and `AGENT_CLI_GLOBAL_SKILLS`. A successful local run streams or prints assistant output and writes chat files under `.agent-world/chats/{chatId}`.
 
-First read `README.md`, `package.json`, `cli/src/agent-cli.ts`, `cli/src/agent-world-cli.ts`, `core/world-store.ts`, and `core/agent-world-runtime.ts`. A safe first change is adding a focused unit test around argument parsing or world-store behavior. A tempting dangerous change is treating `.env` as a general runtime-config file; that breaks the explicit precedence contract in [[configuration-and-runtime-precedence]].
+First read `README.md`, `package.json`, `cli/src/agent-cli.ts`, `cli/src/turn-executor.ts`, `core/chat-store.ts`, `core/workspace-environment.ts`, and `core/agent-files.ts`. A safe first change is adding a focused unit test around CLI parsing, chat persistence, or env loading. A tempting dangerous change is bringing back worlds, agents, relay/web paths, or `.chats` compatibility.
 
 ## Why does it exist?
 
-The project is trying to make an AI work session feel like local software, not a remote black box. The old pressure was scattered runtime state and browser supervision that could become its own control plane. The current design keeps execution, tools, prompts, saved chats, agent memory, queues, and credentials local, while giving the browser only a supervised relay path. See [[local-first-remote-supervision]] and [[agent-world-runtime]].
+The project is trying to make an AI work session feel like local software, not a remote black box. The current design removes the old side products and keeps the useful core: local execution, local tools, local prompts, local chat storage, and a desktop shell that talks to the same runtime.
+
+The tradeoff is deliberate. The product has less surface area, but fewer stale promises. Deleted surfaces are documented as stale pages, not current architecture: [[agent-world-cli]], [[agent-world-runtime]], [[remote-session-lifecycle]], [[relay-server-and-session-transport]], and [[web-relay-ui]].
 
 ## What happens when I run it?
 
-`agent-cli` resolves the workspace root, loads allowed `.env` keys, selects an agent, merges runtime config, loads prompts and skills, opens the current chat, then calls the shared model runner. A completed turn is persisted back to `.agent-world`. The full path is [[chat-turn-lifecycle]].
+`agent-cli` parses flags, resolves the workspace root, loads allowed `.env` keys, creates `.agent-world` under the workspace, loads runtime defaults plus CLI overrides, loads `AGENTS.md` and skill inventory, opens or creates the target chat, then calls the shared model runtime. A completed turn is persisted by [[chat-store]].
 
-`agent-cli --remote` does the same local setup, takes a remote-host lock, opens a relay session, and serves browser input until shutdown. The relay does transport; the local host still owns chat commands and storage. See [[remote-session-lifecycle]].
+If there is no positional message, the same setup path enters [[auto-interactive-mode]]. Interactive commands such as `/new`, `/clear`, `/chats`, and `/use <chatId>` call the same chat-store functions as one-shot turns.
 
-`agent-world-cli` opens the same workspace and delegates world, agent, chat, message, queue, and send operations to `core/agent-world-runtime.ts`. Queue-only sends persist local rows without provider calls. See [[agent-world-cli]].
+Electron uses `electron/main.ts` as a main-process bridge over the same core runtime and chat store. It is not the old web relay app; it is a local desktop shell. See [[electron-shell]].
 
 ## Where is data saved?
 
-The only supported durable app folder is `.agent-world/`. `world.json` tracks `defaultAgentId` and `currentChatId`; chats live in `.agent-world/chats/{chatId}`; agent metadata, runtime overrides, state, memory, inbox, and event logs live in `.agent-world/agents/{agentId}`; queues live in `.agent-world/queues/{chatId}.json`; the remote lock is `.agent-world/remote-host.lock.json`.
+The only supported durable app folder is `.agent-world/` under the resolved workspace root:
 
-`core/paths.ts` resolves those paths from the workspace root. Prefer `--workspace` and `AGENT_CLI_WORKSPACE`; `--project` and `AGENT_CLI_ROOT` remain compatibility aliases. Details are in [[storage-layout]] and [[workspace-root-resolution]].
+```text
+.agent-world/
+  chats/
+    current.json
+    {chatId}/
+      chat.json
+      messages.jsonl
+      summary.md
+      events.jsonl
+  skills/
+    .../SKILL.md
+```
+
+Workspace skills in `.agent-world/skills` always load. Global skills are opt-in with `AGENT_CLI_GLOBAL_SKILLS=true`, which adds `~/.agent-world/skills` and `~/.agents/skills`. Workspace skills override duplicate global skill ids.
+
+There is no supported `.chats`, `.agent-world/worlds`, registry, `world.json`, `agents`, `agent.json`, queue, relay lock, server, or web app storage path.
 
 ## What are the important moving parts?
 
-- [[cli-entry-and-host-modes]] covers the main `agent-cli` shell.
-- [[agent-world-cli]] covers the JSON-first world control CLI.
-- [[agent-world-runtime]] covers the workspace-local world API, routing, events, memory, and queues.
-- [[world-store]] covers durable `.agent-world` persistence.
-- [[configuration-and-runtime-precedence]] covers runtime files, agent overrides, flags, and `.env` limits.
-- [[prompt-and-skill-loading]] covers `AGENTS.md`, built-in instructions, and `.agent-world/skills`.
-- [[model-runner-handoff]] covers the core agent runtime and `llm-runtime` completion loop.
-- [[relay-server-and-session-transport]] and [[web-relay-ui]] cover the optional browser path.
-- [[testing-strategy]] covers the targeted checks that keep these contracts honest.
+- [[cli-entry-and-host-modes]] covers the `agent-cli` shell.
+- [[chat-turn-lifecycle]] covers a user message becoming a saved assistant reply.
+- [[chat-store]] covers durable chat files and current-chat selection.
+- [[storage-layout]] covers the filesystem contract.
+- [[workspace-root-resolution]] covers how the workspace is chosen.
+- [[configuration-and-runtime-precedence]] covers `.env`, CLI overrides, and provider validation.
+- [[prompt-and-skill-loading]] covers `AGENTS.md`, workspace skills, and opt-in global skills.
+- [[model-runner-handoff]] covers `core/agent-runtime.ts` and the `llm-runtime` completion loop.
+- [[electron-shell]] covers the local desktop surface.
+- [[testing-strategy]] covers the validation shape.
 
 ## What should I avoid breaking?
 
-Do not reintroduce `.chats`, `.agents`, repo-root generated `core/*.js`, or `.env` runtime defaults. Do not move execution, tools, workspace files, provider keys, saved chats, agent memory, or queue state into the relay. Do not bypass `world.json` for current chat/default agent selection. Do not make `agent-world-cli send --queue` dispatch provider calls. The fragile contracts are summarized in [[storage-layout]], [[configuration-and-runtime-precedence]], [[local-first-remote-supervision]], and [[build-layout]].
+Do not create `.agent-world` under the invocation cwd when `--workspace` or `AGENT_CLI_WORKSPACE` points elsewhere. Do not reintroduce `.chats`, worlds, persisted agents, queues, relay/web artifacts, or `agent-world-cli`. Do not make global skills load by default. Do not let generated bundles drift from TypeScript sources. Do not treat `.env` as an unrestricted config import; only allowlisted keys should flow into `process.env`.
+
+The fragile contracts are summarized in [[storage-layout]], [[workspace-root-resolution]], [[configuration-and-runtime-precedence]], [[prompt-and-skill-loading]], and [[build-layout]].
 
 ## Where do I look first?
 
-For a normal chat bug, read [[chat-turn-lifecycle]], then `cli/src/agent-cli.ts`, `cli/src/agent-runtime.ts`, `core/agent-runtime.ts`, and [[world-store]]. For world API or queue behavior, read [[agent-world-runtime]], [[agent-world-cli]], `core/agent-world-runtime.ts`, and `tests/unit/agent-world-runtime.test.js`. For root resolution or secrets loading, read [[workspace-root-resolution]], `core/workspace-environment.ts`, and `core/paths.ts`. For browser supervision, read [[remote-session-lifecycle]], `core/remote-control.ts`, and `server/src/relay-server.ts`.
+For a normal chat bug, read [[chat-turn-lifecycle]], then `cli/src/agent-cli.ts`, `cli/src/turn-executor.ts`, `core/agent-runtime.ts`, and [[chat-store]]. For root or storage bugs, read [[workspace-root-resolution]], `core/workspace-environment.ts`, `core/paths.ts`, and `core/workspace-store.ts`. For skill loading, read [[prompt-and-skill-loading]] and `core/agent-files.ts`. For desktop behavior, read [[electron-shell]] and `electron/main.ts`.

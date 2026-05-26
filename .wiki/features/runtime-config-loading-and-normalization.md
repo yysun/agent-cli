@@ -4,30 +4,24 @@ type: "feature"
 status: "active"
 language: "default"
 source_paths:
-  - "runtime.json"
-  - "core/agent-config.ts"
-  - "core/paths.ts"
   - "README.md"
-  - ".docs/done/2026/05/20/agent-id-config.md"
-updated_at: "2026-05-23"
+  - ".env.example"
+  - "core/agent-config.ts"
+  - "core/workspace-environment.ts"
+updated_at: "2026-05-26"
 ---
 
-# Runtime Settings Cleanup
+# Runtime Config Loading And Normalization
 
-This module takes setting input from files and flags and turns it into one clean set of values the app can trust.
+`core/agent-config.ts` turns raw runtime settings into one clean object the CLI and Electron can pass to the model runtime.
 
 ## What It Loads
 
-- repo defaults from `runtime.json`
-- selected-agent metadata from `.agent-world/agents/{agentId}/agent.json`
-- selected-agent overrides from `.agent-world/agents/{agentId}/runtime.json`
-- runtime overrides coming from CLI flags
+Runtime defaults come from `AGENT_CLI_*` environment variables, usually populated from invocation cwd `.env` by `core/workspace-environment.ts`. CLI flags and programmatic options can override those defaults.
 
-The merged result is the final setting set used by [[cli-entry-and-host-modes]] and [[model-runner-handoff]].
+There is no current `runtime.json`, selected-agent metadata, or selected-agent runtime override file.
 
 ## What It Normalizes
-
-The module understands the main settings used across the repo:
 
 - provider and model
 - temperature and max token limits
@@ -36,19 +30,12 @@ The module understands the main settings used across the repo:
 - past message count
 - stream and stream-trace flags
 
-It also accepts a few older or shorter names such as `modal`, `tokens`, `permissions`, and `reasoning`, then rewrites them into the current names so the rest of the app does not have to care.
+It still accepts older aliases such as `modal`, `tokens`, `permissions`, and `reasoning`, then rewrites them into the current names.
 
 ## What It Does Not Do
 
-It does not load provider secrets. Credentials still come from `.env` or the process environment, which keeps behavior settings separate from secret values. [[configuration-and-runtime-precedence]] covers that split.
-
-It also does not decide which agent is active. The shell and [[world-store]] do that first; this module only loads and normalizes the config for the chosen agent. See [[named-agent-selection]].
+It does not load provider secrets directly and does not choose the workspace. Credentials are environment values validated later by [[model-runner-handoff]]. Workspace selection is [[workspace-root-resolution]].
 
 ## Validation Style
 
-- strings must be non-empty when present
-- integer fields must be positive or non-negative depending on the setting
-- enum fields are checked against explicit allowed values
-- `webSearch` is flexible on input, but narrows to `true`, `false`, or `{ searchContextSize }`
-
-That checking happens early so bad settings fail before the CLI enters a chat turn or starts a remote host.
+Bad values fail early: invalid numbers, unsupported enum values, and malformed booleans throw clear config errors before a model turn starts.

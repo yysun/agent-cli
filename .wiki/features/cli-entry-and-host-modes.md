@@ -4,60 +4,49 @@ type: "feature"
 status: "active"
 language: "default"
 source_paths:
+  - "README.md"
   - "package.json"
   - "bin/agent-cli.js"
   - "cli/src/index.ts"
   - "cli/src/agent-cli.ts"
-  - "cli/src/agent-runtime.ts"
+  - "cli/src/turn-executor.ts"
   - "cli/src/human-input-ui.ts"
   - "cli/src/pending-display.ts"
   - "cli/src/tool-trace-renderer.ts"
-  - "README.md"
-  - ".docs/done/2026/05/16/port-trace-renderer.md"
-  - ".docs/done/2026/05/20/auto-interactive-mode.md"
-  - ".docs/done/2026/05/20/agent-id-config.md"
-  - ".docs/done/2026/05/23/cli-input-ui.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # CLI Entry And Host Modes
 
-This is the main front door of the app. `bin/agent-cli.js` is the built file that users run, while `cli/src/index.ts` and `cli/src/agent-cli.ts` hold the source code that decides what the CLI should do.
+This is the main front door of the app. `bin/agent-cli.js` is the built file users run, while `cli/src/agent-cli.ts` owns argument parsing and mode selection.
 
 ## Main Responsibilities
 
-- read user flags such as `--new-chat`, `--verbose`, `--stream-off`, `--agent-id`, `--new-agent`, and setting overrides
-- load the allowed `.env` keys from the chosen workspace folder
-- select or initialize the active named agent before runtime config is resolved
-- figure out the final settings before starting a turn
-- choose between a normal single chat run, [[auto-interactive-mode]], and the long-running `--remote` host mode
-- save chat and remote-session state through [[world-store]]
+- read flags such as `--workspace`, `--new-chat`, `--verbose`, `--stream-off`, and runtime overrides
+- prepare the workspace and create `.agent-world` storage under that workspace
+- resolve runtime config from `.env`, options, and CLI flags
+- load `AGENTS.md`, skills, and the target chat
+- choose between one-shot chat and [[auto-interactive-mode]]
+- save completed turns through [[chat-store]]
 
 ## Local Chat Mode
 
-For a normal run, this layer loads the selected agent, current chat, prompt files, skills, and final settings, then hands the actual turn to `cli/src/agent-runtime.ts`. The detailed step-by-step path is covered in [[chat-turn-lifecycle]].
+For a normal run, this layer loads prompts, skills, config, and chat state, then hands the actual turn to `cli/src/turn-executor.ts`. The detailed path is [[chat-turn-lifecycle]].
 
-If there is no message and the command is not `--remote`, the same setup path opens the line-oriented prompt covered in [[auto-interactive-mode]]. That keeps interactive turns on the same runtime and persistence path as one-shot turns.
+## Interactive Mode
 
-## Named Agent Setup
+If there is no message, setup still happens and then the CLI starts a line-oriented prompt. `/new`, `/clear`, `/chats`, `/use <chatId>`, `/exit`, and `/quit` are handled locally. This is not a separate product surface; it uses the same turn executor and chat store.
 
-`--agent-id <id>` and `--new-agent <id>` are handled before runtime config is merged. That ordering matters because [[named-agent-selection]] lets `agent.json` and agent-level `runtime.json` contribute provider/model settings before CLI flags override them.
+## Removed Modes
 
-## Remote Host Mode
-
-With `--remote`, the CLI becomes a long-running local host. It requires `AGENT_CLI_RELAY_SERVER_URL`, takes the workspace-level remote lock, creates or loads the active chat, opens a relay session, and keeps serving browser commands until shutdown.
-
-That mode is described in [[remote-session-lifecycle]] and relies on [[relay-server-and-session-transport]] for the transport side.
+There is no current `--remote`, relay host, named-agent setup, or `agent-world-cli` mode. If a page says otherwise, it is stale historical context.
 
 ## Output Rules
 
-- assistant text is the only thing written to stdout in a normal streaming run
-- `--verbose` sends diagnostics such as warnings, reasoning, errors, and tool names to stderr
-- `--stream-off` suppresses chunked output and prints only the final assistant text
-- streamed TTY runs show the pending animation from [[cli-input-ui]] only while waiting for assistant text
+- assistant text is the only normal stdout content
+- `--verbose` sends diagnostics to stderr
+- `--stream-off` suppresses chunked output and prints final text
+- TTY pending animation appears only while waiting for assistant text
+- empty skill scopes are omitted from verbose startup diagnostics
 
-Those output rules are designed so other programs can safely read stdout, while humans can still inspect live details on stderr.
-
-Verbose tool display now goes through [[cli-tool-trace-renderer]]. The important boundary is unchanged: stdout remains parseable assistant text, and stderr gets bounded human-readable rows for tool calls and results.
-
-Human-input tool calls are a special CLI-owned case. [[cli-input-ui]] handles those prompts locally and returns structured tool results back into the same turn loop.
+Verbose tool display goes through [[cli-tool-trace-renderer]].

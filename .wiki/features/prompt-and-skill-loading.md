@@ -5,43 +5,49 @@ status: "active"
 language: "default"
 source_paths:
   - "AGENTS.md"
-  - "core/agent-files.ts"
   - "README.md"
-  - ".docs/done/2026/05/16/upgrade-built-in-prompt.md"
-updated_at: "2026-05-20"
+  - "core/agent-files.ts"
+  - "core/paths.ts"
+  - "core/workspace-environment.ts"
+  - ".docs/done/2026/05/26/global-skills-env.md"
+updated_at: "2026-05-26"
 ---
 
 # Prompt And Skill Loading
 
-This module loads the instruction files that shape a turn before the model sees any user or assistant messages.
+This module loads the instruction files that shape a turn before the model sees user and assistant messages.
 
 ## Prompt Layers
 
 There are two prompt sources:
 
-1. a built-in default prompt shipped by the codebase
-2. optional project instructions from `AGENTS.md`
+1. a built-in default prompt from `core/agent-files.ts`
+2. optional workspace instructions from `AGENTS.md`
 
-`AGENTS.md` is additive, not a replacement. If the file is missing, the CLI still runs with the built-in prompt.
-
-The built-in prompt is intentionally stronger than a generic "be helpful" default. It tells the model to prefer workspace evidence over speculation, use read-only tools before asking for facts that likely exist locally, load relevant skills through `load_skill`, and avoid revealing secret values by default. That is product behavior, not decoration: the CLI should inspect the user's workspace when the answer depends on files, config, logs, or repo state.
+`AGENTS.md` is additive, not a replacement. Missing `AGENTS.md` means "no workspace prompt", not a startup failure.
 
 ## Skill Discovery
 
-Skills are discovered recursively from `.agent-world/skills/**/SKILL.md`. The walk is deterministic: directories and files are both sorted so tests and runtime behavior stay stable.
+Workspace skills always load from `.agent-world/skills/**/SKILL.md` under the selected workspace. The walk is deterministic and only skills with usable frontmatter `name` values are included.
 
-Only skills with usable frontmatter, the YAML block at the top of a Markdown file, are included in the inventory. The loader extracts the skill name and description, then passes them forward as `{ skillId, description, sourcePath }` records.
+Global skills are opt-in. Set `AGENT_CLI_GLOBAL_SKILLS=true` to also load:
+
+- `~/.agent-world/skills`
+- `~/.agents/skills`
+
+Missing global directories are non-fatal. Workspace skills have higher precedence than global skills when skill ids collide.
 
 ## How The Model Sees Skills
 
-The loader also builds a short skill inventory message that tells the model to call `load_skill` when one of the listed skills is relevant. That keeps skills explicit instead of silently injecting every skill body into every turn.
+The loader does not inject every skill body into every turn. It builds a short inventory message that tells the model to call `load_skill` with an exact skill id when a skill is relevant. That keeps large skill bodies out of the prompt until needed.
 
-The runtime layering that uses this inventory is described in [[model-runner-handoff]].
+Verbose startup diagnostics also omit empty scopes. If there are no project skills, the CLI no longer prints `project: none`.
 
 ## Failure Behavior
 
-- missing `AGENTS.md` is treated as no project prompt
-- missing `.agent-world/skills` is treated as an empty skill inventory
-- malformed skills without a usable `name` field are skipped rather than crashing the whole run
+- missing `AGENTS.md` returns an empty workspace prompt
+- missing skill roots return empty inventories
+- malformed skills without a `name` are skipped
+- non-missing filesystem errors still propagate
 
-That makes skill authoring forgiving while keeping the turn behavior predictable.
+The runtime layering that uses this inventory is [[model-runner-handoff]].

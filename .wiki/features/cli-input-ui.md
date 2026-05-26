@@ -4,7 +4,7 @@ type: "feature"
 status: "active"
 language: "default"
 source_paths:
-  - "cli/src/agent-runtime.ts"
+  - "cli/src/turn-executor.ts"
   - "cli/src/human-input-ui.ts"
   - "cli/src/pending-display.ts"
   - "core/agent-runtime.ts"
@@ -14,7 +14,7 @@ source_paths:
   - ".docs/plans/2026/05/23/plan-cli-input-ui.md"
   - ".docs/done/2026/05/23/cli-input-ui.md"
   - ".docs/tests/test-cli-input-ui.md"
-updated_at: "2026-05-23"
+updated_at: "2026-05-26"
 ---
 
 # CLI Input UI
@@ -41,7 +41,7 @@ The result is returned as a structured tool artifact with status such as `answer
 
 ## Runtime Boundary
 
-The terminal UI does not live in `core/agent-runtime.ts`. Core runtime exposes a generic `handleToolCall` hook during the `llm-runtime` completion loop. `cli/src/agent-runtime.ts` uses that hook to intercept only the human-input tool family, collect terminal answers, and return a tool result. Normal tools still use the runtime executor path.
+The terminal UI does not live in `core/agent-runtime.ts`. Core runtime exposes a generic `handleToolCall` hook during the `llm-runtime` completion loop. `cli/src/turn-executor.ts` uses that hook to intercept only the human-input tool family, collect terminal answers, and return a tool result. Normal tools still use the runtime executor path.
 
 That split is important. Core stays responsible for provider validation, message layering, tool-loop continuation, and persistence shape. The CLI layer owns stdout, stderr, TTY animation, and prompts.
 

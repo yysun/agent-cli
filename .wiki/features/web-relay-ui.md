@@ -1,7 +1,7 @@
 ---
 title: "Web Relay UI"
 type: "feature"
-status: "active"
+status: "stale"
 language: "default"
 source_paths:
   - "web/src/App.tsx"
@@ -9,10 +9,12 @@ source_paths:
   - "web/src/relay-session.ts"
   - "README.md"
   - ".docs/done/2026/05/13/pure-relay-slash-commands.md"
-updated_at: "2026-05-16"
+updated_at: "2026-05-26"
 ---
 
 # Web Relay UI
+
+> Stale: the Vite web app was deleted. The kept desktop surface is [[electron-shell]].
 
 The web app is the browser side of a local `agent-cli --remote` session. It lets someone watch and guide the local run from a browser, but it is not a second copy of the agent.
 
