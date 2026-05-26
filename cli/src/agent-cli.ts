@@ -10,6 +10,7 @@
  * - Prints startup diagnostics for workspace root and runtime selection.
  *
  * Recent changes:
+ * - 2026-05-26: Omit empty skill scopes from verbose startup diagnostics.
  * - 2026-05-26: Removed world, agent selection, and persisted `agent.json` runtime config.
  * - 2026-05-26: Removed remote relay hosting and kept `agent-cli` as the sole CLI surface.
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
@@ -106,7 +107,11 @@ export function startupText(
   }
 
   if (scopedSkills) {
-    lines.push(skillStartupText(scopedSkills));
+    const skillText = skillStartupText(scopedSkills);
+
+    if (skillText) {
+      lines.push(skillText);
+    }
   }
 
   return lines.join('\n');
@@ -122,18 +127,22 @@ type SkillScopesForStartup = {
 };
 
 function formatSkillIds(skills: Array<{ skillId: string }>): string {
-  if (skills.length === 0) {
-    return 'none';
-  }
-
   return skills.map((skill) => skill.skillId).sort((left, right) => left.localeCompare(right)).join(', ');
 }
 
 export function skillStartupText(scopedSkills: SkillScopesForStartup): string {
+  const scopeLines = [
+    scopedSkills.user.length > 0 ? `  user: ${formatSkillIds(scopedSkills.user)}` : '',
+    scopedSkills.project.length > 0 ? `  project: ${formatSkillIds(scopedSkills.project)}` : '',
+  ].filter(Boolean);
+
+  if (scopeLines.length === 0) {
+    return '';
+  }
+
   return [
     'Skills available:',
-    `  user: ${formatSkillIds(scopedSkills.user)}`,
-    `  project: ${formatSkillIds(scopedSkills.project)}`,
+    ...scopeLines,
   ].join('\n');
 }
 

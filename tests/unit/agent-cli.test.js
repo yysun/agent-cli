@@ -6,6 +6,8 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-05-26: Asserted generated initial `.env.example` exactly matches the checked-in example.
+ * - 2026-05-26: Added coverage for omitting empty startup skill scopes.
  * - 2026-05-26: Added `.env` and startup coverage for opt-in global skill loading.
  * - 2026-05-26: Removed world and agent selection tests after flattening storage.
  */
@@ -371,6 +373,26 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
+  it('omits empty skill scopes from startup diagnostics', async () => {
+    const { skillStartupText, startupText } = await loadCliModule();
+
+    expect(skillStartupText({
+      user: [],
+      project: [
+        { skillId: 'zeta-skill' },
+        { skillId: 'alpha-skill' },
+      ],
+    })).toBe(['Skills available:', '  project: alpha-skill, zeta-skill'].join('\n'));
+    expect(skillStartupText({
+      user: [
+        { skillId: 'user-skill' },
+      ],
+      project: [],
+    })).toBe(['Skills available:', '  user: user-skill'].join('\n'));
+    expect(skillStartupText({ user: [], project: [] })).toBe('');
+    expect(startupText('/tmp/workspace', undefined, { user: [], project: [] })).toBe('Agent CLI starting in /tmp/workspace');
+  });
+
   it('logs workspace root, runtime, and scoped skills on startup', async () => {
     applyMinimalRuntimeEnvironment();
 
@@ -475,12 +497,8 @@ describe('agent-cli entrypoint', () => {
     const { main: missingEnvMain } = await loadCliModule(emptyCwdRoot);
     await missingEnvMain(['--help'], createIoCapture());
     const example = await readFile(path.join(emptyCwdRoot, '.env.example'), 'utf8');
-    expect(example).toContain('AGENT_CLI_PROVIDER=ollama');
-    expect(example).toContain('AGENT_CLI_MODEL=emma4:e4b');
-    expect(example).toContain('AGENT_CLI_TEMPERATURE=1');
-    expect(example).toContain('AGENT_CLI_MAX_TOKENS=4096');
-    expect(example).toContain('AGENT_CLI_GLOBAL_SKILLS=false');
-    expect(example).toContain('# AGENT_CLI_WORKSPACE=');
+    const checkedInExample = await readFile(path.join(originalCwd, '.env.example'), 'utf8');
+    expect(example).toBe(checkedInExample);
   });
 
   it('treats a symlinked bin path as the CLI entrypoint', async () => {

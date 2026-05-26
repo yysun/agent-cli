@@ -37,5 +37,7 @@ coverage/
 # Temporary files
 tmp/
 temp/
+.playwright-mcp/
 
+.agent-world/
 test-project/

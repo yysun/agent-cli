@@ -2468,7 +2468,10 @@ function startupText(cwd = WORKSPACE_ROOT, runtimeSettings, scopedSkills) {
     lines.push(runtimeSelectionText(runtimeSettings));
   }
   if (scopedSkills) {
-    lines.push(skillStartupText(scopedSkills));
+    const skillText = skillStartupText(scopedSkills);
+    if (skillText) {
+      lines.push(skillText);
+    }
   }
   return lines.join("\n");
 }
@@ -2476,16 +2479,19 @@ function runtimeSelectionText(runtimeSettings) {
   return `Runtime: provider=${runtimeSettings.provider}, model=${runtimeSettings.model}`;
 }
 function formatSkillIds(skills) {
-  if (skills.length === 0) {
-    return "none";
-  }
   return skills.map((skill) => skill.skillId).sort((left, right) => left.localeCompare(right)).join(", ");
 }
 function skillStartupText(scopedSkills) {
+  const scopeLines = [
+    scopedSkills.user.length > 0 ? `  user: ${formatSkillIds(scopedSkills.user)}` : "",
+    scopedSkills.project.length > 0 ? `  project: ${formatSkillIds(scopedSkills.project)}` : ""
+  ].filter(Boolean);
+  if (scopeLines.length === 0) {
+    return "";
+  }
   return [
     "Skills available:",
-    `  user: ${formatSkillIds(scopedSkills.user)}`,
-    `  project: ${formatSkillIds(scopedSkills.project)}`
+    ...scopeLines
   ].join("\n");
 }
 function createDefaultInteractivePrompt() {
