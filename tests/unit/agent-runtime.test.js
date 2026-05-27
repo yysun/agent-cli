@@ -11,6 +11,8 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-05-27: Covered stream-off `complete(...)` routing and provider metadata forwarding.
+ * - 2026-05-27: Covered shared runtime selection separately from credential validation.
  * - 2026-05-26: Covered runtime skill roots for opt-in global skill loading.
  * - 2026-05-26: Updated missing-model guidance for `.env` runtime defaults.
  * - 2026-05-16: Added coverage for runtime tool-result callbacks.
@@ -21,17 +23,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
 const createRuntime = vi.fn();
-const executeToolCall = vi.fn();
-const executeToolCalls = vi.fn();
-const runCompletionLoop = vi.fn();
+const complete = vi.fn();
+const streamComplete = vi.fn();
 const runtimeDispose = vi.fn();
 
 vi.mock('llm-runtime', () => ({
+  complete,
   createRuntime,
-  executeToolCall,
-  executeToolCalls,
-  runCompletionLoop,
+  streamComplete,
 }));
+
+function eventStream(events) {
+  return (async function* () {
+    for (const event of events) {
+      yield event;
+    }
+  })();
+}
 
 const ENV_KEYS = [
   'OPENAI_API_KEY',
@@ -59,10 +67,9 @@ function restoreEnvironment() {
 }
 
 beforeEach(() => {
+  complete.mockReset();
   createRuntime.mockReset();
-  executeToolCall.mockReset();
-  executeToolCalls.mockReset();
-  runCompletionLoop.mockReset();
+  streamComplete.mockReset();
   runtimeDispose.mockReset();
 
   runtimeDispose.mockResolvedValue(undefined);
@@ -70,8 +77,6 @@ beforeEach(() => {
     runtimeId: 'runtime-1',
     dispose: runtimeDispose,
   });
-  executeToolCall.mockResolvedValue({ ok: true });
-  executeToolCalls.mockResolvedValue([{ ok: true }]);
 });
 
 afterEach(() => {
@@ -133,6 +138,21 @@ describe('agent-runtime', () => {
     });
   });
 
+  it('resolves startup runtime selection without credential validation', async () => {
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'gpt-5-enterprise';
+
+    const { resolveRuntimeSelection } = await import('../../core/agent-runtime.js');
+
+    expect(resolveRuntimeSelection(process.env, { provider: 'azure' })).toEqual({
+      provider: 'azure',
+      model: 'gpt-5-enterprise',
+    });
+    expect(resolveRuntimeSelection(process.env, {})).toEqual({
+      provider: 'openai',
+      model: 'gpt-5',
+    });
+  });
+
   it('fails clearly when the selected provider is missing credentials', async () => {
     delete process.env.OPENAI_API_KEY;
 
@@ -176,45 +196,21 @@ describe('agent-runtime', () => {
   it('runs a chat turn through llm-runtime with normalized runtime settings', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    runCompletionLoop.mockImplementation(async ({ initialState, modelRequest, onModelResponse, onTextResponse }) => {
-      await modelRequest.onChunk?.({ content: 'Hello' });
-      await modelRequest.onChunk?.({ content: ' world' });
-
-      const response = {
-        type: 'text',
-        content: 'Hello world',
-        assistantMessage: { role: 'assistant', content: 'Hello world' },
-        stopKind: 'natural_stop',
-        providerStopReason: 'stop',
-        usage: {
-          inputTokens: 4,
-          outputTokens: 2,
-          totalTokens: 6,
-        },
-      };
-      await onModelResponse?.({
-        state: initialState,
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'model_start', iteration: 1 },
+      { type: 'text_delta', delta: 'Hello', iteration: 1 },
+      { type: 'text_delta', delta: ' world', iteration: 1 },
+      {
+        type: 'assistant_message',
+        message: { role: 'assistant', content: '', tool_calls: [{ id: 'fa-1', function: { name: 'final_answer', arguments: '{"answer":"Hello world"}' } }] },
         iteration: 1,
-        elapsedMs: 12,
-        messages: [],
-        rawResponse: response,
-        response,
-        normalizedToolIntent: false,
-      });
-
-      const textStep = await onTextResponse({
-        state: initialState,
-        response,
-        messages: [],
+      },
+      {
+        type: 'completed',
         iteration: 1,
-        responseText: 'Hello world',
-      });
-
-      return {
-        reason: 'text_response',
-        state: textStep.state,
-      };
-    });
+        result: { status: 'completed', output: 'Hello world', messages: [] },
+      },
+    ]));
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
     const onStreamChunk = vi.fn();
@@ -262,102 +258,165 @@ describe('agent-runtime', () => {
         toolPermission: 'ask',
       },
     }));
-    expect(runCompletionLoop).toHaveBeenCalledWith(expect.objectContaining({
-      emptyTextRetryLimit: 0,
-      rejectedTextRetryLimit: 0,
-      modelRequest: expect.objectContaining({
-        mode: 'stream',
-        environment: expect.objectContaining({ runtimeId: 'runtime-1' }),
-        provider: 'openai',
-        model: 'gpt-5',
-        temperature: 0.2,
-        maxTokens: 512,
-        webSearch: {
-          searchContextSize: 'low',
-        },
-        builtIns: 'all',
-        context: expect.objectContaining({
-          workingDirectory: expect.any(String),
-          reasoningEffort: 'medium',
-          toolPermission: 'ask',
-        }),
+    expect(streamComplete).toHaveBeenCalledWith(expect.objectContaining({
+      environment: expect.objectContaining({ runtimeId: 'runtime-1' }),
+      provider: 'openai',
+      model: 'gpt-5',
+      temperature: 0.2,
+      maxTokens: 512,
+      webSearch: {
+        searchContextSize: 'low',
+      },
+      builtIns: 'all',
+      context: expect.objectContaining({
+        workingDirectory: expect.any(String),
+        reasoningEffort: 'medium',
+        toolPermission: 'ask',
       }),
     }));
     expect(onStreamChunk).toHaveBeenCalledTimes(2);
-    expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({
-      stopKind: 'natural_stop',
-      providerStopReason: 'stop',
-      usage: {
-        inputTokens: 4,
-        outputTokens: 2,
-        totalTokens: 6,
-      },
-    }));
+    expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({ type: 'tool_calls' }));
     expect(result.assistantText).toBe('Hello world');
-    expect(result.messages.at(-1)).toEqual({ role: 'assistant', content: 'Hello world' });
+    expect(result.messages.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: 'Hello world' }));
     expect(runtimeDispose).toHaveBeenCalledTimes(1);
   });
 
-  it('forwards tool calls and tool results through runtime callbacks', async () => {
+  it('forwards provider response metadata from runtime completion events', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    const loadSkillExecute = vi.fn().mockResolvedValue({ ok: true, status: 'loaded' });
-    runCompletionLoop.mockImplementation(async ({ initialState, onToolCallsResponse, onTextResponse }) => {
-      const toolStep = await onToolCallsResponse({
-        state: initialState,
-        response: {
-          type: 'tool_calls',
-          content: '',
-          assistantMessage: {
-            role: 'assistant',
-            content: '',
-            tool_calls: [
-              {
-                id: 'tool-1',
-                function: {
-                  name: 'load_skill',
-                  arguments: '{"skillId":"agent-cli-core"}',
-                },
-              },
-            ],
-          },
-          tool_calls: [
-            {
-              id: 'tool-1',
-              function: {
-                name: 'load_skill',
-                arguments: '{"skillId":"agent-cli-core"}',
-              },
+    streamComplete.mockImplementation(() => eventStream([
+      {
+        type: 'completed',
+        iteration: 1,
+        result: {
+          status: 'completed',
+          output: 'Hello world',
+          messages: [],
+          raw: {
+            type: 'text',
+            stopKind: 'natural_stop',
+            providerStopReason: 'stop',
+            usage: {
+              inputTokens: 8,
+              outputTokens: 2,
+              totalTokens: 10,
             },
+          },
+        },
+      },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onModelResponse = vi.fn();
+
+    await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onModelResponse,
+    });
+
+    expect(onModelResponse).toHaveBeenCalledWith({
+      type: 'text',
+      stopKind: 'natural_stop',
+      providerStopReason: 'stop',
+      usage: {
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10,
+      },
+    });
+  });
+
+  it('uses complete instead of streamComplete when streaming is disabled', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    complete.mockResolvedValue({
+      status: 'completed',
+      output: 'Done',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'hello' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { id: 'final-1', function: { name: 'final_answer', arguments: '{"answer":"Done"}' } },
           ],
         },
-        messages: [],
-        iteration: 1,
-        toolExecutor: {
-          executeToolCall: loadSkillExecute,
-        },
-      });
-
-      const textStep = await onTextResponse({
-        state: toolStep.state,
-        response: {
-          type: 'text',
-          content: 'Loaded skill',
-          assistantMessage: {
-            role: 'assistant',
-            content: 'Loaded skill',
-          },
-        },
-        messages: [],
-        iteration: 2,
-        responseText: 'Loaded skill',
-      });
-
-      return {
-        reason: 'text_response',
-        state: textStep.state,
-      };
+        { role: 'assistant', content: 'Done' },
+      ],
+      raw: {
+        type: 'text',
+        stopKind: 'natural_stop',
+        providerStopReason: 'stop',
+      },
     });
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onModelResponse = vi.fn();
+    const onToolCall = vi.fn();
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: false,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onModelResponse,
+      onToolCall,
+    });
+
+    expect(complete).toHaveBeenCalledWith(expect.objectContaining({
+      environment: expect.objectContaining({ runtimeId: 'runtime-1' }),
+      provider: 'openai',
+      model: 'gpt-5',
+      builtIns: 'all',
+    }));
+    expect(streamComplete).not.toHaveBeenCalled();
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'text',
+      stopKind: 'natural_stop',
+      providerStopReason: 'stop',
+    }));
+    expect(result.assistantText).toBe('Done');
+    expect(result.messages.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: 'Done' }));
+  });
+
+  it('forwards tool calls and tool results from streamComplete events', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const toolCall = {
+      id: 'tool-1',
+      function: {
+        name: 'load_skill',
+        arguments: '{"skillId":"agent-cli-core"}',
+      },
+    };
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'model_start', iteration: 1 },
+      { type: 'assistant_message', message: { role: 'assistant', content: '', tool_calls: [toolCall] }, iteration: 1 },
+      { type: 'tool_start', toolCall, args: { skillId: 'agent-cli-core' }, iteration: 1 },
+      { type: 'tool_result', toolCall, result: { ok: true, status: 'loaded' }, iteration: 1 },
+      { type: 'model_start', iteration: 2 },
+      {
+        type: 'assistant_message',
+        message: { role: 'assistant', content: '', tool_calls: [{ id: 'fa-1', function: { name: 'final_answer', arguments: '{"answer":"Loaded skill"}' } }] },
+        iteration: 2,
+      },
+      { type: 'completed', iteration: 2, result: { status: 'completed', output: 'Loaded skill', messages: [] } },
+    ]));
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
     const onToolCall = vi.fn();
@@ -380,17 +439,6 @@ describe('agent-runtime', () => {
       onToolResult,
     });
 
-    expect(loadSkillExecute).toHaveBeenCalledWith({
-      id: 'tool-1',
-      function: {
-        name: 'load_skill',
-        arguments: '{"skillId":"agent-cli-core"}',
-      },
-    }, expect.objectContaining({
-      toolCallId: 'tool-1',
-    }), {
-      errorMode: 'return-artifact',
-    });
     expect(onToolCall).toHaveBeenCalledWith({
       id: 'tool-1',
       name: 'load_skill',
@@ -411,67 +459,21 @@ describe('agent-runtime', () => {
     expect(result.assistantText).toBe('Loaded skill');
   });
 
-  it('returns a rejected tool artifact when approval is denied', async () => {
+  it('forwards approval denials to the runtime via onToolApproval', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    const loadSkillExecute = vi.fn();
-    runCompletionLoop.mockImplementation(async ({ initialState, onToolCallsResponse, onTextResponse }) => {
-      const toolStep = await onToolCallsResponse({
-        state: initialState,
-        response: {
-          type: 'tool_calls',
-          content: '',
-          assistantMessage: {
-            role: 'assistant',
-            content: '',
-            tool_calls: [
-              {
-                id: 'tool-1',
-                function: {
-                  name: 'load_skill',
-                  arguments: '{"skillId":"agent-cli-core"}',
-                },
-              },
-            ],
-          },
-          tool_calls: [
-            {
-              id: 'tool-1',
-              function: {
-                name: 'load_skill',
-                arguments: '{"skillId":"agent-cli-core"}',
-              },
-            },
-          ],
-        },
-        messages: [],
-        iteration: 1,
-        toolExecutor: {
-          executeToolCall: loadSkillExecute,
-        },
-      });
-
-      return {
-        reason: 'text_response',
-        state: (await onTextResponse({
-          state: toolStep.state,
-          response: {
-            type: 'text',
-            content: 'Denied',
-            assistantMessage: { role: 'assistant', content: 'Denied' },
-          },
-          messages: [],
-          iteration: 2,
-          responseText: 'Denied',
-        })).state,
-      };
+    let receivedOnToolApproval;
+    streamComplete.mockImplementation(({ onToolApproval }) => {
+      receivedOnToolApproval = onToolApproval;
+      return eventStream([
+        { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Denied', messages: [] } },
+      ]);
     });
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
     const approvalGate = {
       requestApproval: vi.fn().mockResolvedValue({ approved: false, reason: 'Nope' }),
     };
-    const onToolResult = vi.fn();
 
     const result = await runChatTurn({
       chat: { id: 'chat-1', messages: [] },
@@ -484,93 +486,38 @@ describe('agent-runtime', () => {
         toolPermission: 'ask',
       },
       approvalGate,
-      onToolResult,
     });
 
+    expect(typeof receivedOnToolApproval).toBe('function');
+    const decision = await receivedOnToolApproval({
+      toolCall: { id: 'tool-1', function: { name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' } },
+      toolName: 'load_skill',
+      parsedArguments: { skillId: 'agent-cli-core' },
+    });
     expect(approvalGate.requestApproval).toHaveBeenCalledWith({
       toolCallId: 'tool-1',
       toolName: 'load_skill',
       arguments: { skillId: 'agent-cli-core' },
     });
-    expect(loadSkillExecute).not.toHaveBeenCalled();
-    expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'tool-1',
-      name: 'load_skill',
-      result: expect.objectContaining({
-        status: 'rejected',
-        toolCallId: 'tool-1',
-        toolName: 'load_skill',
-        message: 'Nope',
-      }),
-      arguments: '{"skillId":"agent-cli-core"}',
-      durationMs: expect.any(Number),
-    }));
-    expect(result.messages).toContainEqual(expect.objectContaining({
-      role: 'tool',
-      tool_call_id: 'tool-1',
-      content: '{\n  "ok": false,\n  "status": "rejected",\n  "errorType": "tool_execution_rejected",\n  "toolCallId": "tool-1",\n  "toolName": "load_skill",\n  "message": "Nope"\n}',
-    }));
+    expect(decision).toEqual({ approved: false, reason: 'Nope' });
+    expect(result.assistantText).toBe('Denied');
   });
 
-  it('uses a CLI tool-call handler result before falling back to runtime tools', async () => {
+  it('forwards CLI tool-call handlers to the runtime via onToolCall', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    runCompletionLoop.mockImplementation(async ({ initialState, onToolCallsResponse, onTextResponse }) => {
-      const toolStep = await onToolCallsResponse({
-        state: initialState,
-        response: {
-          type: 'tool_calls',
-          content: '',
-          assistantMessage: {
-            role: 'assistant',
-            content: '',
-            tool_calls: [
-              {
-                id: 'tool-input-1',
-                function: {
-                  name: 'ask_user_input',
-                  arguments: '{"question":"Choose","options":["A","B"]}',
-                },
-              },
-            ],
-          },
-          tool_calls: [
-            {
-              id: 'tool-input-1',
-              function: {
-                name: 'ask_user_input',
-                arguments: '{"question":"Choose","options":["A","B"]}',
-              },
-            },
-          ],
-        },
-        messages: [],
-        iteration: 1,
-      });
-
-      return {
-        reason: 'text_response',
-        state: (await onTextResponse({
-          state: toolStep.state,
-          response: {
-            type: 'text',
-            content: 'Answered',
-            assistantMessage: { role: 'assistant', content: 'Answered' },
-          },
-          messages: [],
-          iteration: 2,
-          responseText: 'Answered',
-        })).state,
-      };
+    let receivedOnToolCall;
+    streamComplete.mockImplementation(({ onToolCall }) => {
+      receivedOnToolCall = onToolCall;
+      return eventStream([
+        { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Answered', messages: [] } },
+      ]);
     });
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
     const handleToolCall = vi.fn().mockResolvedValue({
       handled: true,
-      result: {
-        ok: true,
-        status: 'answered',
-      },
+      result: { ok: true, status: 'answered' },
     });
 
     const result = await runChatTurn({
@@ -585,103 +532,20 @@ describe('agent-runtime', () => {
       handleToolCall,
     });
 
+    expect(typeof receivedOnToolCall).toBe('function');
+    const handlerOutcome = await receivedOnToolCall({
+      toolCall: { id: 'tool-input-1', function: { name: 'ask_user_input', arguments: '{"question":"Choose","options":["A","B"]}' } },
+      toolName: 'ask_user_input',
+      parsedArguments: { question: 'Choose', options: ['A', 'B'] },
+      context: { workingDirectory: '/tmp' },
+      executeDefault: async () => ({ ok: false }),
+    });
     expect(handleToolCall).toHaveBeenCalledWith(expect.objectContaining({
       toolName: 'ask_user_input',
-      parsedArguments: {
-        question: 'Choose',
-        options: ['A', 'B'],
-      },
+      parsedArguments: { question: 'Choose', options: ['A', 'B'] },
       executeDefault: expect.any(Function),
     }));
-    expect(executeToolCall).not.toHaveBeenCalled();
-    expect(result.messages).toContainEqual(expect.objectContaining({
-      role: 'tool',
-      tool_call_id: 'tool-input-1',
-      content: '{\n  "ok": true,\n  "status": "answered"\n}',
-    }));
-  });
-
-  it('falls back to the runtime tool executor when the loop does not provide one', async () => {
-    process.env.OPENAI_API_KEY = 'test-openai-key';
-
-    executeToolCall.mockResolvedValueOnce({ ok: true, status: 'loaded-from-runtime' });
-    runCompletionLoop.mockImplementation(async ({ initialState, onToolCallsResponse, onTextResponse }) => {
-      const toolStep = await onToolCallsResponse({
-        state: initialState,
-        response: {
-          type: 'tool_calls',
-          content: '',
-          assistantMessage: {
-            role: 'assistant',
-            content: '',
-            tool_calls: [
-              {
-                id: 'tool-1',
-                function: {
-                  name: 'load_skill',
-                  arguments: '{"skillId":"agent-cli-core"}',
-                },
-              },
-            ],
-          },
-          tool_calls: [
-            {
-              id: 'tool-1',
-              function: {
-                name: 'load_skill',
-                arguments: '{"skillId":"agent-cli-core"}',
-              },
-            },
-          ],
-        },
-        messages: [],
-        iteration: 1,
-      });
-
-      return {
-        reason: 'text_response',
-        state: (await onTextResponse({
-          state: toolStep.state,
-          response: {
-            type: 'text',
-            content: 'Loaded from runtime',
-            assistantMessage: { role: 'assistant', content: 'Loaded from runtime' },
-          },
-          messages: [],
-          iteration: 2,
-          responseText: 'Loaded from runtime',
-        })).state,
-      };
-    });
-
-    const { runChatTurn } = await import('../../core/agent-runtime.js');
-
-    const result = await runChatTurn({
-      chat: { id: 'chat-1', messages: [] },
-      userMessage: 'hello',
-      builtInSystemPrompt: 'System prompt',
-      skillInventory: [],
-      agentConfig: {
-        provider: 'openai',
-        model: 'gpt-5',
-      },
-    });
-
-    expect(executeToolCall).toHaveBeenCalledWith({
-      toolCall: {
-        id: 'tool-1',
-        function: {
-          name: 'load_skill',
-          arguments: '{"skillId":"agent-cli-core"}',
-        },
-      },
-      environment: expect.objectContaining({ runtimeId: 'runtime-1' }),
-      builtIns: 'all',
-      context: expect.objectContaining({
-        toolCallId: 'tool-1',
-      }),
-      errorMode: 'return-artifact',
-    });
-    expect(result.assistantText).toBe('Loaded from runtime');
+    expect(handlerOutcome).toEqual({ handled: true, result: { ok: true, status: 'answered' } });
+    expect(result.assistantText).toBe('Answered');
   });
 });

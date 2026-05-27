@@ -11,6 +11,9 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-05-27: Routed stream-off turns through runtime `complete(...)` and preserved provider response metadata for CLI diagnostics.
+ * - 2026-05-27: Exposed shared runtime selection so CLI startup diagnostics no longer duplicate provider/model default logic.
+ * - 2026-05-27: Switched from `runCompletionLoop` to `complete(...)` so the loop defaults to control-tool termination; added `onFinalAnswerToolCall` / `onNeedUserInputToolCall` / `onBlockedToolCall` handlers that populate `finalText` from the model's control-tool output.
  * - 2026-05-26: Aligned runtime `load_skill` roots with opt-in global skill discovery.
  * - 2026-05-26: Point runtime defaults at `.env` and CLI flags.
  * - 2026-05-23: Renamed workspace root and AGENTS.md prompt parameters while preserving compatibility aliases.
@@ -21,10 +24,9 @@
  * - 2026-05-23: Added a CLI tool-call handler hook for terminal-native user input tools.
  */
 import {
+  complete,
   createRuntime,
-  executeToolCall as executeRuntimeToolCall,
-  executeToolCalls as executeRuntimeToolCalls,
-  runCompletionLoop,
+  streamComplete,
 } from 'llm-runtime';
 
 import { buildSkillInventoryMessage, isGlobalSkillLoadingEnabled } from './agent-files.js';
@@ -45,6 +47,7 @@ import { GLOBAL_SKILLS_ROOTS, SKILLS_ROOT, WORKSPACE_ROOT } from './paths.js';
  *   model?: string,
  *   temperature?: number,
  *   maxTokens?: number,
+ *   maxToolTurns?: number,
  *   toolPermission?: ToolPermission,
  *   reasoningEffort?: ReasoningEffort,
  *   webSearch?: boolean | { searchContextSize?: 'low' | 'medium' | 'high' },
@@ -92,6 +95,24 @@ const SUPPORTED_PROVIDERS = new Set([
 const DEFAULT_MODELS = {
   openai: 'gpt-5',
 };
+
+/**
+ * @param {NodeJS.ProcessEnv} [environment]
+ * @param {RuntimeAgentConfig} [agentConfig]
+ */
+export function resolveRuntimeSelection(environment = process.env, agentConfig = {}) {
+  const provider = String(agentConfig.provider ?? 'openai').trim().toLowerCase();
+  const providerDefaultModel = provider === 'azure'
+    ? String(environment.AZURE_OPENAI_DEPLOYMENT_NAME ?? '').trim()
+    : DEFAULT_MODELS[/** @type {LLMProviderName} */(provider)];
+  const model = String(
+    agentConfig.model
+    ?? providerDefaultModel
+    ?? '',
+  ).trim();
+
+  return { provider, model };
+}
 
 /**
  * @param {{ reasoningEffort?: ReasoningEffort, toolPermission?: ToolPermission }} agentConfig
@@ -217,7 +238,8 @@ function resolveProviderConfig(provider, environment) {
  * @returns {RuntimeSettings}
  */
 export function validateRuntimeEnvironment(environment = process.env, agentConfig = {}) {
-  const configuredProvider = String(agentConfig.provider ?? 'openai').trim();
+  const runtimeSelection = resolveRuntimeSelection(environment, agentConfig);
+  const configuredProvider = runtimeSelection.provider;
   const normalizedProvider = configuredProvider.toLowerCase();
 
   if (!SUPPORTED_PROVIDERS.has(/** @type {LLMProviderName} */(normalizedProvider))) {
@@ -227,14 +249,11 @@ export function validateRuntimeEnvironment(environment = process.env, agentConfi
   const provider = /** @type {LLMProviderName} */ (normalizedProvider);
 
   const providerConfig = resolveProviderConfig(provider, environment);
-  const providerDefaultModel = provider === 'azure' && 'deployment' in providerConfig
-    ? providerConfig.deployment
-    : DEFAULT_MODELS[provider];
-  const model = String(
-    agentConfig.model
-    ?? providerDefaultModel
-    ?? '',
-  ).trim();
+  const model = runtimeSelection.model || (
+    provider === 'azure' && 'deployment' in providerConfig
+      ? providerConfig.deployment
+      : ''
+  );
 
   if (!model) {
     throw new Error(`Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider ${provider}.`);
@@ -282,61 +301,68 @@ function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, ski
   }];
 }
 
-/**
- * @param {string} argumentsText
- */
-function parseToolArguments(argumentsText) {
-  if (!argumentsText || !String(argumentsText).trim()) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(argumentsText);
-  } catch {
-    return {
-      __raw: argumentsText,
-    };
-  }
-}
-
 const DEFAULT_BUILT_INS = 'all';
+const RUNTIME_CONTROL_TOOL_NAMES = new Set(['final_answer', 'need_user_input', 'blocked']);
 
 /**
- * @param {ReturnType<typeof createRuntime>} runtime
+ * @param {unknown} value
  */
-function createToolExecutor(runtime) {
-  return {
-    executeToolCall: async (toolCall, context, options = {}) => executeRuntimeToolCall({
-      toolCall,
-      environment: runtime,
-      builtIns: DEFAULT_BUILT_INS,
-      ...(context ? { context } : {}),
-      ...(options.errorMode ? { errorMode: options.errorMode } : {}),
-    }),
-    executeToolCalls: async (toolCalls, context, options = {}) => executeRuntimeToolCalls({
-      toolCalls,
-      environment: runtime,
-      builtIns: DEFAULT_BUILT_INS,
-      ...(context ? { context } : {}),
-      ...(options.errorMode ? { errorMode: options.errorMode } : {}),
-    }),
-  };
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
- * @param {string} toolCallId
- * @param {string} toolName
- * @param {string} message
+ * @param {unknown} raw
+ * @param {string | undefined} fallbackType
  */
-function createRejectedToolResult(toolCallId, toolName, message) {
-  return {
-    ok: false,
-    status: 'rejected',
-    errorType: 'tool_execution_rejected',
-    toolCallId,
-    toolName,
-    message,
-  };
+function extractModelResponseMetadata(raw, fallbackType) {
+  if (!isRecord(raw)) {
+    return fallbackType ? { type: fallbackType } : undefined;
+  }
+
+  const response = /** @type {Record<string, unknown>} */ (raw);
+  const metadata = {};
+
+  if (typeof response.type === 'string' && response.type.trim()) {
+    metadata.type = response.type;
+  } else if (fallbackType) {
+    metadata.type = fallbackType;
+  }
+
+  if (typeof response.stopKind === 'string' && response.stopKind.trim()) {
+    metadata.stopKind = response.stopKind;
+  }
+
+  if (typeof response.providerStopReason === 'string' && response.providerStopReason.trim()) {
+    metadata.providerStopReason = response.providerStopReason;
+  }
+
+  if (isRecord(response.usage)) {
+    metadata.usage = response.usage;
+  }
+
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+/**
+ * @param {((response: {
+ *   type?: string,
+ *   stopKind?: string,
+ *   providerStopReason?: string,
+ *   usage?: { inputTokens?: number, outputTokens?: number, totalTokens?: number },
+ * }) => void) | undefined} onModelResponse
+ * @param {unknown} raw
+ * @param {string | undefined} fallbackType
+ */
+function emitModelResponse(onModelResponse, raw, fallbackType) {
+  if (typeof onModelResponse !== 'function') {
+    return;
+  }
+
+  const metadata = extractModelResponseMetadata(raw, fallbackType);
+  if (metadata) {
+    onModelResponse(metadata);
+  }
 }
 
 /**
@@ -348,6 +374,21 @@ function serializeToolResult(result) {
   }
 
   return JSON.stringify(result ?? null, null, 2);
+}
+
+/**
+ * @param {unknown} content
+ */
+function parseSerializedToolResult(content) {
+  if (typeof content !== 'string') {
+    return content;
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    return content;
+  }
 }
 
 /**
@@ -364,6 +405,65 @@ function selectContextMessages(messages, historyMessageLimit) {
   }
 
   return messages.slice(-historyMessageLimit);
+}
+
+/**
+ * @param {any[]} runtimeMessages
+ * @param {number} inputMessageCount
+ */
+function selectNewRuntimeMessages(runtimeMessages, inputMessageCount) {
+  return runtimeMessages
+    .slice(inputMessageCount)
+    .filter((message) => message?.role !== 'system');
+}
+
+/**
+ * @param {any[]} messages
+ * @param {{
+ *   onToolCall?: (toolCall: { id: string, name: string, arguments?: string }) => void,
+ *   onToolResult?: (toolResult: { id: string, name: string, result: unknown, arguments?: string }) => void,
+ * }} callbacks
+ */
+function emitCompletedToolEvents(messages, callbacks) {
+  const toolCallsById = new Map();
+
+  for (const message of messages) {
+    if (message?.role !== 'assistant') {
+      continue;
+    }
+
+    for (const toolCall of message.tool_calls ?? []) {
+      const toolName = toolCall.function?.name ?? 'unknown_tool';
+      if (RUNTIME_CONTROL_TOOL_NAMES.has(toolName)) {
+        continue;
+      }
+
+      toolCallsById.set(toolCall.id, toolCall);
+      callbacks.onToolCall?.({
+        id: toolCall.id,
+        name: toolName,
+        arguments: toolCall.function?.arguments,
+      });
+    }
+  }
+
+  for (const message of messages) {
+    if (message?.role !== 'tool' || !message.tool_call_id) {
+      continue;
+    }
+
+    const toolCall = toolCallsById.get(message.tool_call_id);
+    if (!toolCall) {
+      continue;
+    }
+
+    callbacks.onToolResult?.({
+      id: message.tool_call_id,
+      name: toolCall.function?.name ?? 'unknown_tool',
+      result: parseSerializedToolResult(message.content),
+      arguments: toolCall.function?.arguments,
+    });
+  }
 }
 
 /**
@@ -436,169 +536,198 @@ export async function runChatTurn({
     createdAt: new Date().toISOString(),
   };
   const contextMessages = selectContextMessages(chat.messages, historyMessageLimit);
-  const toolExecutor = createToolExecutor(runtime);
+  const systemMessages = buildBaseSystemMessages(
+    builtInSystemPrompt,
+    workspaceSystemPrompt ?? projectSystemPrompt,
+    skillInventory,
+  );
 
   try {
-    const result = await runCompletionLoop({
-      initialState: {
-        conversationMessages: [...contextMessages, pendingUserMessage],
-        persistedMessages: [...chat.messages, pendingUserMessage],
-        finalText: '',
-      },
-      emptyTextRetryLimit: 0,
-      rejectedTextRetryLimit: 0,
-      modelRequest: {
-        mode: stream ? 'stream' : 'generate',
-        environment: runtime,
-        provider: runtimeSettings.provider,
-        model: runtimeSettings.model,
-        ...(stream && typeof onStreamChunk === 'function' ? { onChunk: onStreamChunk } : {}),
-        ...(typeof agentConfig.temperature === 'number' ? { temperature: agentConfig.temperature } : {}),
-        ...(typeof agentConfig.maxTokens === 'number' ? { maxTokens: agentConfig.maxTokens } : {}),
-        ...(agentConfig.webSearch !== undefined ? { webSearch: agentConfig.webSearch } : {}),
-        builtIns: DEFAULT_BUILT_INS,
-        context: executionContext,
-      },
-      ...(abortSignal ? { abortSignal } : {}),
-      onModelResponse: async ({ response }) => {
-        if (typeof onModelResponse === 'function') {
-          onModelResponse(response);
+    const persistedMessages = [...chat.messages, pendingUserMessage];
+    const toolStartTimes = new Map();
+    let finalText = '';
+    let failureError = null;
+
+    const completionOptions = {
+      environment: runtime,
+      provider: runtimeSettings.provider,
+      model: runtimeSettings.model,
+      messages: [...systemMessages, ...contextMessages, pendingUserMessage],
+      builtIns: DEFAULT_BUILT_INS,
+      context: { ...executionContext, ...(abortSignal ? { abortSignal } : {}) },
+      ...(typeof agentConfig.temperature === 'number' ? { temperature: agentConfig.temperature } : {}),
+      ...(typeof agentConfig.maxTokens === 'number' ? { maxTokens: agentConfig.maxTokens } : {}),
+      ...(typeof agentConfig.maxToolTurns === 'number' ? { maxConsecutiveToolTurns: agentConfig.maxToolTurns } : {}),
+      ...(agentConfig.webSearch !== undefined ? { webSearch: agentConfig.webSearch } : {}),
+      onToolApproval: async ({ toolCall, toolName, parsedArguments }) => {
+        if (executionContext.toolPermission !== 'ask' || typeof approvalGate?.requestApproval !== 'function') {
+          return { approved: true };
         }
-      },
-      buildMessages: async ({ state, transientInstruction }) => {
-        const baseMessages = [
-          ...buildBaseSystemMessages(
-            builtInSystemPrompt,
-            workspaceSystemPrompt ?? projectSystemPrompt,
-            skillInventory,
-          ),
-          ...state.conversationMessages,
-        ];
-
-        if (!transientInstruction) {
-          return baseMessages;
+        const decision = await approvalGate.requestApproval({
+          toolCallId: toolCall.id,
+          toolName,
+          arguments: parsedArguments,
+        });
+        if (decision?.approved) {
+          return { approved: true };
         }
-
-        return [
-          ...baseMessages,
-          {
-            role: 'system',
-            content: transientInstruction,
-          },
-        ];
+        return {
+          approved: false,
+          reason: decision?.reason || `Tool execution rejected: ${toolName}`,
+        };
       },
-      onToolCallsResponse: async ({ state, response, toolExecutor: providedToolExecutor }) => {
-        const nextConversationMessages = [...state.conversationMessages, response.assistantMessage];
-        const nextPersistedMessages = [...state.persistedMessages, response.assistantMessage];
-        const activeToolExecutor = providedToolExecutor ?? toolExecutor;
-
-        for (const toolCall of response.tool_calls ?? []) {
-          const toolName = toolCall.function?.name ?? 'unknown_tool';
-          const toolArguments = toolCall.function?.arguments;
-
-          if (typeof onToolCall === 'function') {
-            onToolCall({
-              id: toolCall.id,
-              name: toolName,
-              arguments: toolArguments,
-            });
-          }
-
-          let toolResult;
-          const toolStartedAt = Date.now();
-
-          if (executionContext.toolPermission === 'ask' && approvalGate?.requestApproval) {
-            const approvalDecision = await approvalGate.requestApproval({
-              toolCallId: toolCall.id,
-              toolName,
-              arguments: parseToolArguments(toolArguments ?? '{}'),
-            });
-
-            if (!approvalDecision?.approved) {
-              toolResult = createRejectedToolResult(
-                toolCall.id,
-                toolName,
-                approvalDecision?.reason || `Tool execution rejected: ${toolName}`,
-              );
-            }
-          }
-
-          const toolContext = {
-            ...executionContext,
-            toolCallId: toolCall.id,
-          };
-          const executeDefaultToolCall = async () => activeToolExecutor.executeToolCall(toolCall, toolContext, {
-            errorMode: 'return-artifact',
-          });
-
-          if (typeof toolResult === 'undefined' && typeof handleToolCall === 'function') {
+      ...(typeof handleToolCall === 'function'
+        ? {
+          onToolCall: async ({ toolCall, toolName, parsedArguments, context, executeDefault }) => {
             const handlerResult = await handleToolCall({
               toolCall,
               toolName,
-              arguments: toolArguments,
-              parsedArguments: parseToolArguments(toolArguments ?? '{}'),
-              context: toolContext,
-              executeDefault: executeDefaultToolCall,
+              arguments: toolCall.function?.arguments,
+              parsedArguments,
+              context,
+              executeDefault,
             });
-
-            if (handlerResult?.handled) {
-              toolResult = handlerResult.result;
-            }
-          }
-
-          if (typeof toolResult === 'undefined') {
-            toolResult = await executeDefaultToolCall();
-          }
-
-          if (typeof onToolResult === 'function') {
-            onToolResult({
-              id: toolCall.id,
-              name: toolName,
-              result: toolResult,
-              arguments: toolArguments,
-              durationMs: Date.now() - toolStartedAt,
-            });
-          }
-
-          const toolMessage = {
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: serializeToolResult(toolResult),
-            createdAt: new Date().toISOString(),
-          };
-
-          nextConversationMessages.push(toolMessage);
-          nextPersistedMessages.push(toolMessage);
+            return {
+              handled: Boolean(handlerResult?.handled),
+              result: handlerResult?.result,
+            };
+          },
         }
+        : {}),
+    };
 
-        return {
-          state: {
-            ...state,
-            conversationMessages: nextConversationMessages,
-            persistedMessages: nextPersistedMessages,
-          },
-          next: {
-            control: 'continue',
-          },
-        };
-      },
-      onTextResponse: async ({ state, response, responseText }) => ({
-        state: {
-          ...state,
-          conversationMessages: [...state.conversationMessages, response.assistantMessage],
-          persistedMessages: [...state.persistedMessages, response.assistantMessage],
-          finalText: responseText,
-        },
-      }),
-    });
+    if (!stream) {
+      const completionResult = await complete(completionOptions);
+      emitModelResponse(onModelResponse, completionResult.raw, undefined);
 
-    if (!result.state.finalText.trim()) {
-      throw new Error(`LLM turn ended without a final text response. Stop reason: ${result.reason}`);
+      if (completionResult.status === 'failed') {
+        failureError = completionResult.error || 'LLM turn failed.';
+      } else if (completionResult.status === 'tool_calls') {
+        const pendingNames = (completionResult.toolCalls ?? [])
+          .map((tc) => tc.function?.name ?? 'unknown_tool')
+          .join(', ');
+        failureError = `LLM turn paused for host-handled tools (${pendingNames || 'none'}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
+      } else if (completionResult.status === 'completed' && typeof completionResult.output === 'string') {
+        finalText = completionResult.output;
+      } else {
+        failureError = `LLM turn failed with status ${completionResult.status}.`;
+      }
+
+      const runtimeMessages = selectNewRuntimeMessages(
+        completionResult.messages ?? [],
+        completionOptions.messages.length,
+      );
+      emitCompletedToolEvents(runtimeMessages, { onToolCall, onToolResult });
+
+      for (const message of runtimeMessages) {
+        persistedMessages.push({
+          ...message,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (finalText.trim() && !runtimeMessages.some((message) => (
+        message?.role === 'assistant' && String(message.content ?? '') === finalText
+      ))) {
+        persistedMessages.push({
+          role: 'assistant',
+          content: finalText,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (stream) {
+      for await (const event of streamComplete(completionOptions)) {
+        switch (event.type) {
+          case 'text_delta':
+            if (typeof onStreamChunk === 'function') {
+              onStreamChunk({ content: event.delta });
+            }
+            break;
+          case 'assistant_message':
+            emitModelResponse(
+              onModelResponse,
+              undefined,
+              event.message.tool_calls?.length ? 'tool_calls' : 'text',
+            );
+            persistedMessages.push({
+              ...event.message,
+              createdAt: new Date().toISOString(),
+            });
+            break;
+          case 'tool_start':
+            toolStartTimes.set(event.toolCall.id, Date.now());
+            if (typeof onToolCall === 'function') {
+              onToolCall({
+                id: event.toolCall.id,
+                name: event.toolCall.function?.name ?? 'unknown_tool',
+                arguments: event.toolCall.function?.arguments,
+              });
+            }
+            break;
+          case 'tool_result':
+          case 'tool_error': {
+            const resultValue = event.type === 'tool_result' ? event.result : { error: event.error };
+            const toolName = event.toolCall.function?.name ?? 'unknown_tool';
+            const startedAt = toolStartTimes.get(event.toolCall.id);
+            if (typeof onToolResult === 'function') {
+              onToolResult({
+                id: event.toolCall.id,
+                name: toolName,
+                result: resultValue,
+                arguments: event.toolCall.function?.arguments,
+                ...(typeof startedAt === 'number' ? { durationMs: Date.now() - startedAt } : {}),
+              });
+            }
+            persistedMessages.push({
+              role: 'tool',
+              tool_call_id: event.toolCall.id,
+              content: serializeToolResult(resultValue),
+              createdAt: new Date().toISOString(),
+            });
+            break;
+          }
+          case 'completed':
+            emitModelResponse(onModelResponse, event.result.raw, undefined);
+            if (event.result.status === 'completed' && typeof event.result.output === 'string') {
+              finalText = event.result.output;
+              persistedMessages.push({
+                role: 'assistant',
+                content: event.result.output,
+                createdAt: new Date().toISOString(),
+              });
+            }
+            break;
+          case 'tool_calls': {
+            emitModelResponse(onModelResponse, event.result.raw, undefined);
+            const pendingNames = (event.result.toolCalls ?? [])
+              .map((tc) => tc.function?.name ?? 'unknown_tool')
+              .join(', ');
+            failureError = `LLM turn paused for host-handled tools (${pendingNames || 'none'}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
+            break;
+          }
+          case 'failed':
+            emitModelResponse(onModelResponse, event.result.raw, undefined);
+            failureError = event.result.error || `LLM turn failed with status ${event.result.status}.`;
+            break;
+          default:
+            break;
+        }
+      }
+    }
+
+    if (failureError) {
+      throw new Error(failureError);
+    }
+
+    if (!finalText.trim()) {
+      throw new Error('LLM turn ended without a final text response.');
     }
 
     return {
-      assistantText: result.state.finalText.trim(),
-      messages: result.state.persistedMessages ?? result.state.conversationMessages,
+      assistantText: finalText.trim(),
+      messages: persistedMessages,
     };
   } finally {
     await runtime.dispose();

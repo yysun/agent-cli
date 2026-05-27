@@ -231,6 +231,7 @@ function normalizeWebSearch(value) {
  *   model?: string,
  *   temperature?: number,
  *   maxTokens?: number,
+ *   maxToolTurns?: number,
  *   toolPermission?: 'auto' | 'ask' | 'read',
  *   reasoningEffort?: 'default' | 'none' | 'low' | 'medium' | 'high',
  *   webSearch?: boolean | { searchContextSize?: 'low' | 'medium' | 'high' },
@@ -245,6 +246,7 @@ const AGENT_CONFIG_ALIASES = {
   model: ['model', 'modal'],
   temperature: ['temperature'],
   maxTokens: ['maxTokens', 'maxOutputTokens', 'tokens', 'max-tokens', 'max-output-tokens'],
+  maxToolTurns: ['maxToolTurns', 'max_tool_turns', 'max-tool-turns', 'maxConsecutiveToolTurns'],
   toolPermission: ['toolPermission', 'permission', 'permissions', 'tool-permission'],
   reasoningEffort: ['reasoningEffort', 'reasoning', 'reasoning-effort'],
   pastMessages: ['pastMessages', 'historyMessages', 'past_messages', 'past-messages', 'history-messages'],
@@ -272,6 +274,10 @@ export function normalizeAgentConfig(source) {
     maxTokens: normalizePositiveInteger(
       readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens),
       'maxTokens',
+    ),
+    maxToolTurns: normalizePositiveInteger(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxToolTurns),
+      'maxToolTurns',
     ),
     toolPermission: normalizeToolPermission(
       readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission),
@@ -310,6 +316,7 @@ export function loadPersistedRuntimeConfig() {
     model: process.env.AGENT_CLI_MODEL,
     temperature: process.env.AGENT_CLI_TEMPERATURE,
     maxTokens: process.env.AGENT_CLI_MAX_TOKENS,
+    maxToolTurns: process.env.AGENT_CLI_MAX_TOOL_TURNS,
     toolPermission: process.env.AGENT_CLI_TOOL_PERMISSION,
     reasoningEffort: process.env.AGENT_CLI_REASONING_EFFORT,
     pastMessages: process.env.AGENT_CLI_PAST_MESSAGES,

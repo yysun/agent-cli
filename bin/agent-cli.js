@@ -143,6 +143,7 @@ var AGENT_CONFIG_ALIASES = {
   model: ["model", "modal"],
   temperature: ["temperature"],
   maxTokens: ["maxTokens", "maxOutputTokens", "tokens", "max-tokens", "max-output-tokens"],
+  maxToolTurns: ["maxToolTurns", "max_tool_turns", "max-tool-turns", "maxConsecutiveToolTurns"],
   toolPermission: ["toolPermission", "permission", "permissions", "tool-permission"],
   reasoningEffort: ["reasoningEffort", "reasoning", "reasoning-effort"],
   pastMessages: ["pastMessages", "historyMessages", "past_messages", "past-messages", "history-messages"],
@@ -162,6 +163,10 @@ function normalizeAgentConfig(source) {
     maxTokens: normalizePositiveInteger(
       readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxTokens),
       "maxTokens"
+    ),
+    maxToolTurns: normalizePositiveInteger(
+      readAliasedValue(configSource, AGENT_CONFIG_ALIASES.maxToolTurns),
+      "maxToolTurns"
     ),
     toolPermission: normalizeToolPermission(
       readAliasedValue(configSource, AGENT_CONFIG_ALIASES.toolPermission)
@@ -196,6 +201,7 @@ function loadPersistedRuntimeConfig() {
     model: process.env.AGENT_CLI_MODEL,
     temperature: process.env.AGENT_CLI_TEMPERATURE,
     maxTokens: process.env.AGENT_CLI_MAX_TOKENS,
+    maxToolTurns: process.env.AGENT_CLI_MAX_TOOL_TURNS,
     toolPermission: process.env.AGENT_CLI_TOOL_PERMISSION,
     reasoningEffort: process.env.AGENT_CLI_REASONING_EFFORT,
     pastMessages: process.env.AGENT_CLI_PAST_MESSAGES,
@@ -205,8 +211,16 @@ function loadPersistedRuntimeConfig() {
   });
 }
 
-// core/agent-world-config.ts
-import { promises as fs } from "node:fs";
+// core/agent-runtime.ts
+import {
+  complete,
+  createRuntime,
+  streamComplete
+} from "llm-runtime";
+
+// core/agent-files.ts
+import { promises as fs2 } from "node:fs";
+import path3 from "node:path";
 
 // core/paths.ts
 import path from "node:path";
@@ -263,6 +277,671 @@ function buildWorldChatSummaryPath(chatId) {
 function buildWorldChatEventsPath(chatId) {
   return path.join(buildWorldChatDirectoryPath(chatId), "events.jsonl");
 }
+
+// core/workspace-store.ts
+import { promises as fs } from "node:fs";
+import path2 from "node:path";
+function syncWorkspaceRootFromEnvironment() {
+  const configuredWorkspaceRoot = String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
+  if (!configuredWorkspaceRoot) {
+    return;
+  }
+  const resolvedWorkspaceRoot = path2.resolve(configuredWorkspaceRoot);
+  if (resolvedWorkspaceRoot !== WORKSPACE_ROOT) {
+    configureWorkspaceRoot(resolvedWorkspaceRoot);
+  }
+}
+async function ensureWorkspaceStorage() {
+  syncWorkspaceRootFromEnvironment();
+  await Promise.all([
+    fs.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs.mkdir(SKILLS_ROOT, { recursive: true })
+  ]);
+  return {
+    workspaceRoot: WORKSPACE_ROOT,
+    storageRoot: AGENT_WORLD_ROOT,
+    chatsRoot: AGENT_WORLD_CHATS_ROOT,
+    skillsRoot: SKILLS_ROOT
+  };
+}
+async function ensureWorkspaceWorld() {
+  return ensureWorkspaceStorage();
+}
+
+// core/agent-files.ts
+var GLOBAL_SKILLS_ENV_KEY = "AGENT_CLI_GLOBAL_SKILLS";
+var DEFAULT_SYSTEM_PROMPT = [
+  "You are Agent CLI.",
+  "Be concise, factual, and action-oriented.",
+  "Prefer workspace evidence over speculation when an answer depends on files, configuration, environment variables, logs, generated outputs, or repository state.",
+  "Use available read-only tools before asking the user for information that may already exist in the workspace.",
+  "When a task depends on domain-specific instructions, procedures, or contracts, use `load_skill` when a relevant skill is available.",
+  "Do not claim files, configuration, or prerequisites are missing until you have inspected likely sources when appropriate.",
+  "Do not reveal secret values by default; report presence, absence, or non-sensitive metadata unless the user explicitly asks to inspect file contents."
+].join(" ");
+function getBuiltInSystemPrompt() {
+  return DEFAULT_SYSTEM_PROMPT;
+}
+async function assertReadableFile(filePath, label) {
+  let stats;
+  try {
+    stats = await fs2.stat(filePath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
+      throw error;
+    }
+    throw new Error(`Missing ${label}: ${filePath}`);
+  }
+  if (!stats.isFile()) {
+    throw new Error(`Expected ${label} to be a file: ${filePath}`);
+  }
+}
+async function assertReadableDirectory(directoryPath, label) {
+  let stats;
+  try {
+    stats = await fs2.stat(directoryPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
+      throw error;
+    }
+    throw new Error(`Missing ${label}: ${directoryPath}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Expected ${label} to be a directory: ${directoryPath}`);
+  }
+}
+function parseSkillFrontMatter(content) {
+  const normalized = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const frontMatterMatch = normalized.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
+  if (!frontMatterMatch || !frontMatterMatch[1]) {
+    return { skillId: "", description: "" };
+  }
+  let skillId = "";
+  let description = "";
+  for (const line of frontMatterMatch[1].split("\n")) {
+    const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const key = String(match[1] ?? "").trim();
+    const value = String(match[2] ?? "").trim().replace(/^['"]|['"]$/g, "");
+    if (key === "name") {
+      skillId = value;
+    }
+    if (key === "description") {
+      description = value;
+    }
+  }
+  return { skillId, description };
+}
+async function collectSkillFilePaths(rootPath) {
+  const discoveredPaths = [];
+  const queue = [rootPath];
+  while (queue.length > 0) {
+    const currentPath = queue.shift();
+    if (!currentPath) {
+      continue;
+    }
+    const entries = await fs2.readdir(currentPath, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const entryPath = path3.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name === "SKILL.md") {
+        discoveredPaths.push(entryPath);
+      }
+    }
+  }
+  return discoveredPaths.sort((left, right) => left.localeCompare(right));
+}
+async function loadWorkspaceSystemPrompt() {
+  try {
+    await assertReadableFile(SYSTEM_PROMPT_PATH, "system prompt");
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Missing system prompt:")) {
+      return "";
+    }
+    throw error;
+  }
+  const content = (await fs2.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+  return content;
+}
+async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
+  try {
+    await assertReadableDirectory(skillsRoot, "skills root");
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Missing skills root:")) {
+      return [];
+    }
+    throw error;
+  }
+  const skillFilePaths = await collectSkillFilePaths(skillsRoot);
+  const skills = [];
+  for (const skillFilePath of skillFilePaths) {
+    const content = await fs2.readFile(skillFilePath, "utf8");
+    const metadata = parseSkillFrontMatter(content);
+    if (!metadata.skillId) {
+      continue;
+    }
+    skills.push({
+      skillId: metadata.skillId,
+      description: metadata.description,
+      sourcePath: skillFilePath,
+      sourceScope
+    });
+  }
+  return skills;
+}
+function isGlobalSkillLoadingEnabled(environment = process.env) {
+  const normalized = String(environment[GLOBAL_SKILLS_ENV_KEY] ?? "").trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+}
+async function loadGlobalSkillInventory(skillRoots) {
+  const scopedSkills = await Promise.all(
+    skillRoots.map((skillRoot) => loadSkillInventoryFromRoot(skillRoot, "user"))
+  );
+  return scopedSkills.flat();
+}
+async function loadSkillInventoryByScope() {
+  await ensureWorkspaceWorld();
+  return {
+    user: isGlobalSkillLoadingEnabled() ? await loadGlobalSkillInventory(GLOBAL_SKILLS_ROOTS) : [],
+    project: await loadSkillInventoryFromRoot(SKILLS_ROOT, "project")
+  };
+}
+function flattenSkillInventoryByPrecedence(scopedInventory) {
+  const skillsById = /* @__PURE__ */ new Map();
+  for (const skill of scopedInventory.user) {
+    skillsById.set(skill.skillId, skill);
+  }
+  for (const skill of scopedInventory.project) {
+    skillsById.set(skill.skillId, skill);
+  }
+  return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
+}
+function buildSkillInventoryMessage(skills) {
+  if (skills.length === 0) {
+    return "";
+  }
+  const lines = skills.map((skill) => {
+    const description = skill.description || "No description provided.";
+    return `- ${skill.skillId}: ${description}`;
+  });
+  return [
+    "Available skills can be loaded through the `load_skill` tool.",
+    "When a skill is relevant, call `load_skill` with the exact `skillId` before answering.",
+    "",
+    ...lines
+  ].join("\n");
+}
+
+// core/agent-runtime.ts
+var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
+  "openai",
+  "anthropic",
+  "google",
+  "azure",
+  "xai",
+  "openai-compatible",
+  "ollama"
+]);
+var DEFAULT_MODELS = {
+  openai: "gpt-5"
+};
+function resolveRuntimeSelection(environment = process.env, agentConfig = {}) {
+  const provider = String(agentConfig.provider ?? "openai").trim().toLowerCase();
+  const providerDefaultModel = provider === "azure" ? String(environment.AZURE_OPENAI_DEPLOYMENT_NAME ?? "").trim() : DEFAULT_MODELS[
+    /** @type {LLMProviderName} */
+    provider
+  ];
+  const model = String(
+    agentConfig.model ?? providerDefaultModel ?? ""
+  ).trim();
+  return { provider, model };
+}
+function buildEnvironmentDefaults(agentConfig = {}) {
+  const defaults = {};
+  if (agentConfig.reasoningEffort) {
+    defaults.reasoningEffort = agentConfig.reasoningEffort;
+  }
+  if (agentConfig.toolPermission) {
+    defaults.toolPermission = agentConfig.toolPermission;
+  }
+  return defaults;
+}
+function buildExecutionContext(agentConfig = {}) {
+  const context = {
+    workingDirectory: WORKSPACE_ROOT
+  };
+  if (agentConfig.reasoningEffort) {
+    context.reasoningEffort = agentConfig.reasoningEffort;
+  }
+  if (agentConfig.toolPermission) {
+    context.toolPermission = agentConfig.toolPermission;
+  }
+  if (agentConfig.abortSignal) {
+    context.abortSignal = agentConfig.abortSignal;
+  }
+  return context;
+}
+function requireEnvironmentVariable(environment, variableName) {
+  const value = String(environment[variableName] ?? "").trim();
+  if (!value) {
+    throw new Error(`Missing environment variable: ${variableName}`);
+  }
+  return value;
+}
+function resolveProviderConfig(provider, environment) {
+  switch (provider) {
+    case "openai":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "OPENAI_API_KEY")
+      };
+    case "anthropic":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "ANTHROPIC_API_KEY")
+      };
+    case "google":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "GOOGLE_API_KEY")
+      };
+    case "xai":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "XAI_API_KEY")
+      };
+    case "openai-compatible":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "OPENAI_COMPATIBLE_API_KEY"),
+        baseUrl: requireEnvironmentVariable(environment, "OPENAI_COMPATIBLE_BASE_URL")
+      };
+    case "ollama":
+      return {
+        baseUrl: requireEnvironmentVariable(environment, "OLLAMA_BASE_URL")
+      };
+    case "azure":
+      return {
+        apiKey: requireEnvironmentVariable(environment, "AZURE_OPENAI_API_KEY"),
+        resourceName: requireEnvironmentVariable(environment, "AZURE_OPENAI_RESOURCE_NAME"),
+        deployment: requireEnvironmentVariable(environment, "AZURE_OPENAI_DEPLOYMENT_NAME"),
+        ...String(environment.AZURE_OPENAI_API_VERSION ?? "").trim() ? { apiVersion: String(environment.AZURE_OPENAI_API_VERSION).trim() } : {}
+      };
+    default:
+      throw new Error(`Unsupported LLM provider: ${provider}`);
+  }
+}
+function validateRuntimeEnvironment(environment = process.env, agentConfig = {}) {
+  const runtimeSelection = resolveRuntimeSelection(environment, agentConfig);
+  const configuredProvider = runtimeSelection.provider;
+  const normalizedProvider = configuredProvider.toLowerCase();
+  if (!SUPPORTED_PROVIDERS.has(
+    /** @type {LLMProviderName} */
+    normalizedProvider
+  )) {
+    throw new Error(`Unsupported LLM provider: ${configuredProvider}`);
+  }
+  const provider = (
+    /** @type {LLMProviderName} */
+    normalizedProvider
+  );
+  const providerConfig = resolveProviderConfig(provider, environment);
+  const model = runtimeSelection.model || (provider === "azure" && "deployment" in providerConfig ? providerConfig.deployment : "");
+  if (!model) {
+    throw new Error(`Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider ${provider}.`);
+  }
+  const providers = (
+    /** @type {LLMProviderConfigs} */
+    {
+      [provider]: providerConfig
+    }
+  );
+  return {
+    provider,
+    model,
+    providers
+  };
+}
+function buildRuntimeSkillRoots() {
+  return [
+    ...isGlobalSkillLoadingEnabled() ? GLOBAL_SKILLS_ROOTS : [],
+    SKILLS_ROOT
+  ];
+}
+function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, skillInventory) {
+  const layers = [builtInSystemPrompt.trim()];
+  if (String(workspaceSystemPrompt ?? "").trim()) {
+    layers.push(String(workspaceSystemPrompt).trim());
+  }
+  const skillInventoryMessage = buildSkillInventoryMessage(skillInventory);
+  if (skillInventoryMessage) {
+    layers.push(skillInventoryMessage);
+  }
+  return [{
+    role: "system",
+    content: layers.join("\n\n")
+  }];
+}
+var DEFAULT_BUILT_INS = "all";
+var RUNTIME_CONTROL_TOOL_NAMES = /* @__PURE__ */ new Set(["final_answer", "need_user_input", "blocked"]);
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function extractModelResponseMetadata(raw, fallbackType) {
+  if (!isRecord(raw)) {
+    return fallbackType ? { type: fallbackType } : void 0;
+  }
+  const response = (
+    /** @type {Record<string, unknown>} */
+    raw
+  );
+  const metadata = {};
+  if (typeof response.type === "string" && response.type.trim()) {
+    metadata.type = response.type;
+  } else if (fallbackType) {
+    metadata.type = fallbackType;
+  }
+  if (typeof response.stopKind === "string" && response.stopKind.trim()) {
+    metadata.stopKind = response.stopKind;
+  }
+  if (typeof response.providerStopReason === "string" && response.providerStopReason.trim()) {
+    metadata.providerStopReason = response.providerStopReason;
+  }
+  if (isRecord(response.usage)) {
+    metadata.usage = response.usage;
+  }
+  return Object.keys(metadata).length > 0 ? metadata : void 0;
+}
+function emitModelResponse(onModelResponse, raw, fallbackType) {
+  if (typeof onModelResponse !== "function") {
+    return;
+  }
+  const metadata = extractModelResponseMetadata(raw, fallbackType);
+  if (metadata) {
+    onModelResponse(metadata);
+  }
+}
+function serializeToolResult(result) {
+  if (typeof result === "string") {
+    return result;
+  }
+  return JSON.stringify(result ?? null, null, 2);
+}
+function parseSerializedToolResult(content) {
+  if (typeof content !== "string") {
+    return content;
+  }
+  try {
+    return JSON.parse(content);
+  } catch {
+    return content;
+  }
+}
+function selectContextMessages(messages, historyMessageLimit) {
+  if (typeof historyMessageLimit !== "number" || !Number.isInteger(historyMessageLimit) || historyMessageLimit < 0) {
+    return messages;
+  }
+  if (historyMessageLimit === 0) {
+    return [];
+  }
+  return messages.slice(-historyMessageLimit);
+}
+function selectNewRuntimeMessages(runtimeMessages, inputMessageCount) {
+  return runtimeMessages.slice(inputMessageCount).filter((message) => message?.role !== "system");
+}
+function emitCompletedToolEvents(messages, callbacks) {
+  const toolCallsById = /* @__PURE__ */ new Map();
+  for (const message of messages) {
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    for (const toolCall of message.tool_calls ?? []) {
+      const toolName = toolCall.function?.name ?? "unknown_tool";
+      if (RUNTIME_CONTROL_TOOL_NAMES.has(toolName)) {
+        continue;
+      }
+      toolCallsById.set(toolCall.id, toolCall);
+      callbacks.onToolCall?.({
+        id: toolCall.id,
+        name: toolName,
+        arguments: toolCall.function?.arguments
+      });
+    }
+  }
+  for (const message of messages) {
+    if (message?.role !== "tool" || !message.tool_call_id) {
+      continue;
+    }
+    const toolCall = toolCallsById.get(message.tool_call_id);
+    if (!toolCall) {
+      continue;
+    }
+    callbacks.onToolResult?.({
+      id: message.tool_call_id,
+      name: toolCall.function?.name ?? "unknown_tool",
+      result: parseSerializedToolResult(message.content),
+      arguments: toolCall.function?.arguments
+    });
+  }
+}
+async function runChatTurn({
+  chat,
+  userMessage,
+  stream = true,
+  onStreamChunk,
+  onModelResponse,
+  onToolCall,
+  onToolResult,
+  handleToolCall,
+  historyMessageLimit,
+  builtInSystemPrompt,
+  workspaceSystemPrompt,
+  projectSystemPrompt,
+  skillInventory,
+  approvalGate,
+  agentConfig = {},
+  abortSignal
+}) {
+  const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
+  const environmentDefaults = buildEnvironmentDefaults(agentConfig);
+  const executionContext = buildExecutionContext({
+    ...agentConfig,
+    abortSignal
+  });
+  const runtime = createRuntime({
+    providers: runtimeSettings.providers,
+    skillRoots: buildRuntimeSkillRoots(),
+    ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
+  });
+  const pendingUserMessage = {
+    role: "user",
+    content: userMessage,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const contextMessages = selectContextMessages(chat.messages, historyMessageLimit);
+  const systemMessages = buildBaseSystemMessages(
+    builtInSystemPrompt,
+    workspaceSystemPrompt ?? projectSystemPrompt,
+    skillInventory
+  );
+  try {
+    const persistedMessages = [...chat.messages, pendingUserMessage];
+    const toolStartTimes = /* @__PURE__ */ new Map();
+    let finalText = "";
+    let failureError = null;
+    const completionOptions = {
+      environment: runtime,
+      provider: runtimeSettings.provider,
+      model: runtimeSettings.model,
+      messages: [...systemMessages, ...contextMessages, pendingUserMessage],
+      builtIns: DEFAULT_BUILT_INS,
+      context: { ...executionContext, ...abortSignal ? { abortSignal } : {} },
+      ...typeof agentConfig.temperature === "number" ? { temperature: agentConfig.temperature } : {},
+      ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
+      ...typeof agentConfig.maxToolTurns === "number" ? { maxConsecutiveToolTurns: agentConfig.maxToolTurns } : {},
+      ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
+      onToolApproval: async ({ toolCall, toolName, parsedArguments }) => {
+        if (executionContext.toolPermission !== "ask" || typeof approvalGate?.requestApproval !== "function") {
+          return { approved: true };
+        }
+        const decision = await approvalGate.requestApproval({
+          toolCallId: toolCall.id,
+          toolName,
+          arguments: parsedArguments
+        });
+        if (decision?.approved) {
+          return { approved: true };
+        }
+        return {
+          approved: false,
+          reason: decision?.reason || `Tool execution rejected: ${toolName}`
+        };
+      },
+      ...typeof handleToolCall === "function" ? {
+        onToolCall: async ({ toolCall, toolName, parsedArguments, context, executeDefault }) => {
+          const handlerResult = await handleToolCall({
+            toolCall,
+            toolName,
+            arguments: toolCall.function?.arguments,
+            parsedArguments,
+            context,
+            executeDefault
+          });
+          return {
+            handled: Boolean(handlerResult?.handled),
+            result: handlerResult?.result
+          };
+        }
+      } : {}
+    };
+    if (!stream) {
+      const completionResult = await complete(completionOptions);
+      emitModelResponse(onModelResponse, completionResult.raw, void 0);
+      if (completionResult.status === "failed") {
+        failureError = completionResult.error || "LLM turn failed.";
+      } else if (completionResult.status === "tool_calls") {
+        const pendingNames = (completionResult.toolCalls ?? []).map((tc) => tc.function?.name ?? "unknown_tool").join(", ");
+        failureError = `LLM turn paused for host-handled tools (${pendingNames || "none"}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
+      } else if (completionResult.status === "completed" && typeof completionResult.output === "string") {
+        finalText = completionResult.output;
+      } else {
+        failureError = `LLM turn failed with status ${completionResult.status}.`;
+      }
+      const runtimeMessages = selectNewRuntimeMessages(
+        completionResult.messages ?? [],
+        completionOptions.messages.length
+      );
+      emitCompletedToolEvents(runtimeMessages, { onToolCall, onToolResult });
+      for (const message of runtimeMessages) {
+        persistedMessages.push({
+          ...message,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+      if (finalText.trim() && !runtimeMessages.some((message) => message?.role === "assistant" && String(message.content ?? "") === finalText)) {
+        persistedMessages.push({
+          role: "assistant",
+          content: finalText,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+    }
+    if (stream) {
+      for await (const event of streamComplete(completionOptions)) {
+        switch (event.type) {
+          case "text_delta":
+            if (typeof onStreamChunk === "function") {
+              onStreamChunk({ content: event.delta });
+            }
+            break;
+          case "assistant_message":
+            emitModelResponse(
+              onModelResponse,
+              void 0,
+              event.message.tool_calls?.length ? "tool_calls" : "text"
+            );
+            persistedMessages.push({
+              ...event.message,
+              createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            });
+            break;
+          case "tool_start":
+            toolStartTimes.set(event.toolCall.id, Date.now());
+            if (typeof onToolCall === "function") {
+              onToolCall({
+                id: event.toolCall.id,
+                name: event.toolCall.function?.name ?? "unknown_tool",
+                arguments: event.toolCall.function?.arguments
+              });
+            }
+            break;
+          case "tool_result":
+          case "tool_error": {
+            const resultValue = event.type === "tool_result" ? event.result : { error: event.error };
+            const toolName = event.toolCall.function?.name ?? "unknown_tool";
+            const startedAt = toolStartTimes.get(event.toolCall.id);
+            if (typeof onToolResult === "function") {
+              onToolResult({
+                id: event.toolCall.id,
+                name: toolName,
+                result: resultValue,
+                arguments: event.toolCall.function?.arguments,
+                ...typeof startedAt === "number" ? { durationMs: Date.now() - startedAt } : {}
+              });
+            }
+            persistedMessages.push({
+              role: "tool",
+              tool_call_id: event.toolCall.id,
+              content: serializeToolResult(resultValue),
+              createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            });
+            break;
+          }
+          case "completed":
+            emitModelResponse(onModelResponse, event.result.raw, void 0);
+            if (event.result.status === "completed" && typeof event.result.output === "string") {
+              finalText = event.result.output;
+              persistedMessages.push({
+                role: "assistant",
+                content: event.result.output,
+                createdAt: (/* @__PURE__ */ new Date()).toISOString()
+              });
+            }
+            break;
+          case "tool_calls": {
+            emitModelResponse(onModelResponse, event.result.raw, void 0);
+            const pendingNames = (event.result.toolCalls ?? []).map((tc) => tc.function?.name ?? "unknown_tool").join(", ");
+            failureError = `LLM turn paused for host-handled tools (${pendingNames || "none"}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
+            break;
+          }
+          case "failed":
+            emitModelResponse(onModelResponse, event.result.raw, void 0);
+            failureError = event.result.error || `LLM turn failed with status ${event.result.status}.`;
+            break;
+          default:
+            break;
+        }
+      }
+    }
+    if (failureError) {
+      throw new Error(failureError);
+    }
+    if (!finalText.trim()) {
+      throw new Error("LLM turn ended without a final text response.");
+    }
+    return {
+      assistantText: finalText.trim(),
+      messages: persistedMessages
+    };
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+// core/agent-world-config.ts
+import { promises as fs3 } from "node:fs";
 
 // core/world.schema.json
 var world_schema_default = {
@@ -439,7 +1118,7 @@ var world_schema_default = {
 };
 
 // core/agent-world-config.ts
-function isRecord(value) {
+function isRecord2(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeScalarText(value) {
@@ -459,7 +1138,7 @@ function formatStructuredValue(value) {
   if (Array.isArray(value)) {
     return value.map(formatStructuredValue).filter(Boolean).join(", ");
   }
-  if (!isRecord(value)) {
+  if (!isRecord2(value)) {
     return "";
   }
   for (const key of ["pattern", "type", "entry", "entryAgent", "name", "id", "mode"]) {
@@ -478,7 +1157,7 @@ function extractAgentLabel(value, fallbackLabel = "") {
   if (scalarText) {
     return scalarText;
   }
-  if (!isRecord(value)) {
+  if (!isRecord2(value)) {
     return fallbackLabel;
   }
   for (const key of ["id", "name", "agent", "role"]) {
@@ -494,7 +1173,7 @@ function extractAgentLabels(config) {
   if (Array.isArray(agents)) {
     return agents.map((agent) => extractAgentLabel(agent)).filter(Boolean);
   }
-  if (isRecord(agents)) {
+  if (isRecord2(agents)) {
     return Object.keys(agents).filter(Boolean);
   }
   return [];
@@ -534,12 +1213,12 @@ function resolveSchemaReference(reference, rootSchema) {
   let current = rootSchema;
   for (const rawPart of reference.slice(2).split("/")) {
     const part = rawPart.replace(/~1/gu, "/").replace(/~0/gu, "~");
-    if (!isRecord(current)) {
+    if (!isRecord2(current)) {
       return null;
     }
     current = current[part];
   }
-  return isRecord(current) ? current : null;
+  return isRecord2(current) ? current : null;
 }
 function valuesAreUnique(values) {
   const seen = /* @__PURE__ */ new Set();
@@ -573,7 +1252,7 @@ function validateJsonSchemaValue({
   }
   const anyOf = Array.isArray(schema.anyOf) ? schema.anyOf : [];
   if (anyOf.length > 0) {
-    const matched = anyOf.some((candidate) => isRecord(candidate) && validateJsonSchemaValue({
+    const matched = anyOf.some((candidate) => isRecord2(candidate) && validateJsonSchemaValue({
       value,
       schema: candidate,
       rootSchema,
@@ -614,7 +1293,7 @@ function validateJsonSchemaValue({
     }
   }
   if (type === "array" && Array.isArray(value)) {
-    const itemsSchema = isRecord(schema.items) ? schema.items : null;
+    const itemsSchema = isRecord2(schema.items) ? schema.items : null;
     if (itemsSchema) {
       value.forEach((item, index) => {
         errors.push(...validateJsonSchemaValue({
@@ -629,8 +1308,8 @@ function validateJsonSchemaValue({
       errors.push(`${formatJsonPath(pathParts)} must contain unique items`);
     }
   }
-  if (type === "object" && isRecord(value)) {
-    const properties = isRecord(schema.properties) ? schema.properties : {};
+  if (type === "object" && isRecord2(value)) {
+    const properties = isRecord2(schema.properties) ? schema.properties : {};
     const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
     for (const key of required) {
       if (!(key in value)) {
@@ -641,7 +1320,7 @@ function validateJsonSchemaValue({
     if (Number.isFinite(minProperties) && Object.keys(value).length < minProperties) {
       errors.push(`${formatJsonPath(pathParts)} must have at least ${minProperties} properties`);
     }
-    if (isRecord(schema.propertyNames)) {
+    if (isRecord2(schema.propertyNames)) {
       for (const key of Object.keys(value)) {
         errors.push(...validateJsonSchemaValue({
           value: key,
@@ -654,7 +1333,7 @@ function validateJsonSchemaValue({
     const additionalProperties = schema.additionalProperties;
     for (const [key, propertyValue] of Object.entries(value)) {
       const propertySchema = properties[key];
-      if (isRecord(propertySchema)) {
+      if (isRecord2(propertySchema)) {
         errors.push(...validateJsonSchemaValue({
           value: propertyValue,
           schema: propertySchema,
@@ -667,7 +1346,7 @@ function validateJsonSchemaValue({
         errors.push(`${formatJsonPath(appendPathKey(pathParts, key))} is not allowed`);
         continue;
       }
-      if (isRecord(additionalProperties)) {
+      if (isRecord2(additionalProperties)) {
         errors.push(...validateJsonSchemaValue({
           value: propertyValue,
           schema: additionalProperties,
@@ -680,7 +1359,7 @@ function validateJsonSchemaValue({
   return errors;
 }
 function validateWorldConfig(config) {
-  if (!isRecord(world_schema_default)) {
+  if (!isRecord2(world_schema_default)) {
     throw new Error("Invalid bundled Agent World schema: expected a JSON object");
   }
   const errors = validateJsonSchemaValue({
@@ -696,7 +1375,7 @@ function validateWorldConfig(config) {
 async function loadAgentWorldStartupSummary() {
   let content = "";
   try {
-    content = await fs.readFile(AGENT_WORLD_CONFIG_PATH, "utf8");
+    content = await fs3.readFile(AGENT_WORLD_CONFIG_PATH, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -728,211 +1407,6 @@ function agentWorldStartupText(summary) {
   ].join("\n");
 }
 
-// core/agent-files.ts
-import { promises as fs3 } from "node:fs";
-import path3 from "node:path";
-
-// core/workspace-store.ts
-import { promises as fs2 } from "node:fs";
-import path2 from "node:path";
-function syncWorkspaceRootFromEnvironment() {
-  const configuredWorkspaceRoot = String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
-  if (!configuredWorkspaceRoot) {
-    return;
-  }
-  const resolvedWorkspaceRoot = path2.resolve(configuredWorkspaceRoot);
-  if (resolvedWorkspaceRoot !== WORKSPACE_ROOT) {
-    configureWorkspaceRoot(resolvedWorkspaceRoot);
-  }
-}
-async function ensureWorkspaceStorage() {
-  syncWorkspaceRootFromEnvironment();
-  await Promise.all([
-    fs2.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
-    fs2.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs2.mkdir(SKILLS_ROOT, { recursive: true })
-  ]);
-  return {
-    workspaceRoot: WORKSPACE_ROOT,
-    storageRoot: AGENT_WORLD_ROOT,
-    chatsRoot: AGENT_WORLD_CHATS_ROOT,
-    skillsRoot: SKILLS_ROOT
-  };
-}
-async function ensureWorkspaceWorld() {
-  return ensureWorkspaceStorage();
-}
-
-// core/agent-files.ts
-var GLOBAL_SKILLS_ENV_KEY = "AGENT_CLI_GLOBAL_SKILLS";
-var DEFAULT_SYSTEM_PROMPT = [
-  "You are Agent CLI.",
-  "Be concise, factual, and action-oriented.",
-  "Prefer workspace evidence over speculation when an answer depends on files, configuration, environment variables, logs, generated outputs, or repository state.",
-  "Use available read-only tools before asking the user for information that may already exist in the workspace.",
-  "When a task depends on domain-specific instructions, procedures, or contracts, use `load_skill` when a relevant skill is available.",
-  "Do not claim files, configuration, or prerequisites are missing until you have inspected likely sources when appropriate.",
-  "Do not reveal secret values by default; report presence, absence, or non-sensitive metadata unless the user explicitly asks to inspect file contents."
-].join(" ");
-function getBuiltInSystemPrompt() {
-  return DEFAULT_SYSTEM_PROMPT;
-}
-async function assertReadableFile(filePath, label) {
-  let stats;
-  try {
-    stats = await fs3.stat(filePath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
-      throw error;
-    }
-    throw new Error(`Missing ${label}: ${filePath}`);
-  }
-  if (!stats.isFile()) {
-    throw new Error(`Expected ${label} to be a file: ${filePath}`);
-  }
-}
-async function assertReadableDirectory(directoryPath, label) {
-  let stats;
-  try {
-    stats = await fs3.stat(directoryPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
-      throw error;
-    }
-    throw new Error(`Missing ${label}: ${directoryPath}`);
-  }
-  if (!stats.isDirectory()) {
-    throw new Error(`Expected ${label} to be a directory: ${directoryPath}`);
-  }
-}
-function parseSkillFrontMatter(content) {
-  const normalized = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
-  const frontMatterMatch = normalized.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
-  if (!frontMatterMatch || !frontMatterMatch[1]) {
-    return { skillId: "", description: "" };
-  }
-  let skillId = "";
-  let description = "";
-  for (const line of frontMatterMatch[1].split("\n")) {
-    const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (!match) {
-      continue;
-    }
-    const key = String(match[1] ?? "").trim();
-    const value = String(match[2] ?? "").trim().replace(/^['"]|['"]$/g, "");
-    if (key === "name") {
-      skillId = value;
-    }
-    if (key === "description") {
-      description = value;
-    }
-  }
-  return { skillId, description };
-}
-async function collectSkillFilePaths(rootPath) {
-  const discoveredPaths = [];
-  const queue = [rootPath];
-  while (queue.length > 0) {
-    const currentPath = queue.shift();
-    if (!currentPath) {
-      continue;
-    }
-    const entries = await fs3.readdir(currentPath, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const entryPath = path3.join(currentPath, entry.name);
-      if (entry.isDirectory()) {
-        queue.push(entryPath);
-        continue;
-      }
-      if (entry.isFile() && entry.name === "SKILL.md") {
-        discoveredPaths.push(entryPath);
-      }
-    }
-  }
-  return discoveredPaths.sort((left, right) => left.localeCompare(right));
-}
-async function loadWorkspaceSystemPrompt() {
-  try {
-    await assertReadableFile(SYSTEM_PROMPT_PATH, "system prompt");
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Missing system prompt:")) {
-      return "";
-    }
-    throw error;
-  }
-  const content = (await fs3.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
-  return content;
-}
-async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
-  try {
-    await assertReadableDirectory(skillsRoot, "skills root");
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Missing skills root:")) {
-      return [];
-    }
-    throw error;
-  }
-  const skillFilePaths = await collectSkillFilePaths(skillsRoot);
-  const skills = [];
-  for (const skillFilePath of skillFilePaths) {
-    const content = await fs3.readFile(skillFilePath, "utf8");
-    const metadata = parseSkillFrontMatter(content);
-    if (!metadata.skillId) {
-      continue;
-    }
-    skills.push({
-      skillId: metadata.skillId,
-      description: metadata.description,
-      sourcePath: skillFilePath,
-      sourceScope
-    });
-  }
-  return skills;
-}
-function isGlobalSkillLoadingEnabled(environment = process.env) {
-  const normalized = String(environment[GLOBAL_SKILLS_ENV_KEY] ?? "").trim().toLowerCase();
-  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
-}
-async function loadGlobalSkillInventory(skillRoots) {
-  const scopedSkills = await Promise.all(
-    skillRoots.map((skillRoot) => loadSkillInventoryFromRoot(skillRoot, "user"))
-  );
-  return scopedSkills.flat();
-}
-async function loadSkillInventoryByScope() {
-  await ensureWorkspaceWorld();
-  return {
-    user: isGlobalSkillLoadingEnabled() ? await loadGlobalSkillInventory(GLOBAL_SKILLS_ROOTS) : [],
-    project: await loadSkillInventoryFromRoot(SKILLS_ROOT, "project")
-  };
-}
-function flattenSkillInventoryByPrecedence(scopedInventory) {
-  const skillsById = /* @__PURE__ */ new Map();
-  for (const skill of scopedInventory.user) {
-    skillsById.set(skill.skillId, skill);
-  }
-  for (const skill of scopedInventory.project) {
-    skillsById.set(skill.skillId, skill);
-  }
-  return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
-}
-function buildSkillInventoryMessage(skills) {
-  if (skills.length === 0) {
-    return "";
-  }
-  const lines = skills.map((skill) => {
-    const description = skill.description || "No description provided.";
-    return `- ${skill.skillId}: ${description}`;
-  });
-  return [
-    "Available skills can be loaded through the `load_skill` tool.",
-    "When a skill is relevant, call `load_skill` with the exact `skillId` before answering.",
-    "",
-    ...lines
-  ].join("\n");
-}
-
 // core/workspace-environment.ts
 import fs4 from "node:fs";
 import path4 from "node:path";
@@ -953,6 +1427,7 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AGENT_CLI_MODEL",
   "AGENT_CLI_TEMPERATURE",
   "AGENT_CLI_MAX_TOKENS",
+  "AGENT_CLI_MAX_TOOL_TURNS",
   "AGENT_CLI_TOOL_PERMISSION",
   "AGENT_CLI_REASONING_EFFORT",
   "AGENT_CLI_PAST_MESSAGES",
@@ -969,6 +1444,7 @@ AGENT_CLI_PROVIDER=ollama
 AGENT_CLI_MODEL=emma4:e4b
 AGENT_CLI_TEMPERATURE=1
 AGENT_CLI_MAX_TOKENS=4096
+AGENT_CLI_MAX_TOOL_TURNS=24
 AGENT_CLI_TOOL_PERMISSION=ask
 AGENT_CLI_REASONING_EFFORT=medium
 AGENT_CLI_PAST_MESSAGES=20
@@ -1357,390 +1833,6 @@ async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
   return eventsPath;
 }
 
-// core/agent-runtime.ts
-import {
-  createRuntime,
-  executeToolCall as executeRuntimeToolCall,
-  executeToolCalls as executeRuntimeToolCalls,
-  runCompletionLoop
-} from "llm-runtime";
-var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
-  "openai",
-  "anthropic",
-  "google",
-  "azure",
-  "xai",
-  "openai-compatible",
-  "ollama"
-]);
-var DEFAULT_MODELS = {
-  openai: "gpt-5"
-};
-function buildEnvironmentDefaults(agentConfig = {}) {
-  const defaults = {};
-  if (agentConfig.reasoningEffort) {
-    defaults.reasoningEffort = agentConfig.reasoningEffort;
-  }
-  if (agentConfig.toolPermission) {
-    defaults.toolPermission = agentConfig.toolPermission;
-  }
-  return defaults;
-}
-function buildExecutionContext(agentConfig = {}) {
-  const context = {
-    workingDirectory: WORKSPACE_ROOT
-  };
-  if (agentConfig.reasoningEffort) {
-    context.reasoningEffort = agentConfig.reasoningEffort;
-  }
-  if (agentConfig.toolPermission) {
-    context.toolPermission = agentConfig.toolPermission;
-  }
-  if (agentConfig.abortSignal) {
-    context.abortSignal = agentConfig.abortSignal;
-  }
-  return context;
-}
-function requireEnvironmentVariable(environment, variableName) {
-  const value = String(environment[variableName] ?? "").trim();
-  if (!value) {
-    throw new Error(`Missing environment variable: ${variableName}`);
-  }
-  return value;
-}
-function resolveProviderConfig(provider, environment) {
-  switch (provider) {
-    case "openai":
-      return {
-        apiKey: requireEnvironmentVariable(environment, "OPENAI_API_KEY")
-      };
-    case "anthropic":
-      return {
-        apiKey: requireEnvironmentVariable(environment, "ANTHROPIC_API_KEY")
-      };
-    case "google":
-      return {
-        apiKey: requireEnvironmentVariable(environment, "GOOGLE_API_KEY")
-      };
-    case "xai":
-      return {
-        apiKey: requireEnvironmentVariable(environment, "XAI_API_KEY")
-      };
-    case "openai-compatible":
-      return {
-        apiKey: requireEnvironmentVariable(environment, "OPENAI_COMPATIBLE_API_KEY"),
-        baseUrl: requireEnvironmentVariable(environment, "OPENAI_COMPATIBLE_BASE_URL")
-      };
-    case "ollama":
-      return {
-        baseUrl: requireEnvironmentVariable(environment, "OLLAMA_BASE_URL")
-      };
-    case "azure":
-      return {
-        apiKey: requireEnvironmentVariable(environment, "AZURE_OPENAI_API_KEY"),
-        resourceName: requireEnvironmentVariable(environment, "AZURE_OPENAI_RESOURCE_NAME"),
-        deployment: requireEnvironmentVariable(environment, "AZURE_OPENAI_DEPLOYMENT_NAME"),
-        ...String(environment.AZURE_OPENAI_API_VERSION ?? "").trim() ? { apiVersion: String(environment.AZURE_OPENAI_API_VERSION).trim() } : {}
-      };
-    default:
-      throw new Error(`Unsupported LLM provider: ${provider}`);
-  }
-}
-function validateRuntimeEnvironment(environment = process.env, agentConfig = {}) {
-  const configuredProvider = String(agentConfig.provider ?? "openai").trim();
-  const normalizedProvider = configuredProvider.toLowerCase();
-  if (!SUPPORTED_PROVIDERS.has(
-    /** @type {LLMProviderName} */
-    normalizedProvider
-  )) {
-    throw new Error(`Unsupported LLM provider: ${configuredProvider}`);
-  }
-  const provider = (
-    /** @type {LLMProviderName} */
-    normalizedProvider
-  );
-  const providerConfig = resolveProviderConfig(provider, environment);
-  const providerDefaultModel = provider === "azure" && "deployment" in providerConfig ? providerConfig.deployment : DEFAULT_MODELS[provider];
-  const model = String(
-    agentConfig.model ?? providerDefaultModel ?? ""
-  ).trim();
-  if (!model) {
-    throw new Error(`Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider ${provider}.`);
-  }
-  const providers = (
-    /** @type {LLMProviderConfigs} */
-    {
-      [provider]: providerConfig
-    }
-  );
-  return {
-    provider,
-    model,
-    providers
-  };
-}
-function buildRuntimeSkillRoots() {
-  return [
-    ...isGlobalSkillLoadingEnabled() ? GLOBAL_SKILLS_ROOTS : [],
-    SKILLS_ROOT
-  ];
-}
-function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, skillInventory) {
-  const layers = [builtInSystemPrompt.trim()];
-  if (String(workspaceSystemPrompt ?? "").trim()) {
-    layers.push(String(workspaceSystemPrompt).trim());
-  }
-  const skillInventoryMessage = buildSkillInventoryMessage(skillInventory);
-  if (skillInventoryMessage) {
-    layers.push(skillInventoryMessage);
-  }
-  return [{
-    role: "system",
-    content: layers.join("\n\n")
-  }];
-}
-function parseToolArguments(argumentsText) {
-  if (!argumentsText || !String(argumentsText).trim()) {
-    return {};
-  }
-  try {
-    return JSON.parse(argumentsText);
-  } catch {
-    return {
-      __raw: argumentsText
-    };
-  }
-}
-var DEFAULT_BUILT_INS = "all";
-function createToolExecutor(runtime) {
-  return {
-    executeToolCall: async (toolCall, context, options = {}) => executeRuntimeToolCall({
-      toolCall,
-      environment: runtime,
-      builtIns: DEFAULT_BUILT_INS,
-      ...context ? { context } : {},
-      ...options.errorMode ? { errorMode: options.errorMode } : {}
-    }),
-    executeToolCalls: async (toolCalls, context, options = {}) => executeRuntimeToolCalls({
-      toolCalls,
-      environment: runtime,
-      builtIns: DEFAULT_BUILT_INS,
-      ...context ? { context } : {},
-      ...options.errorMode ? { errorMode: options.errorMode } : {}
-    })
-  };
-}
-function createRejectedToolResult(toolCallId, toolName, message) {
-  return {
-    ok: false,
-    status: "rejected",
-    errorType: "tool_execution_rejected",
-    toolCallId,
-    toolName,
-    message
-  };
-}
-function serializeToolResult(result) {
-  if (typeof result === "string") {
-    return result;
-  }
-  return JSON.stringify(result ?? null, null, 2);
-}
-function selectContextMessages(messages, historyMessageLimit) {
-  if (typeof historyMessageLimit !== "number" || !Number.isInteger(historyMessageLimit) || historyMessageLimit < 0) {
-    return messages;
-  }
-  if (historyMessageLimit === 0) {
-    return [];
-  }
-  return messages.slice(-historyMessageLimit);
-}
-async function runChatTurn({
-  chat,
-  userMessage,
-  stream = true,
-  onStreamChunk,
-  onModelResponse,
-  onToolCall,
-  onToolResult,
-  handleToolCall,
-  historyMessageLimit,
-  builtInSystemPrompt,
-  workspaceSystemPrompt,
-  projectSystemPrompt,
-  skillInventory,
-  approvalGate,
-  agentConfig = {},
-  abortSignal
-}) {
-  const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
-  const environmentDefaults = buildEnvironmentDefaults(agentConfig);
-  const executionContext = buildExecutionContext({
-    ...agentConfig,
-    abortSignal
-  });
-  const runtime = createRuntime({
-    providers: runtimeSettings.providers,
-    skillRoots: buildRuntimeSkillRoots(),
-    ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
-  });
-  const pendingUserMessage = {
-    role: "user",
-    content: userMessage,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const contextMessages = selectContextMessages(chat.messages, historyMessageLimit);
-  const toolExecutor = createToolExecutor(runtime);
-  try {
-    const result = await runCompletionLoop({
-      initialState: {
-        conversationMessages: [...contextMessages, pendingUserMessage],
-        persistedMessages: [...chat.messages, pendingUserMessage],
-        finalText: ""
-      },
-      emptyTextRetryLimit: 0,
-      rejectedTextRetryLimit: 0,
-      modelRequest: {
-        mode: stream ? "stream" : "generate",
-        environment: runtime,
-        provider: runtimeSettings.provider,
-        model: runtimeSettings.model,
-        ...stream && typeof onStreamChunk === "function" ? { onChunk: onStreamChunk } : {},
-        ...typeof agentConfig.temperature === "number" ? { temperature: agentConfig.temperature } : {},
-        ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
-        ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
-        builtIns: DEFAULT_BUILT_INS,
-        context: executionContext
-      },
-      ...abortSignal ? { abortSignal } : {},
-      onModelResponse: async ({ response }) => {
-        if (typeof onModelResponse === "function") {
-          onModelResponse(response);
-        }
-      },
-      buildMessages: async ({ state, transientInstruction }) => {
-        const baseMessages = [
-          ...buildBaseSystemMessages(
-            builtInSystemPrompt,
-            workspaceSystemPrompt ?? projectSystemPrompt,
-            skillInventory
-          ),
-          ...state.conversationMessages
-        ];
-        if (!transientInstruction) {
-          return baseMessages;
-        }
-        return [
-          ...baseMessages,
-          {
-            role: "system",
-            content: transientInstruction
-          }
-        ];
-      },
-      onToolCallsResponse: async ({ state, response, toolExecutor: providedToolExecutor }) => {
-        const nextConversationMessages = [...state.conversationMessages, response.assistantMessage];
-        const nextPersistedMessages = [...state.persistedMessages, response.assistantMessage];
-        const activeToolExecutor = providedToolExecutor ?? toolExecutor;
-        for (const toolCall of response.tool_calls ?? []) {
-          const toolName = toolCall.function?.name ?? "unknown_tool";
-          const toolArguments = toolCall.function?.arguments;
-          if (typeof onToolCall === "function") {
-            onToolCall({
-              id: toolCall.id,
-              name: toolName,
-              arguments: toolArguments
-            });
-          }
-          let toolResult;
-          const toolStartedAt = Date.now();
-          if (executionContext.toolPermission === "ask" && approvalGate?.requestApproval) {
-            const approvalDecision = await approvalGate.requestApproval({
-              toolCallId: toolCall.id,
-              toolName,
-              arguments: parseToolArguments(toolArguments ?? "{}")
-            });
-            if (!approvalDecision?.approved) {
-              toolResult = createRejectedToolResult(
-                toolCall.id,
-                toolName,
-                approvalDecision?.reason || `Tool execution rejected: ${toolName}`
-              );
-            }
-          }
-          const toolContext = {
-            ...executionContext,
-            toolCallId: toolCall.id
-          };
-          const executeDefaultToolCall = async () => activeToolExecutor.executeToolCall(toolCall, toolContext, {
-            errorMode: "return-artifact"
-          });
-          if (typeof toolResult === "undefined" && typeof handleToolCall === "function") {
-            const handlerResult = await handleToolCall({
-              toolCall,
-              toolName,
-              arguments: toolArguments,
-              parsedArguments: parseToolArguments(toolArguments ?? "{}"),
-              context: toolContext,
-              executeDefault: executeDefaultToolCall
-            });
-            if (handlerResult?.handled) {
-              toolResult = handlerResult.result;
-            }
-          }
-          if (typeof toolResult === "undefined") {
-            toolResult = await executeDefaultToolCall();
-          }
-          if (typeof onToolResult === "function") {
-            onToolResult({
-              id: toolCall.id,
-              name: toolName,
-              result: toolResult,
-              arguments: toolArguments,
-              durationMs: Date.now() - toolStartedAt
-            });
-          }
-          const toolMessage = {
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: serializeToolResult(toolResult),
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
-          };
-          nextConversationMessages.push(toolMessage);
-          nextPersistedMessages.push(toolMessage);
-        }
-        return {
-          state: {
-            ...state,
-            conversationMessages: nextConversationMessages,
-            persistedMessages: nextPersistedMessages
-          },
-          next: {
-            control: "continue"
-          }
-        };
-      },
-      onTextResponse: async ({ state, response, responseText }) => ({
-        state: {
-          ...state,
-          conversationMessages: [...state.conversationMessages, response.assistantMessage],
-          persistedMessages: [...state.persistedMessages, response.assistantMessage],
-          finalText: responseText
-        }
-      })
-    });
-    if (!result.state.finalText.trim()) {
-      throw new Error(`LLM turn ended without a final text response. Stop reason: ${result.reason}`);
-    }
-    return {
-      assistantText: result.state.finalText.trim(),
-      messages: result.state.persistedMessages ?? result.state.conversationMessages
-    };
-  } finally {
-    await runtime.dispose();
-  }
-}
-
 // cli/src/human-input-ui.ts
 var EXIT_HUMAN_INPUT_TOKEN = "0";
 var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
@@ -1752,11 +1844,11 @@ var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
 function isHumanInputToolName(toolName) {
   return HUMAN_INPUT_TOOL_NAMES.has(toolName);
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function parseJsonRecord(value) {
-  if (isRecord2(value)) {
+  if (isRecord3(value)) {
     return value;
   }
   if (typeof value !== "string") {
@@ -1764,7 +1856,7 @@ function parseJsonRecord(value) {
   }
   try {
     const parsed = JSON.parse(value);
-    return isRecord2(parsed) ? parsed : null;
+    return isRecord3(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -1783,7 +1875,7 @@ function parseHumanInputOption(value, index) {
       label: sanitizeDisplayText(value)
     };
   }
-  if (!isRecord2(value)) {
+  if (!isRecord3(value)) {
     return null;
   }
   const label = readTrimmedString(value, "label") ?? readTrimmedString(value, "text");
@@ -1797,7 +1889,7 @@ function parseHumanInputOption(value, index) {
   };
 }
 function parseHumanInputQuestion(value, index) {
-  if (!isRecord2(value)) {
+  if (!isRecord3(value)) {
     return null;
   }
   const question = readTrimmedString(value, "question") ?? readTrimmedString(value, "prompt");
@@ -2037,7 +2129,7 @@ var MAX_COMMAND_WIDTH = 100;
 var MAX_PREVIEW_LINES = 5;
 var MAX_PREVIEW_LINE_WIDTH = 120;
 var MAX_VERBOSE_JSON_WIDTH = 320;
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function stringifyCompact(value) {
@@ -2048,7 +2140,7 @@ function stringifyCompact(value) {
   }
 }
 function parseJsonRecord2(value) {
-  if (isRecord3(value)) {
+  if (isRecord4(value)) {
     return value;
   }
   if (typeof value !== "string") {
@@ -2056,7 +2148,7 @@ function parseJsonRecord2(value) {
   }
   try {
     const parsed = JSON.parse(value);
-    return isRecord3(parsed) ? parsed : null;
+    return isRecord4(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -2176,7 +2268,7 @@ function formatFileSize(bytes) {
 }
 function extractMeaningfulLine(value) {
   if (typeof value !== "string") {
-    if (isRecord3(value)) {
+    if (isRecord4(value)) {
       return extractMeaningfulLine(
         readFirstString(value, "message", "error", "stderr", "stdout", "detail", "reason")
       );
@@ -2436,7 +2528,7 @@ function summarizeResolveObjectResult(result, forcedDurationMs) {
     return summarizeGenericToolResult(result, "resolve_object", forcedDurationMs);
   }
   const data = readDataField(result);
-  const matches = Array.isArray(data) ? data.filter(isRecord3) : [];
+  const matches = Array.isArray(data) ? data.filter(isRecord4) : [];
   const first = matches[0];
   const displayName = readFirstString(first ?? null, "displayName");
   const canonicalPath = readFirstString(first ?? null, "canonicalPath");
@@ -2458,7 +2550,7 @@ function summarizeSearchContentResult(result, forcedDurationMs) {
     return summarizeGenericToolResult(result, "search_content", forcedDurationMs);
   }
   const data = readDataField(result);
-  const matches = Array.isArray(data) ? data.filter(isRecord3) : [];
+  const matches = Array.isArray(data) ? data.filter(isRecord4) : [];
   const firstPath = readFirstString(matches[0] ?? null, "path");
   return {
     name: "search_content",
@@ -2477,7 +2569,7 @@ function summarizeListContentResult(result, forcedDurationMs) {
     return summarizeGenericToolResult(result, "list_content", forcedDurationMs);
   }
   const data = readDataField(result);
-  const entries = Array.isArray(data) ? data.filter(isRecord3) : [];
+  const entries = Array.isArray(data) ? data.filter(isRecord4) : [];
   const firstPath = readFirstString(entries[0] ?? null, "path");
   return {
     name: "list_content",
@@ -2518,7 +2610,7 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
   if (!ok) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
-  const data = isRecord3(record?.data) ? record.data : null;
+  const data = isRecord4(record?.data) ? record.data : null;
   const path7 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
@@ -2586,7 +2678,7 @@ function rawFieldLines(record) {
   }).filter((line) => line !== null);
 }
 function formatRawCallPayload(toolName, args) {
-  if (toolName === "shell_cmd" && isRecord3(args)) {
+  if (toolName === "shell_cmd" && isRecord4(args)) {
     const lines = [];
     if (typeof args.command === "string") {
       lines.push(`  command: ${JSON.stringify(args.command)}`);
@@ -2605,7 +2697,7 @@ function formatRawCallPayload(toolName, args) {
     return lines.length > 0 ? `
 ${lines.join("\n")}` : "";
   }
-  if (isRecord3(args)) {
+  if (isRecord4(args)) {
     const lines = rawFieldLines(args);
     return lines.length > 0 ? `
 ${lines.join("\n")}` : "";
@@ -3519,17 +3611,6 @@ function parseArguments(argv) {
     message: messageParts.join(" ").trim()
   };
 }
-function normalizeOptionalText(value) {
-  return String(value ?? "").trim();
-}
-function defaultModelForProvider(provider) {
-  return provider.trim().toLowerCase() === "openai" ? "gpt-5" : "";
-}
-function runtimeSettingsForStartup(agentConfig) {
-  const provider = (normalizeOptionalText(agentConfig.provider) || "openai").toLowerCase();
-  const model = normalizeOptionalText(agentConfig.model) || defaultModelForProvider(provider);
-  return { provider, model };
-}
 function formatChatListItem(chat) {
   const marker = chat.isCurrent ? "*" : " ";
   const timestamp = String(chat.updatedAt || chat.createdAt || "").trim();
@@ -3671,7 +3752,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     (io.stderr ?? process.stderr).write(
       `${startupText(
         WORKSPACE_ROOT,
-        runtimeSettingsForStartup(agentConfig),
+        resolveRuntimeSelection(process.env, agentConfig),
         scopedSkillInventory,
         agentWorldSummary
       )}

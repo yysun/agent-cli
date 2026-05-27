@@ -10,6 +10,7 @@
  * - Prints startup diagnostics for workspace root and runtime selection.
  *
  * Recent changes:
+ * - 2026-05-27: Delegated startup runtime selection to core runtime so the CLI stays a UI shell.
  * - 2026-05-27: Printed optional `.agent-world/world.json` workflow and agents on startup.
  * - 2026-05-26: Renamed chat persistence import to chat-store.
  * - 2026-05-26: Omit empty skill scopes from verbose startup diagnostics.
@@ -26,6 +27,7 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
+import { resolveRuntimeSelection } from '../../core/agent-runtime.js';
 import {
   type AgentWorldStartupSummary,
   agentWorldStartupText,
@@ -481,22 +483,6 @@ export function parseArguments(argv: string[]): ParsedArguments {
   };
 }
 
-/** @param {unknown} value */
-function normalizeOptionalText(value): string {
-  return String(value ?? '').trim();
-}
-
-function defaultModelForProvider(provider: string): string {
-  return provider.trim().toLowerCase() === 'openai' ? 'gpt-5' : '';
-}
-
-function runtimeSettingsForStartup(agentConfig: Record<string, unknown>): { provider: string; model: string } {
-  const provider = (normalizeOptionalText(agentConfig.provider) || 'openai').toLowerCase();
-  const model = normalizeOptionalText(agentConfig.model) || defaultModelForProvider(provider);
-
-  return { provider, model };
-}
-
 function formatChatListItem(chat: {
   id: string,
   messageCount?: number,
@@ -669,7 +655,7 @@ export async function main(
     (io.stderr ?? process.stderr).write(
       `${startupText(
         WORKSPACE_ROOT,
-        runtimeSettingsForStartup(agentConfig),
+        resolveRuntimeSelection(process.env, agentConfig),
         scopedSkillInventory,
         agentWorldSummary,
       )}\n`,

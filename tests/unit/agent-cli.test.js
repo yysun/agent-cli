@@ -46,6 +46,7 @@ const CLI_ENVIRONMENT_KEYS = [
   'AGENT_CLI_STREAM_TRACE',
   'AGENT_CLI_WEB_SEARCH',
   'AGENT_CLI_GLOBAL_SKILLS',
+  'AZURE_OPENAI_DEPLOYMENT_NAME',
   'GOOGLE_API_KEY',
   'HOME',
   'OLLAMA_BASE_URL',
@@ -1279,6 +1280,30 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStderr()).toContain('  user: user-skill');
     expect(io.getStderr()).toContain('  project: project-skill');
     expect(io.getStderr()).toContain('Synthetic turn failure');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('uses core runtime selection for startup diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.AGENT_CLI_PROVIDER = 'azure';
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'gpt-5-enterprise';
+
+    const { runCli } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      },
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['--verbose', 'hello'], io);
+
+    expect(io.getStderr()).toContain('Runtime: provider=azure, model=gpt-5-enterprise');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
