@@ -545,6 +545,7 @@ export async function runChatTurn({
   try {
     const persistedMessages = [...chat.messages, pendingUserMessage];
     const toolStartTimes = new Map();
+    const emittedToolCallIds = new Set();
     let finalText = '';
     let failureError = null;
 
@@ -579,6 +580,15 @@ export async function runChatTurn({
       ...(typeof handleToolCall === 'function'
         ? {
           onToolCall: async ({ toolCall, toolName, parsedArguments, context, executeDefault }) => {
+            if (typeof onToolCall === 'function' && !emittedToolCallIds.has(toolCall.id)) {
+              emittedToolCallIds.add(toolCall.id);
+              toolStartTimes.set(toolCall.id, Date.now());
+              onToolCall({
+                id: toolCall.id,
+                name: toolName,
+                arguments: toolCall.function?.arguments,
+              });
+            }
             const handlerResult = await handleToolCall({
               toolCall,
               toolName,
@@ -658,7 +668,8 @@ export async function runChatTurn({
             break;
           case 'tool_start':
             toolStartTimes.set(event.toolCall.id, Date.now());
-            if (typeof onToolCall === 'function') {
+            if (typeof onToolCall === 'function' && !emittedToolCallIds.has(event.toolCall.id)) {
+              emittedToolCallIds.add(event.toolCall.id);
               onToolCall({
                 id: event.toolCall.id,
                 name: event.toolCall.function?.name ?? 'unknown_tool',

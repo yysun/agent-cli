@@ -461,7 +461,8 @@ describe('agent-cli entrypoint', () => {
     await main(['hello'], io, { interactivePrompt: inputPrompt });
 
     expect(io.getStdout()).not.toContain('Please select one workflow pattern.');
-    expect(io.getStdout()).toContain('assistant needs input:');
+    expect(io.getStdout()).not.toContain('assistant needs input:');
+    expect(io.getStdout()).toContain('Select exactly one Agent World workflow pattern to initialize:');
     expect(io.getStdout()).toContain('9. single-agent');
   });
 
@@ -927,8 +928,9 @@ describe('agent-cli entrypoint', () => {
 
     await main(['--verbose', 'hello'], io, { interactivePrompt });
 
-    expect(io.getStderr()).toMatch(/\u001b\[90m\n  ↳ ask_user_input \{.*\n\n\u001b\[0m/s);
-    expect(io.getStdout()).toContain('assistant needs input:');
+    expect(io.getStderr()).toMatch(/\u001b\[90m\n  ↳ ask_user_input \{.*\n\n\u001b\[0m\nContinue\?/s);
+    expect(io.getStdout()).not.toContain('assistant needs input:');
+    expect(io.getStderr()).toContain('Continue?');
   });
 
   it('separates malformed ask_user_input diagnostics from assistant text', async () => {

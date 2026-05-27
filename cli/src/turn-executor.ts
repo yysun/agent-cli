@@ -432,7 +432,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
           heldAssistantText = '';
           pendingDisplay.clear();
-          const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
+          const humanInputOutput = options.verbose ? stderr : options.io.stdout;
+          const result = await collectHumanInputAnswer(request, inputPrompt, humanInputOutput);
           pendingDisplay.noteExternalOutput();
           if (!options.streamOff) {
             pendingDisplay.start({ separateFromText: true });

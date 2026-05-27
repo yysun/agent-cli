@@ -278,7 +278,7 @@ export function formatHumanInputCheckpoint(
   request: PendingHumanInputRequest,
   question: HumanInputQuestion,
 ): string {
-  const lines = ['assistant needs input:', `  ${question.question}`, ''];
+  const lines = [question.question, ''];
 
   question.options.forEach((option, index) => {
     const description = option.description ? ` - ${option.description}` : '';

@@ -515,9 +515,16 @@ describe('agent-runtime', () => {
     });
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
-    const handleToolCall = vi.fn().mockResolvedValue({
-      handled: true,
-      result: { ok: true, status: 'answered' },
+    const callOrder = [];
+    const onToolCall = vi.fn(() => {
+      callOrder.push('onToolCall');
+    });
+    const handleToolCall = vi.fn().mockImplementation(async () => {
+      callOrder.push('handleToolCall');
+      return {
+        handled: true,
+        result: { ok: true, status: 'answered' },
+      };
     });
 
     const result = await runChatTurn({
@@ -529,6 +536,7 @@ describe('agent-runtime', () => {
         provider: 'openai',
         model: 'gpt-5',
       },
+      onToolCall,
       handleToolCall,
     });
 
@@ -545,6 +553,12 @@ describe('agent-runtime', () => {
       parsedArguments: { question: 'Choose', options: ['A', 'B'] },
       executeDefault: expect.any(Function),
     }));
+    expect(onToolCall).toHaveBeenCalledWith({
+      id: 'tool-input-1',
+      name: 'ask_user_input',
+      arguments: '{"question":"Choose","options":["A","B"]}',
+    });
+    expect(callOrder).toEqual(['onToolCall', 'handleToolCall']);
     expect(handlerOutcome).toEqual({ handled: true, result: { ok: true, status: 'answered' } });
     expect(result.assistantText).toBe('Answered');
   });

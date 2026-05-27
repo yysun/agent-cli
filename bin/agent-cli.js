@@ -769,6 +769,7 @@ async function runChatTurn({
   try {
     const persistedMessages = [...chat.messages, pendingUserMessage];
     const toolStartTimes = /* @__PURE__ */ new Map();
+    const emittedToolCallIds = /* @__PURE__ */ new Set();
     let finalText = "";
     let failureError = null;
     const completionOptions = {
@@ -801,6 +802,15 @@ async function runChatTurn({
       },
       ...typeof handleToolCall === "function" ? {
         onToolCall: async ({ toolCall, toolName, parsedArguments, context, executeDefault }) => {
+          if (typeof onToolCall === "function" && !emittedToolCallIds.has(toolCall.id)) {
+            emittedToolCallIds.add(toolCall.id);
+            toolStartTimes.set(toolCall.id, Date.now());
+            onToolCall({
+              id: toolCall.id,
+              name: toolName,
+              arguments: toolCall.function?.arguments
+            });
+          }
           const handlerResult = await handleToolCall({
             toolCall,
             toolName,
@@ -869,7 +879,8 @@ async function runChatTurn({
             break;
           case "tool_start":
             toolStartTimes.set(event.toolCall.id, Date.now());
-            if (typeof onToolCall === "function") {
+            if (typeof onToolCall === "function" && !emittedToolCallIds.has(event.toolCall.id)) {
+              emittedToolCallIds.add(event.toolCall.id);
               onToolCall({
                 id: event.toolCall.id,
                 name: event.toolCall.function?.name ?? "unknown_tool",
@@ -2001,7 +2012,7 @@ function parseSelection(question, selectionType, allowSkip, rawInput) {
   };
 }
 function formatHumanInputCheckpoint(request, question) {
-  const lines = ["assistant needs input:", `  ${question.question}`, ""];
+  const lines = [question.question, ""];
   question.options.forEach((option, index) => {
     const description = option.description ? ` - ${option.description}` : "";
     lines.push(`  ${index + 1}. ${option.label}${description}`);
@@ -3241,7 +3252,8 @@ function createTurnExecutor(options) {
           }
           heldAssistantText = "";
           pendingDisplay.clear();
-          const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
+          const humanInputOutput = options.verbose ? stderr : options.io.stdout;
+          const result = await collectHumanInputAnswer(request, inputPrompt, humanInputOutput);
           pendingDisplay.noteExternalOutput();
           if (!options.streamOff) {
             pendingDisplay.start({ separateFromText: true });
