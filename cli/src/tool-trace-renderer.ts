@@ -718,6 +718,26 @@ function summarizeGenericToolResult(result: unknown, toolName: string, forcedDur
   };
 }
 
+function summarizeLoadSkillResult(result: unknown, forcedDurationMs?: number): ToolResultView {
+  if (typeof result !== 'string') {
+    return summarizeGenericToolResult(result, 'load_skill', forcedDurationMs);
+  }
+
+  const errorMatch = result.match(/<error>\s*([\s\S]*?)\s*<\/error>/);
+  const errorSummary = errorMatch
+    ? truncateOneLine(errorMatch[1].replace(/\s+/g, ' ').trim(), MAX_PREVIEW_LINE_WIDTH)
+    : null;
+  const lineCount = countLines(result);
+
+  return {
+    name: 'load_skill',
+    ok: errorSummary === null,
+    durationMs: forcedDurationMs,
+    summary: errorSummary ?? (lineCount > 1 ? formatLineCount(lineCount) : truncateOneLine(result, MAX_PREVIEW_LINE_WIDTH)),
+    raw: result,
+  };
+}
+
 function rawFieldLines(record: JsonRecord): string[] {
   return Object.entries(record)
     .map(([key, value]) => {
@@ -817,6 +837,10 @@ export function summarizeToolResult(
 ): ToolResultView {
   if (toolName === 'shell_cmd') {
     return summarizeShellToolResult(result, durationMs);
+  }
+
+  if (toolName === 'load_skill') {
+    return summarizeLoadSkillResult(result, durationMs);
   }
 
   if (toolName === 'search_files') {

@@ -2,21 +2,21 @@
  * Workspace Environment
  *
  * Purpose:
- * - Resolve the Agent CLI workspace root and load the allowed invocation-local `.env` keys.
+ * - Resolve the Agent CLI workspace root and load the allowed workspace-local `.env` keys.
  *
  * Key features:
  * - Preserves root precedence across explicit flags, `AGENT_CLI_WORKSPACE`, and cwd.
- * - Resolves `.env` from the process cwd for root discovery, runtime defaults, and credentials.
- * - Creates a cwd `.env.example` template when no cwd `.env` exists and no template is present.
- * - Limits `.env` imports to provider credentials, Agent CLI runtime defaults, and optional workspace selection.
+ * - Resolves `.env` from the selected workspace root for runtime defaults and credentials.
+ * - Creates a workspace `.env.example` template when no workspace `.env` exists and no template is present.
+ * - Limits `.env` imports to provider credentials and Agent CLI runtime defaults.
  *
  * Recent changes:
- * - 2026-05-26: Allowed `AGENT_CLI_GLOBAL_SKILLS` in cwd `.env` for opt-in home skill loading.
+ * - 2026-05-26: Resolved `.env` from the selected workspace root instead of invocation cwd.
+ * - 2026-05-26: Allowed `AGENT_CLI_GLOBAL_SKILLS` in workspace `.env` for opt-in home skill loading.
  * - 2026-05-26: Added LLM-time runtime defaults to allowed `.env` keys.
  * - 2026-05-26: Added `AGENT_CLI_PROVIDER` and `AGENT_CLI_MODEL` runtime defaults.
  * - 2026-05-26: Removed relay configuration from `.env` handling.
  * - 2026-05-24: Removed legacy root-env handling.
- * - 2026-05-24: Resolved credential `.env` from cwd instead of the selected workspace root.
  * - 2026-05-23: Extracted shared workspace preparation for CLI entrypoints.
  */
 import fs from 'node:fs';
@@ -25,7 +25,7 @@ import { config as loadDotEnvConfig } from 'dotenv';
 
 import {
   configureWorkspaceRoot,
-  WORKSPACE_ROOT_ENV_KEY,
+  WORKSPACE_ROOT,
 } from './paths.js';
 
 export const DOTENV_ALLOWED_ENV_KEYS = new Set([
@@ -51,10 +51,9 @@ export const DOTENV_ALLOWED_ENV_KEYS = new Set([
   'AGENT_CLI_STREAM_TRACE',
   'AGENT_CLI_WEB_SEARCH',
   'AGENT_CLI_GLOBAL_SKILLS',
-  WORKSPACE_ROOT_ENV_KEY,
 ]);
 
-const DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials, Agent CLI runtime defaults, and optional workspace selection.
+const DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and Agent CLI runtime defaults.
 # CLI flags override these runtime defaults.
 
 # Agent CLI runtime
@@ -88,15 +87,12 @@ AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_RESOURCE_NAME=
 AZURE_OPENAI_DEPLOYMENT_NAME=
 # AZURE_OPENAI_API_VERSION=
-
-# Optional workspace selection from the invocation directory
-# AGENT_CLI_WORKSPACE=
 `;
 
 const loadedDotEnvPaths = new Set<string>();
 
-function resolveCwdDotEnvPath(): string {
-  return path.join(process.cwd(), '.env');
+function resolveWorkspaceDotEnvPath(workspaceRoot = WORKSPACE_ROOT): string {
+  return path.join(workspaceRoot || process.cwd(), '.env');
 }
 
 function ensureDotEnvExampleFile(dotEnvPath: string): void {
@@ -120,8 +116,8 @@ function ensureDotEnvExampleFile(dotEnvPath: string): void {
   }
 }
 
-export function loadAllowedDotEnvEnvironment(): void {
-  const dotEnvPath = resolveCwdDotEnvPath();
+export function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT): void {
+  const dotEnvPath = resolveWorkspaceDotEnvPath(workspaceRoot);
 
   if (loadedDotEnvPaths.has(dotEnvPath)) {
     return;
@@ -149,23 +145,8 @@ export function loadAllowedDotEnvEnvironment(): void {
   }
 }
 
-export function readWorkspaceRootDotEnvFallback(): string | undefined {
-  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? '').trim()) {
-    return undefined;
-  }
-
-  const parsed = loadDotEnvConfig({
-    processEnv: {},
-    path: resolveCwdDotEnvPath(),
-    quiet: true,
-  }).parsed ?? {};
-  const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? '').trim();
-
-  return workspaceRoot || undefined;
-}
-
 export function prepareWorkspaceEnvironment(workspaceRoot?: string): string {
-  const resolvedRoot = configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
-  loadAllowedDotEnvEnvironment();
+  const resolvedRoot = configureWorkspaceRoot(workspaceRoot);
+  loadAllowedDotEnvEnvironment(resolvedRoot);
   return resolvedRoot;
 }

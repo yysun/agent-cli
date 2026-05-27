@@ -490,10 +490,9 @@ var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
   "AGENT_CLI_STREAM",
   "AGENT_CLI_STREAM_TRACE",
   "AGENT_CLI_WEB_SEARCH",
-  "AGENT_CLI_GLOBAL_SKILLS",
-  WORKSPACE_ROOT_ENV_KEY
+  "AGENT_CLI_GLOBAL_SKILLS"
 ]);
-var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials, Agent CLI runtime defaults, and optional workspace selection.
+var DOTENV_EXAMPLE_CONTENT = `# Keep .env limited to credentials and Agent CLI runtime defaults.
 # CLI flags override these runtime defaults.
 
 # Agent CLI runtime
@@ -527,13 +526,10 @@ AZURE_OPENAI_API_KEY=
 AZURE_OPENAI_RESOURCE_NAME=
 AZURE_OPENAI_DEPLOYMENT_NAME=
 # AZURE_OPENAI_API_VERSION=
-
-# Optional workspace selection from the invocation directory
-# AGENT_CLI_WORKSPACE=
 `;
 var loadedDotEnvPaths = /* @__PURE__ */ new Set();
-function resolveCwdDotEnvPath() {
-  return path4.join(process.cwd(), ".env");
+function resolveWorkspaceDotEnvPath(workspaceRoot = WORKSPACE_ROOT) {
+  return path4.join(workspaceRoot || process.cwd(), ".env");
 }
 function ensureDotEnvExampleFile(dotEnvPath) {
   if (fs3.existsSync(dotEnvPath)) {
@@ -552,8 +548,8 @@ function ensureDotEnvExampleFile(dotEnvPath) {
     throw error;
   }
 }
-function loadAllowedDotEnvEnvironment() {
-  const dotEnvPath = resolveCwdDotEnvPath();
+function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT) {
+  const dotEnvPath = resolveWorkspaceDotEnvPath(workspaceRoot);
   if (loadedDotEnvPaths.has(dotEnvPath)) {
     return;
   }
@@ -574,21 +570,9 @@ function loadAllowedDotEnvEnvironment() {
     process.env[key] = value;
   }
 }
-function readWorkspaceRootDotEnvFallback() {
-  if (String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim()) {
-    return void 0;
-  }
-  const parsed = loadDotEnvConfig({
-    processEnv: {},
-    path: resolveCwdDotEnvPath(),
-    quiet: true
-  }).parsed ?? {};
-  const workspaceRoot = String(parsed[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
-  return workspaceRoot || void 0;
-}
 function prepareWorkspaceEnvironment(workspaceRoot) {
-  const resolvedRoot = configureWorkspaceRoot(workspaceRoot ?? readWorkspaceRootDotEnvFallback());
-  loadAllowedDotEnvEnvironment();
+  const resolvedRoot = configureWorkspaceRoot(workspaceRoot);
+  loadAllowedDotEnvEnvironment(resolvedRoot);
   return resolvedRoot;
 }
 
@@ -2082,6 +2066,21 @@ function summarizeGenericToolResult(result, toolName, forcedDurationMs) {
     raw: result
   };
 }
+function summarizeLoadSkillResult(result, forcedDurationMs) {
+  if (typeof result !== "string") {
+    return summarizeGenericToolResult(result, "load_skill", forcedDurationMs);
+  }
+  const errorMatch = result.match(/<error>\s*([\s\S]*?)\s*<\/error>/);
+  const errorSummary = errorMatch ? truncateOneLine(errorMatch[1].replace(/\s+/g, " ").trim(), MAX_PREVIEW_LINE_WIDTH) : null;
+  const lineCount = countLines(result);
+  return {
+    name: "load_skill",
+    ok: errorSummary === null,
+    durationMs: forcedDurationMs,
+    summary: errorSummary ?? (lineCount > 1 ? formatLineCount(lineCount) : truncateOneLine(result, MAX_PREVIEW_LINE_WIDTH)),
+    raw: result
+  };
+}
 function rawFieldLines(record) {
   return Object.entries(record).map(([key, value]) => {
     const serialized = stringifyCompact(value);
@@ -2160,6 +2159,9 @@ function summarizeToolCall(toolName, args) {
 function summarizeToolResult(toolName, result, durationMs, callArgs) {
   if (toolName === "shell_cmd") {
     return summarizeShellToolResult(result, durationMs);
+  }
+  if (toolName === "load_skill") {
+    return summarizeLoadSkillResult(result, durationMs);
   }
   if (toolName === "search_files") {
     return summarizeSearchFilesResult(result, durationMs);
@@ -2244,6 +2246,8 @@ function formatToolResultDiagnostic(toolResult, mode = "default") {
 }
 
 // cli/src/turn-executor.ts
+var ANSI_GRAY = "\x1B[90m";
+var ANSI_RESET = "\x1B[0m";
 function writeTypeTransitionSeparator(stdout, previousType, nextType) {
   if (previousType && previousType !== nextType) {
     stdout.write("\n");
@@ -2252,6 +2256,12 @@ function writeTypeTransitionSeparator(stdout, previousType, nextType) {
 function writeDiagnostic(stderr, kind, text) {
   stderr.write(`${kind}: ${text}
 `);
+}
+function grayForTerminal(stderr, text) {
+  return stderr.isTTY ? `${ANSI_GRAY}${text}${ANSI_RESET}` : text;
+}
+function stripLeadingLineBreaks(text) {
+  return text.replace(/^\n+/, "");
 }
 async function resolveEffectiveAgentConfig(options = {}) {
   const persistedAgentConfig = loadPersistedRuntimeConfig();
@@ -2278,9 +2288,35 @@ function createTurnExecutor(options) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
     const streamTraceEvents = [];
     let lastStreamType = null;
+    let reasoningDiagnosticOpen = false;
     const pendingDisplay = createPendingDisplay(options.io.stdout);
     const pastMessages = Number(options.agentConfig.pastMessages);
     const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0 ? pastMessages : 0;
+    function beginReasoningDiagnostic() {
+      if (reasoningDiagnosticOpen) {
+        return;
+      }
+      pendingDisplay.clear();
+      writeTypeTransitionSeparator(stderr, lastStreamType, "reasoning");
+      stderr.write(stderr.isTTY ? ANSI_GRAY : "");
+      reasoningDiagnosticOpen = true;
+      lastStreamType = "reasoning";
+    }
+    function writeReasoningDiagnostic(text) {
+      beginReasoningDiagnostic();
+      stderr.write(text);
+    }
+    function closeReasoningDiagnostic() {
+      if (!reasoningDiagnosticOpen) {
+        return false;
+      }
+      stderr.write(stderr.isTTY ? `${ANSI_RESET}
+
+` : "\n\n");
+      reasoningDiagnosticOpen = false;
+      lastStreamType = "reasoning";
+      return true;
+    }
     try {
       if (!options.streamOff) {
         pendingDisplay.start();
@@ -2307,8 +2343,10 @@ function createTurnExecutor(options) {
               warning && typeof warning === "object" && "message" in warning ? warning.message : JSON.stringify(warning ?? null)
             );
             if (options.verbose) {
-              pendingDisplay.clear();
-              writeTypeTransitionSeparator(stderr, lastStreamType, "warning");
+              const closedReasoning = closeReasoningDiagnostic();
+              if (!closedReasoning) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, "warning");
+              }
               writeDiagnostic(stderr, "warning", warningText);
             }
             if (streamTraceEnabled) {
@@ -2325,8 +2363,10 @@ function createTurnExecutor(options) {
               streamError && typeof streamError === "object" && "message" in streamError ? streamError.message : JSON.stringify(streamError ?? null)
             );
             if (options.verbose) {
-              pendingDisplay.clear();
-              writeTypeTransitionSeparator(stderr, lastStreamType, "error");
+              const closedReasoning = closeReasoningDiagnostic();
+              if (!closedReasoning) {
+                writeTypeTransitionSeparator(stderr, lastStreamType, "error");
+              }
               writeDiagnostic(stderr, "error", errorText);
             }
             if (streamTraceEnabled) {
@@ -2340,9 +2380,7 @@ function createTurnExecutor(options) {
           }
           if (reasoningText) {
             if (options.verbose) {
-              pendingDisplay.clear();
-              writeTypeTransitionSeparator(stderr, lastStreamType, "reasoning");
-              writeDiagnostic(stderr, "reasoning", JSON.stringify(reasoningText));
+              writeReasoningDiagnostic(reasoningText);
             }
             if (streamTraceEnabled) {
               streamTraceEvents.push({
@@ -2351,9 +2389,15 @@ function createTurnExecutor(options) {
                 createdAt: (/* @__PURE__ */ new Date()).toISOString()
               });
             }
-            lastStreamType = "reasoning";
+            if (!options.verbose) {
+              lastStreamType = "reasoning";
+            }
           }
           if (chunk.content) {
+            const closedReasoning = closeReasoningDiagnostic();
+            if (!closedReasoning && options.verbose && lastStreamType === "tool_result") {
+              options.io.stdout.write("\n");
+            }
             pendingDisplay.writeText(chunk.content);
             await onAssistantChunk?.(chunk.content);
             if (streamTraceEnabled) {
@@ -2368,8 +2412,9 @@ function createTurnExecutor(options) {
         },
         onToolCall: options.streamOff ? void 0 : (toolCall) => {
           if (options.verbose) {
-            pendingDisplay.clear();
-            stderr.write(formatToolCallDiagnostic(toolCall));
+            const closedReasoning = closeReasoningDiagnostic();
+            const diagnostic = formatToolCallDiagnostic(toolCall);
+            stderr.write(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
           }
           if (streamTraceEnabled) {
             streamTraceEvents.push({
@@ -2378,14 +2423,15 @@ function createTurnExecutor(options) {
               createdAt: (/* @__PURE__ */ new Date()).toISOString()
             });
           }
-          lastStreamType = "tool";
+          lastStreamType = "tool_call";
         },
         onToolResult: options.streamOff ? void 0 : (toolResult) => {
           if (options.verbose) {
-            pendingDisplay.clear();
-            stderr.write(formatToolResultDiagnostic(toolResult));
+            const closedReasoning = closeReasoningDiagnostic();
+            const diagnostic = formatToolResultDiagnostic(toolResult);
+            stderr.write(grayForTerminal(stderr, closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic));
           }
-          lastStreamType = "tool";
+          lastStreamType = "tool_result";
         },
         historyMessageLimit,
         handleToolCall: async ({ toolCall, toolName, arguments: toolArguments }) => {
@@ -2409,6 +2455,7 @@ function createTurnExecutor(options) {
         skillInventory: options.skillInventory,
         agentConfig: options.agentConfig
       });
+      closeReasoningDiagnostic();
       await persistCompletedChat({
         chat,
         messages: turnResult.messages
@@ -2431,6 +2478,7 @@ function createTurnExecutor(options) {
       }
       return turnResult;
     } catch (error) {
+      closeReasoningDiagnostic();
       pendingDisplay.clear();
       if (streamTraceEnabled) {
         const errorText = error instanceof Error ? error.message : String(error);

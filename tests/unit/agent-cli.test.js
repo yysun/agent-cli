@@ -6,7 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
- * - 2026-05-26: Covered `.env` workspace selection creating `.agent-world` under the workspace, not cwd.
+ * - 2026-05-26: Covered workspace-local `.env` loading and `.env.example` creation.
  * - 2026-05-26: Asserted generated initial `.env.example` exactly matches the checked-in example.
  * - 2026-05-26: Added coverage for omitting empty startup skill scopes.
  * - 2026-05-26: Added `.env` and startup coverage for opt-in global skill loading.
@@ -253,6 +253,97 @@ describe('agent-cli entrypoint', () => {
     }));
   });
 
+  it('streams verbose reasoning chunks into one readable diagnostic block', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk }) => {
+      await onStreamChunk?.({ reasoning: 'The' });
+      await onStreamChunk?.({ reasoning: ' user' });
+      await onStreamChunk?.({ reasoning: ' is' });
+      await onStreamChunk?.({ reasoning: ' asking' });
+      await onStreamChunk?.({ content: 'done' });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    const io = {
+      stdout: {
+        write: vi.fn((chunk) => stdoutChunks.push(String(chunk))),
+      },
+      stderr: {
+        write: vi.fn((chunk) => stderrChunks.push(String(chunk))),
+      },
+    };
+
+    await main(['--verbose', 'hello'], io);
+
+    expect(stderrChunks).toEqual(expect.arrayContaining([
+      'The',
+      ' user',
+      ' is',
+      ' asking',
+      '\n\n',
+    ]));
+    expect(stderrChunks.join('')).toContain('The user is asking\n\n');
+    expect(stderrChunks.join('')).not.toContain('reasoning:');
+    expect(stderrChunks.join('')).not.toContain('"The"');
+    expect(stdoutChunks.join('')).toContain('done\n');
+  });
+
+  it('colors verbose reasoning and tool results gray on TTY stderr', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onToolResult }) => {
+      await onStreamChunk?.({ reasoning: 'Thinking' });
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        result: 'Loaded',
+        durationMs: 4,
+      });
+      await onStreamChunk?.({ content: 'done' });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stderrIsTTY: true });
+
+    await main(['--verbose', 'hello'], io);
+
+    expect(io.getStderr()).toContain('\u001b[90mThinking\u001b[0m\n\n');
+    expect(io.getStderr()).not.toContain('reasoning:');
+    expect(io.getStderr()).toContain('\u001b[90m  ✓ load_skill 4ms · Loaded\n\u001b[0m');
+    expect(io.getStdout()).toContain('\ndone\n');
+  });
+
   it('stores workspace state under --workspace instead of the process cwd', async () => {
     const rootPath = await createTestRoot();
     const cwdRoot = await createTestRoot();
@@ -437,15 +528,24 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('loads .env from cwd and creates a cwd .env.example when missing', async () => {
+  it('loads .env from the workspace and creates a workspace .env.example when missing', async () => {
     const rootPath = await createTestRoot();
     const cwdRoot = await createTestRoot();
-    const emptyCwdRoot = await createTestRoot();
-    rootsToClean.push(rootPath, cwdRoot, emptyCwdRoot);
+    const emptyWorkspaceRoot = await createTestRoot();
+    rootsToClean.push(rootPath, cwdRoot, emptyWorkspaceRoot);
     await writeFile(
       path.join(cwdRoot, '.env'),
       [
-        'AGENT_CLI_WORKSPACE=workspace-from-dotenv',
+        'AGENT_CLI_PROVIDER=anthropic',
+        'AGENT_CLI_MODEL=claude-sonnet-4-5',
+        'GOOGLE_API_KEY=cwd-google-key',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFile(
+      path.join(rootPath, '.env'),
+      [
         'AGENT_CLI_PROVIDER=google',
         'AGENT_CLI_MODEL=gemini-2.5-pro',
         'AGENT_CLI_TEMPERATURE=0.3',
@@ -478,7 +578,7 @@ describe('agent-cli entrypoint', () => {
     delete process.env.GOOGLE_API_KEY;
 
     const { main, startupText } = await loadCliModule(cwdRoot);
-    await main(['--help'], createIoCapture());
+    await main(['--workspace', rootPath, '--help'], createIoCapture());
 
     expect(process.env.GOOGLE_API_KEY).toBe('dotenv-google-key');
     expect(process.env.AGENT_CLI_PROVIDER).toBe('google');
@@ -492,18 +592,52 @@ describe('agent-cli entrypoint', () => {
     expect(process.env.AGENT_CLI_STREAM_TRACE).toBe('true');
     expect(process.env.AGENT_CLI_WEB_SEARCH).toBe('medium');
     expect(process.env.AGENT_CLI_GLOBAL_SKILLS).toBe('true');
-    expect(process.env.AGENT_CLI_WORKSPACE).toBe(path.resolve('workspace-from-dotenv'));
-    expect(startupText()).toBe(`Agent CLI starting in ${path.resolve('workspace-from-dotenv')}`);
-    expect(await readdir(path.join(cwdRoot, 'workspace-from-dotenv', '.agent-world'))).toEqual(
+    expect(process.env.AGENT_CLI_WORKSPACE).toBe(rootPath);
+    expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
+    expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
       expect.arrayContaining(['chats', 'skills']),
     );
     await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
 
-    const { main: missingEnvMain } = await loadCliModule(emptyCwdRoot);
-    await missingEnvMain(['--help'], createIoCapture());
-    const example = await readFile(path.join(emptyCwdRoot, '.env.example'), 'utf8');
+    const { main: missingEnvMain } = await loadCliModule(cwdRoot);
+    await missingEnvMain(['--workspace', emptyWorkspaceRoot, '--help'], createIoCapture());
+    const example = await readFile(path.join(emptyWorkspaceRoot, '.env.example'), 'utf8');
     const checkedInExample = await readFile(path.join(originalCwd, '.env.example'), 'utf8');
     expect(example).toBe(checkedInExample);
+    await expect(readFile(path.join(cwdRoot, '.env.example'), 'utf8')).rejects.toThrow();
+  });
+
+  it('does not use AGENT_CLI_WORKSPACE from workspace .env as a root selector', async () => {
+    const rootPath = await createTestRoot();
+    const redirectedRoot = await createTestRoot();
+    rootsToClean.push(rootPath, redirectedRoot);
+    await writeFile(
+      path.join(rootPath, '.env'),
+      [
+        `AGENT_CLI_WORKSPACE=${redirectedRoot}`,
+        'AGENT_CLI_PROVIDER=google',
+        'AGENT_CLI_MODEL=gemini-2.5-pro',
+        'GOOGLE_API_KEY=dotenv-google-key',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    delete process.env.AGENT_CLI_WORKSPACE;
+    delete process.env.AGENT_CLI_PROVIDER;
+    delete process.env.AGENT_CLI_MODEL;
+    delete process.env.GOOGLE_API_KEY;
+
+    const { main, startupText } = await loadCliModule(rootPath);
+    const resolvedRootPath = process.cwd();
+    await main(['--help'], createIoCapture());
+
+    expect(process.env.AGENT_CLI_WORKSPACE).toBe(resolvedRootPath);
+    expect(startupText()).toBe(`Agent CLI starting in ${resolvedRootPath}`);
+    expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
+      expect.arrayContaining(['chats', 'skills']),
+    );
+    await expect(readdir(path.join(redirectedRoot, '.agent-world'))).rejects.toThrow();
   });
 
   it('treats a symlinked bin path as the CLI entrypoint', async () => {

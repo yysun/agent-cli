@@ -73,7 +73,7 @@ npm run electron:start
 
 ## Runtime Settings
 
-LLM-time defaults come from `.env`:
+LLM-time defaults come from the selected workspace `.env`:
 
 ```sh
 AGENT_CLI_PROVIDER=openai
@@ -119,8 +119,7 @@ Workspace root resolution:
 1. `--workspace <path>`
 2. legacy `--project <path>`
 3. `AGENT_CLI_WORKSPACE`
-4. `AGENT_CLI_WORKSPACE` loaded from the invocation cwd `.env`
-5. current working directory
+4. current working directory
 
 The resolved absolute root is published back to `AGENT_CLI_WORKSPACE`.
 
@@ -145,7 +144,7 @@ No `.chats` compatibility path is current. No `.agent-world/worlds`, registry, `
 
 ## Environment
 
-`.env` is loaded from the invocation cwd and is limited to credentials, `AGENT_CLI_*` runtime defaults, and optional workspace selection. CLI flags override `.env`.
+`.env` is loaded from the selected workspace root and is limited to credentials and `AGENT_CLI_*` runtime defaults. CLI flags override `.env`; `.env` does not select the workspace.
 
 Supported credential keys include:
 

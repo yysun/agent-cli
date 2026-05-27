@@ -34,6 +34,9 @@ import {
   formatToolResultDiagnostic,
 } from './tool-trace-renderer.js';
 
+const ANSI_GRAY = '\u001b[90m';
+const ANSI_RESET = '\u001b[0m';
+
 export interface WritableSink {
   isTTY?: boolean;
   write(chunk: string): void;
@@ -112,6 +115,14 @@ function writeDiagnostic(stderr: WritableSink, kind: string, text: string): void
   stderr.write(`${kind}: ${text}\n`);
 }
 
+function grayForTerminal(stderr: WritableSink, text: string): string {
+  return stderr.isTTY ? `${ANSI_GRAY}${text}${ANSI_RESET}` : text;
+}
+
+function stripLeadingLineBreaks(text: string): string {
+  return text.replace(/^\n+/, '');
+}
+
 export async function resolveEffectiveAgentConfig(
   options: ResolveEffectiveAgentConfigOptions = {},
 ): Promise<Record<string, unknown>> {
@@ -142,11 +153,40 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
     const streamTraceEvents: StreamTraceEvent[] = [];
     let lastStreamType: string | null = null;
+    let reasoningDiagnosticOpen = false;
     const pendingDisplay = createPendingDisplay(options.io.stdout);
     const pastMessages = Number(options.agentConfig.pastMessages);
     const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
       ? pastMessages
       : 0;
+
+    function beginReasoningDiagnostic(): void {
+      if (reasoningDiagnosticOpen) {
+        return;
+      }
+
+      pendingDisplay.clear();
+      writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
+      stderr.write(stderr.isTTY ? ANSI_GRAY : '');
+      reasoningDiagnosticOpen = true;
+      lastStreamType = 'reasoning';
+    }
+
+    function writeReasoningDiagnostic(text: string): void {
+      beginReasoningDiagnostic();
+      stderr.write(text);
+    }
+
+    function closeReasoningDiagnostic(): boolean {
+      if (!reasoningDiagnosticOpen) {
+        return false;
+      }
+
+      stderr.write(stderr.isTTY ? `${ANSI_RESET}\n\n` : '\n\n');
+      reasoningDiagnosticOpen = false;
+      lastStreamType = 'reasoning';
+      return true;
+    }
 
     try {
       if (!options.streamOff) {
@@ -181,8 +221,10 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               );
 
               if (options.verbose) {
-                pendingDisplay.clear();
-                writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
+                const closedReasoning = closeReasoningDiagnostic();
+                if (!closedReasoning) {
+                  writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
+                }
                 writeDiagnostic(stderr, 'warning', warningText);
               }
 
@@ -205,8 +247,10 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               );
 
               if (options.verbose) {
-                pendingDisplay.clear();
-                writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
+                const closedReasoning = closeReasoningDiagnostic();
+                if (!closedReasoning) {
+                  writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
+                }
                 writeDiagnostic(stderr, 'error', errorText);
               }
 
@@ -223,9 +267,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
             if (reasoningText) {
               if (options.verbose) {
-                pendingDisplay.clear();
-                writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
-                writeDiagnostic(stderr, 'reasoning', JSON.stringify(reasoningText));
+                writeReasoningDiagnostic(reasoningText);
               }
 
               if (streamTraceEnabled) {
@@ -236,10 +278,16 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
                 });
               }
 
-              lastStreamType = 'reasoning';
+              if (!options.verbose) {
+                lastStreamType = 'reasoning';
+              }
             }
 
             if (chunk.content) {
+              const closedReasoning = closeReasoningDiagnostic();
+              if (!closedReasoning && options.verbose && lastStreamType === 'tool_result') {
+                options.io.stdout.write('\n');
+              }
               pendingDisplay.writeText(chunk.content);
               await onAssistantChunk?.(chunk.content);
 
@@ -258,8 +306,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           ? undefined
           : (toolCall) => {
             if (options.verbose) {
-              pendingDisplay.clear();
-              stderr.write(formatToolCallDiagnostic(toolCall));
+              const closedReasoning = closeReasoningDiagnostic();
+              const diagnostic = formatToolCallDiagnostic(toolCall);
+              stderr.write(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
             }
 
             if (streamTraceEnabled) {
@@ -270,17 +319,18 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               });
             }
 
-            lastStreamType = 'tool';
+            lastStreamType = 'tool_call';
           },
         onToolResult: options.streamOff
           ? undefined
           : (toolResult) => {
             if (options.verbose) {
-              pendingDisplay.clear();
-              stderr.write(formatToolResultDiagnostic(toolResult));
+              const closedReasoning = closeReasoningDiagnostic();
+              const diagnostic = formatToolResultDiagnostic(toolResult);
+              stderr.write(grayForTerminal(stderr, closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic));
             }
 
-            lastStreamType = 'tool';
+            lastStreamType = 'tool_result';
           },
         historyMessageLimit,
         handleToolCall: async ({ toolCall, toolName, arguments: toolArguments }) => {
@@ -307,6 +357,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         agentConfig: options.agentConfig,
       });
 
+      closeReasoningDiagnostic();
+
       await persistCompletedChat({
         chat,
         messages: turnResult.messages,
@@ -332,6 +384,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
       return turnResult;
     } catch (error) {
+      closeReasoningDiagnostic();
       pendingDisplay.clear();
       if (streamTraceEnabled) {
         const errorText = error instanceof Error ? error.message : String(error);

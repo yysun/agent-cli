@@ -17,7 +17,7 @@
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
  * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
  * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
- * - 2026-05-20: Added startup root output and cwd .env fallback.
+ * - 2026-05-20: Added startup root output.
  */
 import path from 'node:path';
 import { realpathSync } from 'node:fs';
