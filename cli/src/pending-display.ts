@@ -18,9 +18,10 @@ export interface PendingDisplaySink {
 }
 
 export interface PendingDisplay {
-  start(): void;
+  start(options?: { separateFromText?: boolean }): void;
   clear(): void;
   writeText(text: string): void;
+  noteExternalOutput(text?: string): void;
   hasWrittenText(): boolean;
 }
 
@@ -31,6 +32,7 @@ export function createPendingDisplay(output: PendingDisplaySink): PendingDisplay
   let interval: NodeJS.Timeout | null = null;
   let pendingVisible = false;
   let wroteText = false;
+  let cursorAtLineStart = true;
 
   const writeFrame = (frame: string): void => {
     output.write(`\r\u001b[2K${frame}`);
@@ -44,14 +46,20 @@ export function createPendingDisplay(output: PendingDisplaySink): PendingDisplay
   };
 
   return {
-    start(): void {
+    start(options = {}): void {
       if (!output.isTTY || interval || pendingVisible) {
         return;
+      }
+
+      if (options.separateFromText === true && wroteText && !cursorAtLineStart) {
+        output.write('\n');
+        cursorAtLineStart = true;
       }
 
       pendingVisible = true;
       frameIndex = frames.length - 1;
       output.write(frames[frameIndex] ?? '...');
+      cursorAtLineStart = false;
       interval = setInterval(() => {
         frameIndex = (frameIndex + 1) % frames.length;
         writeFrame(frames[frameIndex] ?? '...');
@@ -65,6 +73,7 @@ export function createPendingDisplay(output: PendingDisplaySink): PendingDisplay
       if (pendingVisible) {
         output.write(clearFrame);
         pendingVisible = false;
+        cursorAtLineStart = true;
       }
     },
 
@@ -74,7 +83,15 @@ export function createPendingDisplay(output: PendingDisplaySink): PendingDisplay
       if (text) {
         wroteText = true;
         output.write(text);
+        cursorAtLineStart = /(?:\r?\n|\r)$/u.test(text);
       }
+    },
+
+    noteExternalOutput(text?: string): void {
+      wroteText = true;
+      cursorAtLineStart = typeof text === 'string' && text.length > 0
+        ? /(?:\r?\n|\r)$/u.test(text)
+        : false;
     },
 
     hasWrittenText(): boolean {

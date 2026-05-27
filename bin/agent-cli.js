@@ -1977,6 +1977,7 @@ function createPendingDisplay(output) {
   let interval = null;
   let pendingVisible = false;
   let wroteText = false;
+  let cursorAtLineStart = true;
   const writeFrame = (frame) => {
     output.write(`\r\x1B[2K${frame}`);
   };
@@ -1987,13 +1988,18 @@ function createPendingDisplay(output) {
     }
   };
   return {
-    start() {
+    start(options = {}) {
       if (!output.isTTY || interval || pendingVisible) {
         return;
+      }
+      if (options.separateFromText === true && wroteText && !cursorAtLineStart) {
+        output.write("\n");
+        cursorAtLineStart = true;
       }
       pendingVisible = true;
       frameIndex = frames.length - 1;
       output.write(frames[frameIndex] ?? "...");
+      cursorAtLineStart = false;
       interval = setInterval(() => {
         frameIndex = (frameIndex + 1) % frames.length;
         writeFrame(frames[frameIndex] ?? "...");
@@ -2005,6 +2011,7 @@ function createPendingDisplay(output) {
       if (pendingVisible) {
         output.write(clearFrame);
         pendingVisible = false;
+        cursorAtLineStart = true;
       }
     },
     writeText(text) {
@@ -2012,7 +2019,12 @@ function createPendingDisplay(output) {
       if (text) {
         wroteText = true;
         output.write(text);
+        cursorAtLineStart = /(?:\r?\n|\r)$/u.test(text);
       }
+    },
+    noteExternalOutput(text) {
+      wroteText = true;
+      cursorAtLineStart = typeof text === "string" && text.length > 0 ? /(?:\r?\n|\r)$/u.test(text) : false;
     },
     hasWrittenText() {
       return wroteText;
@@ -2900,6 +2912,11 @@ function normalizeStreamTraceUsage(value) {
   }
   return Object.keys(normalizedUsage).length > 0 ? normalizedUsage : void 0;
 }
+function isToolContinuationModelResponse(response) {
+  const stopKind = typeof response.stopKind === "string" ? response.stopKind.toLowerCase() : "";
+  const finishReason = typeof response.providerStopReason === "string" ? response.providerStopReason.toLowerCase() : "";
+  return stopKind.includes("tool") || finishReason.includes("tool");
+}
 async function resolveEffectiveAgentConfig(options = {}) {
   const persistedAgentConfig = loadPersistedRuntimeConfig();
   const baseAgentConfig = {
@@ -3066,7 +3083,7 @@ function createTurnExecutor(options) {
             lastStreamType = "text";
           }
         },
-        onModelResponse: options.streamOff ? void 0 : (response) => {
+        onModelResponse: (response) => {
           if (streamTraceEnabled) {
             annotatePendingTextTraceEvents(response);
           }
@@ -3077,10 +3094,11 @@ function createTurnExecutor(options) {
               verboseDisplay.writeDiagnostic(diagnostic, "model_response");
               lastStreamType = "model_response";
             }
+          } else if (!options.streamOff && isToolContinuationModelResponse(response)) {
+            pendingDisplay.start({ separateFromText: true });
           }
         },
-        onToolCall: options.streamOff ? void 0 : (toolCall) => {
-          pendingDisplay.clear();
+        onToolCall: (toolCall) => {
           const humanInputRequest = parseHumanInputRequest(
             toolCall.name,
             toolCall.arguments,
@@ -3091,6 +3109,11 @@ function createTurnExecutor(options) {
             heldAssistantText = "";
           } else {
             flushHeldAssistantText();
+          }
+          if (options.verbose || humanInputRequest) {
+            pendingDisplay.clear();
+          } else if (!options.streamOff) {
+            pendingDisplay.start({ separateFromText: true });
           }
           if (options.verbose) {
             const diagnostic = formatToolCallDiagnostic(toolCall);
@@ -3108,11 +3131,13 @@ function createTurnExecutor(options) {
           }
           lastStreamType = "tool_call";
         },
-        onToolResult: options.streamOff ? void 0 : (toolResult) => {
-          pendingDisplay.clear();
+        onToolResult: (toolResult) => {
           if (options.verbose) {
+            pendingDisplay.clear();
             const diagnostic = formatToolResultDiagnostic(toolResult);
             verboseDisplay.writeDiagnostic(diagnostic, "tool_result");
+          } else if (!options.streamOff) {
+            pendingDisplay.start({ separateFromText: true });
           }
           lastStreamType = "tool_result";
         },
@@ -3125,8 +3150,9 @@ function createTurnExecutor(options) {
           heldAssistantText = "";
           pendingDisplay.clear();
           const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
+          pendingDisplay.noteExternalOutput();
           if (!options.streamOff) {
-            pendingDisplay.start();
+            pendingDisplay.start({ separateFromText: true });
           }
           return {
             handled: true,
@@ -3154,6 +3180,7 @@ function createTurnExecutor(options) {
       chat.messages = turnResult.messages;
       if (options.streamOff) {
         pendingDisplay.clear();
+        verboseDisplay.beforeAssistantText(lastStreamType);
         options.io.stdout.write(`${turnResult.assistantText}
 `);
       } else if (pendingDisplay.hasWrittenText()) {

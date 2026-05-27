@@ -138,6 +138,16 @@ function normalizeStreamTraceUsage(value: unknown): StreamTraceEvent['usage'] {
   return Object.keys(normalizedUsage).length > 0 ? normalizedUsage : undefined;
 }
 
+function isToolContinuationModelResponse(response: {
+  stopKind?: unknown;
+  providerStopReason?: unknown;
+}): boolean {
+  const stopKind = typeof response.stopKind === 'string' ? response.stopKind.toLowerCase() : '';
+  const finishReason = typeof response.providerStopReason === 'string' ? response.providerStopReason.toLowerCase() : '';
+
+  return stopKind.includes('tool') || finishReason.includes('tool');
+}
+
 export async function resolveEffectiveAgentConfig(
   options: ResolveEffectiveAgentConfigOptions = {},
 ): Promise<Record<string, unknown>> {
@@ -350,9 +360,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               lastStreamType = 'text';
             }
           },
-        onModelResponse: options.streamOff
-          ? undefined
-          : (response: { stopKind?: unknown; providerStopReason?: unknown; usage?: unknown }) => {
+        onModelResponse: (response: { stopKind?: unknown; providerStopReason?: unknown; usage?: unknown }) => {
             if (streamTraceEnabled) {
               annotatePendingTextTraceEvents(response);
             }
@@ -364,12 +372,11 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
                 verboseDisplay.writeDiagnostic(diagnostic, 'model_response');
                 lastStreamType = 'model_response';
               }
+            } else if (!options.streamOff && isToolContinuationModelResponse(response)) {
+              pendingDisplay.start({ separateFromText: true });
             }
           },
-        onToolCall: options.streamOff
-          ? undefined
-          : (toolCall) => {
-            pendingDisplay.clear();
+        onToolCall: (toolCall) => {
             const humanInputRequest = parseHumanInputRequest(
               toolCall.name,
               toolCall.arguments,
@@ -381,6 +388,12 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               heldAssistantText = '';
             } else {
               flushHeldAssistantText();
+            }
+
+            if (options.verbose || humanInputRequest) {
+              pendingDisplay.clear();
+            } else if (!options.streamOff) {
+              pendingDisplay.start({ separateFromText: true });
             }
 
             if (options.verbose) {
@@ -399,14 +412,13 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
             lastStreamType = 'tool_call';
           },
-        onToolResult: options.streamOff
-          ? undefined
-          : (toolResult) => {
-            pendingDisplay.clear();
-
+        onToolResult: (toolResult) => {
             if (options.verbose) {
+              pendingDisplay.clear();
               const diagnostic = formatToolResultDiagnostic(toolResult);
               verboseDisplay.writeDiagnostic(diagnostic, 'tool_result');
+            } else if (!options.streamOff) {
+              pendingDisplay.start({ separateFromText: true });
             }
 
             lastStreamType = 'tool_result';
@@ -421,8 +433,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           heldAssistantText = '';
           pendingDisplay.clear();
           const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
+          pendingDisplay.noteExternalOutput();
           if (!options.streamOff) {
-            pendingDisplay.start();
+            pendingDisplay.start({ separateFromText: true });
           }
 
           return {
@@ -456,6 +469,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
       if (options.streamOff) {
         pendingDisplay.clear();
+        verboseDisplay.beforeAssistantText(lastStreamType);
         options.io.stdout.write(`${turnResult.assistantText}\n`);
       } else if (pendingDisplay.hasWrittenText()) {
         pendingDisplay.clear();

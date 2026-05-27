@@ -402,9 +402,10 @@ describe('agent-cli entrypoint', () => {
     const io = createIoCapture({ stdoutIsTTY: true });
     const inputPrompt = createScriptedPrompt(['1']);
 
-    await main(['hello'], io, { inputPrompt });
+    await main(['hello'], io, { interactivePrompt: inputPrompt });
 
     expect(io.getStdout()).toContain('partial');
+    expect(io.getStdout()).toContain('0. Exit UI\n\n...');
     expect(io.getStdout()).toMatch(/\r\u001b\[2K {3}\r\u001b\[2K\n$/);
     expect(io.getStdout()).not.toMatch(/\.\.\.\n$/);
   });
@@ -502,6 +503,230 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K');
     expect(io.getStderr()).toContain('\u001b[90m\n  ↳ load_skill {"skill_id":"agent-world-skill"}\u001b[0m');
     expect(io.getStderr()).toContain('\u001b[90m\n  ✓ load_skill 7ms · Loaded\n\u001b[0m');
+  });
+
+  it('keeps pending dots visible during non-verbose tool calls before assistant text', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onToolCall, onToolResult, onStreamChunk }) => {
+      onToolCall?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        arguments: '{"skill_id":"agent-world-skill"}',
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 320);
+      });
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        result: 'Loaded',
+        durationMs: 320,
+      });
+      await onStreamChunk?.({ content: 'done' });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true });
+
+    await main(['hello'], io);
+
+    expect(io.getStdout()).toMatch(/^\.\.\.\r\u001b\[2K\./);
+    expect(io.getStdout()).toContain('done\n');
+    expect(io.getStderr()).toBe('');
+  });
+
+  it('shows pending dots instead of non-verbose model and tool diagnostics after assistant text', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onModelResponse, onToolCall, onToolResult }) => {
+      await onStreamChunk?.({ content: 'I will load context.' });
+      onModelResponse?.({
+        stopKind: 'tool_use',
+        providerStopReason: 'tool_calls',
+      });
+      onToolCall?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        arguments: '{"skill_id":"agent-world-skill"}',
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 320);
+      });
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        result: 'Loaded',
+        durationMs: 320,
+      });
+      await onStreamChunk?.({ content: ' Done.' });
+
+      return {
+        assistantText: 'I will load context. Done.',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'I will load context. Done.' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true });
+
+    await main(['hello'], io);
+
+    expect(io.getStdout()).toContain('I will load context.\n...');
+    expect(io.getStdout()).toContain(' Done.\n');
+    expect(io.getStdout()).not.toContain('model.response');
+    expect(io.getStdout()).not.toContain('load_skill');
+    expect(io.getStderr()).toBe('');
+  });
+
+  it('keeps verbose model and tool diagnostics when assistant text streaming is off', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onModelResponse, onToolCall, onToolResult, onStreamChunk }) => {
+      expect(onStreamChunk).toBeUndefined();
+      onModelResponse?.({
+        stopKind: 'tool_use',
+        providerStopReason: 'tool_calls',
+      });
+      onToolCall?.({
+        id: 'skill-1',
+        name: 'load_skill',
+        arguments: '{"skill_id":"agent-world-skill"}',
+      });
+      onToolResult?.({
+        id: 'skill-1',
+        name: 'load_skill',
+        result: '<skill_context id="agent-world-skill">Loaded</skill_context>',
+        durationMs: 4,
+      });
+      onToolCall?.({
+        id: 'read-1',
+        name: 'read_file',
+        arguments: '{"filePath":"README.md"}',
+      });
+      onToolResult?.({
+        id: 'read-1',
+        name: 'read_file',
+        arguments: '{"filePath":"README.md"}',
+        result: {
+          ok: true,
+          filePath: 'README.md',
+          content: '# Agent CLI\n\nUseful docs.',
+        },
+        durationMs: 3,
+      });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stderrIsTTY: true });
+
+    await main(['--verbose', '--stream-off', 'hello'], io);
+
+    expect(io.getStderr()).toContain('✓ model.response stopKind=tool_use · finish_reason=tool_calls');
+    expect(io.getStderr()).toContain('↳ load_skill {"skill_id":"agent-world-skill"}');
+    expect(io.getStderr()).toContain('✓ load_skill 4ms');
+    expect(io.getStderr()).toContain('↳ read_file README.md');
+    expect(io.getStderr()).toContain('✓ read_file 3ms');
+    expect(io.getStdout()).toBe('\ndone\n');
+  });
+
+  it('observes model and tool lifecycle in non-verbose stream-off mode without displaying diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const observed = {
+      modelResponse: false,
+      toolCall: false,
+      toolResult: false,
+    };
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onModelResponse, onToolCall, onToolResult, onStreamChunk }) => {
+      expect(onStreamChunk).toBeUndefined();
+      expect(onModelResponse).toEqual(expect.any(Function));
+      expect(onToolCall).toEqual(expect.any(Function));
+      expect(onToolResult).toEqual(expect.any(Function));
+
+      onModelResponse?.({
+        stopKind: 'tool_use',
+        providerStopReason: 'tool_calls',
+      });
+      observed.modelResponse = true;
+      onToolCall?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        arguments: '{"skill_id":"agent-world-skill"}',
+      });
+      observed.toolCall = true;
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        result: 'Loaded',
+        durationMs: 2,
+      });
+      observed.toolResult = true;
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true, stderrIsTTY: true });
+
+    await main(['--stream-off', 'hello'], io);
+
+    expect(observed).toEqual({
+      modelResponse: true,
+      toolCall: true,
+      toolResult: true,
+    });
+    expect(io.getStdout()).toBe('done\n');
+    expect(io.getStderr()).toBe('');
   });
 
   it('colors verbose reasoning and tool results gray on TTY stderr', async () => {
