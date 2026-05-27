@@ -655,7 +655,8 @@ describe('agent-cli entrypoint', () => {
 
     const output = chunks.join('');
     expect(output).toContain('I will create the directory.\u001b[90m\n\n  ✓ model.response stopKind=tool_use');
-    expect(output).toContain('tool_calls\n\u001b[0m\u001b[90m\n\n  ↳ create_directory /tmp/example');
+    expect(output).toContain('tool_calls\n\u001b[0m\u001b[90m\n  ↳ create_directory /tmp/example');
+    expect(output).not.toContain('tool_calls\n\u001b[0m\u001b[90m\n\n  ↳ create_directory');
   });
 
   it('colors verbose ask_user_input calls gray and leaves a blank line after', async () => {

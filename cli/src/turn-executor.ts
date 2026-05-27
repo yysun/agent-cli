@@ -35,19 +35,10 @@ import {
   formatToolCallDiagnostic,
   formatToolResultDiagnostic,
 } from './tool-trace-renderer.js';
+import type { CliIo } from './terminal-io.js';
+import { createVerboseDisplay } from './verbose-display.js';
 
-const ANSI_GRAY = '\u001b[90m';
-const ANSI_RESET = '\u001b[0m';
-
-export interface WritableSink {
-  isTTY?: boolean;
-  write(chunk: string): void;
-}
-
-export interface CliIo {
-  stdout: WritableSink;
-  stderr?: WritableSink;
-}
+export type { CliIo, WritableSink } from './terminal-io.js';
 
 export interface SkillInventoryItem {
   skillId: string;
@@ -108,46 +99,6 @@ export interface ExecuteTurnParams {
   abortSignal?: AbortSignal;
   onAssistantChunk?: (chunkText: string) => Promise<void> | void;
   inputPrompt?: HumanInputPrompt;
-}
-
-type VisibleOutputType = 'assistant_text' | 'verbose_diagnostic';
-
-function writeTypeTransitionSeparator(
-  stdout: WritableSink,
-  previousType: string | null,
-  nextType: string,
-): void {
-  if (previousType && previousType !== nextType) {
-    stdout.write('\n');
-  }
-}
-
-function grayForTerminal(stderr: WritableSink, text: string): string {
-  return stderr.isTTY ? `${ANSI_GRAY}${text}${ANSI_RESET}` : text;
-}
-
-function stripLeadingLineBreaks(text: string): string {
-  return text.replace(/^\n+/, '');
-}
-
-function countLeadingLineBreaks(text: string): number {
-  return text.match(/^\n*/)?.[0].length ?? 0;
-}
-
-function countTrailingLineBreaks(text: string): number {
-  return text.match(/\n*$/)?.[0].length ?? 0;
-}
-
-function ensureLeadingLineBreaks(text: string, minimumCount: number): string {
-  return `${'\n'.repeat(Math.max(0, minimumCount - countLeadingLineBreaks(text)))}${text}`;
-}
-
-function isVerboseDiagnosticType(type: string | null): boolean {
-  return type === 'warning'
-    || type === 'error'
-    || type === 'tool_call'
-    || type === 'tool_result'
-    || type === 'model_response';
 }
 
 function shouldHoldPotentialHumanInputPrompt(text: string): boolean {
@@ -218,84 +169,23 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
     const streamTraceEvents: StreamTraceEvent[] = [];
     const pendingTextTraceEvents: StreamTraceEvent[] = [];
     let lastStreamType: string | null = null;
-    let lastVisibleOutputType: VisibleOutputType | null = null;
-    let lastVerboseDiagnosticTrailingLineBreaks = 0;
-    let reasoningDiagnosticOpen = false;
     let heldAssistantText = '';
     const pendingDisplay = createPendingDisplay(options.io.stdout);
+    const verboseDisplay = createVerboseDisplay({
+      stdout: options.io.stdout,
+      stderr,
+      clearPending: () => pendingDisplay.clear(),
+      enabled: options.verbose,
+    });
     const pastMessages = Number(options.agentConfig.pastMessages);
     const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
       ? pastMessages
       : 0;
 
-    function beginReasoningDiagnostic(): void {
-      if (reasoningDiagnosticOpen) {
-        return;
-      }
-
-      pendingDisplay.clear();
-      if (lastVisibleOutputType === 'assistant_text') {
-        stderr.write('\n\n');
-      } else {
-        writeTypeTransitionSeparator(stderr, lastStreamType, 'reasoning');
-      }
-      stderr.write(stderr.isTTY ? ANSI_GRAY : '');
-      reasoningDiagnosticOpen = true;
-      lastStreamType = 'reasoning';
-      lastVisibleOutputType = 'verbose_diagnostic';
-      lastVerboseDiagnosticTrailingLineBreaks = 0;
-    }
-
-    function writeReasoningDiagnostic(text: string): void {
-      beginReasoningDiagnostic();
-      stderr.write(text);
-    }
-
-    function closeReasoningDiagnostic(): boolean {
-      if (!reasoningDiagnosticOpen) {
-        return false;
-      }
-
-      stderr.write(stderr.isTTY ? `${ANSI_RESET}\n\n` : '\n\n');
-      reasoningDiagnosticOpen = false;
-      lastStreamType = 'reasoning';
-      lastVisibleOutputType = 'verbose_diagnostic';
-      lastVerboseDiagnosticTrailingLineBreaks = 2;
-      return true;
-    }
-
     function writeAssistantText(text: string): void {
       pendingDisplay.writeText(text);
-      if (text) {
-        lastVisibleOutputType = 'assistant_text';
-      }
+      verboseDisplay.noteAssistantText(text);
       void onAssistantChunk?.(text);
-    }
-
-    function writeVerboseDiagnosticBlock(text: string, options: { gray?: boolean; separateFromVisibleOutput?: boolean } = {}): void {
-      const separatedText = (
-        lastVisibleOutputType === 'assistant_text'
-        || (options.separateFromVisibleOutput === true && lastVisibleOutputType !== null)
-      )
-        ? ensureLeadingLineBreaks(text, 2)
-        : text;
-
-      lastVerboseDiagnosticTrailingLineBreaks = countTrailingLineBreaks(separatedText);
-      lastVisibleOutputType = 'verbose_diagnostic';
-      stderr.write(options.gray === false ? separatedText : grayForTerminal(stderr, separatedText));
-    }
-
-    function writeAssistantBoundaryAfterVerboseDiagnostic(): void {
-      if (!options.verbose || lastVisibleOutputType !== 'verbose_diagnostic' || !isVerboseDiagnosticType(lastStreamType)) {
-        return;
-      }
-
-      const missingLineBreaks = Math.max(0, 2 - lastVerboseDiagnosticTrailingLineBreaks);
-      if (missingLineBreaks > 0) {
-        options.io.stdout.write('\n'.repeat(missingLineBreaks));
-      }
-
-      lastVerboseDiagnosticTrailingLineBreaks = 0;
     }
 
     function flushHeldAssistantText(): void {
@@ -303,7 +193,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         return;
       }
 
-      writeAssistantBoundaryAfterVerboseDiagnostic();
+      verboseDisplay.beforeAssistantText(lastStreamType);
       writeAssistantText(heldAssistantText);
       heldAssistantText = '';
     }
@@ -376,9 +266,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
               if (options.verbose) {
                 pendingDisplay.clear();
-                const closedReasoning = closeReasoningDiagnostic();
                 const diagnostic = `warning: ${warningText}\n`;
-                writeVerboseDiagnosticBlock(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
+                verboseDisplay.writeDiagnostic(diagnostic, 'warning');
               }
 
               if (streamTraceEnabled) {
@@ -401,9 +290,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
               if (options.verbose) {
                 pendingDisplay.clear();
-                const closedReasoning = closeReasoningDiagnostic();
                 const diagnostic = `error: ${errorText}\n`;
-                writeVerboseDiagnosticBlock(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
+                verboseDisplay.writeDiagnostic(diagnostic, 'error');
               }
 
               if (streamTraceEnabled) {
@@ -419,7 +307,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
             if (reasoningText) {
               if (options.verbose) {
-                writeReasoningDiagnostic(reasoningText);
+                verboseDisplay.writeReasoning(reasoningText, lastStreamType);
+                lastStreamType = 'reasoning';
               }
 
               if (streamTraceEnabled) {
@@ -436,9 +325,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             }
 
             if (chunk.content) {
-              const closedReasoning = closeReasoningDiagnostic();
+              const closedReasoning = verboseDisplay.closeReasoning();
               if (!closedReasoning) {
-                writeAssistantBoundaryAfterVerboseDiagnostic();
+                verboseDisplay.beforeAssistantText(lastStreamType);
               }
 
               if (heldAssistantText || shouldHoldPotentialHumanInputPrompt(chunk.content)) {
@@ -470,10 +359,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
             if (options.verbose) {
               pendingDisplay.clear();
-              const closedReasoning = closeReasoningDiagnostic();
               const diagnostic = formatModelResponseDiagnostic(response);
               if (diagnostic) {
-                writeVerboseDiagnosticBlock(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
+                verboseDisplay.writeDiagnostic(diagnostic, 'model_response');
                 lastStreamType = 'model_response';
               }
             }
@@ -496,11 +384,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             }
 
             if (options.verbose) {
-              const closedReasoning = closeReasoningDiagnostic();
               const diagnostic = formatToolCallDiagnostic(toolCall);
               const displayDiagnostic = humanInputToolCall ? `${diagnostic}\n\n` : diagnostic;
-              const outputDiagnostic = closedReasoning ? stripLeadingLineBreaks(displayDiagnostic) : displayDiagnostic;
-              writeVerboseDiagnosticBlock(outputDiagnostic, { separateFromVisibleOutput: true });
+              verboseDisplay.writeDiagnostic(displayDiagnostic, 'tool_call');
             }
 
             if (streamTraceEnabled) {
@@ -519,9 +405,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             pendingDisplay.clear();
 
             if (options.verbose) {
-              const closedReasoning = closeReasoningDiagnostic();
               const diagnostic = formatToolResultDiagnostic(toolResult);
-              writeVerboseDiagnosticBlock(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
+              verboseDisplay.writeDiagnostic(diagnostic, 'tool_result');
             }
 
             lastStreamType = 'tool_result';
@@ -552,7 +437,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         agentConfig: options.agentConfig,
       });
 
-      closeReasoningDiagnostic();
+      verboseDisplay.closeReasoning();
       flushHeldAssistantText();
 
       await persistCompletedChat({
@@ -581,7 +466,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
       return turnResult;
     } catch (error) {
-      closeReasoningDiagnostic();
+      verboseDisplay.closeReasoning();
       pendingDisplay.clear();
       if (streamTraceEnabled) {
         const errorText = error instanceof Error ? error.message : String(error);
