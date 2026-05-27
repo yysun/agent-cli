@@ -495,13 +495,13 @@ describe('agent-cli entrypoint', () => {
         runChatTurn,
       },
     });
-    const io = createIoCapture({ stdoutIsTTY: true });
+    const io = createIoCapture({ stdoutIsTTY: true, stderrIsTTY: true });
 
     await main(['--verbose', 'hello'], io);
 
     expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K');
-    expect(io.getStderr()).toContain('↳ load_skill {"skill_id":"agent-world-skill"}');
-    expect(io.getStderr()).toContain('✓ load_skill 7ms · Loaded');
+    expect(io.getStderr()).toContain('\u001b[90m\n  ↳ load_skill {"skill_id":"agent-world-skill"}\u001b[0m');
+    expect(io.getStderr()).toContain('\u001b[90m\n  ✓ load_skill 7ms · Loaded\n\u001b[0m');
   });
 
   it('colors verbose reasoning and tool results gray on TTY stderr', async () => {
@@ -541,6 +541,121 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStderr()).not.toContain('reasoning:');
     expect(io.getStderr()).toContain('\u001b[90m  ✓ load_skill 4ms · Loaded\n\u001b[0m');
     expect(io.getStdout()).toContain('\ndone\n');
+  });
+
+  it('separates verbose diagnostics from adjacent assistant text with blank lines', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall, onToolResult }) => {
+      await onStreamChunk?.({ content: 'before' });
+      onToolCall?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        arguments: '{"skill_id":"agent-world-skill"}',
+      });
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        result: 'Loaded',
+        durationMs: 4,
+      });
+      await onStreamChunk?.({ content: 'after' });
+
+      return {
+        assistantText: 'beforeafter',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'beforeafter' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const chunks = [];
+    const io = {
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+        },
+      },
+      stderr: {
+        isTTY: true,
+        write(chunk) {
+          chunks.push(String(chunk));
+        },
+      },
+    };
+
+    await main(['--verbose', 'hello'], io);
+
+    const output = chunks.join('');
+    expect(output).toContain('before\u001b[90m\n\n  ↳ load_skill {"skill_id":"agent-world-skill"}');
+    expect(output).toContain('✓ load_skill 4ms · Loaded\n\u001b[0m\nafter');
+  });
+
+  it('keeps a blank line above create_directory diagnostics after model metadata', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onModelResponse, onToolCall, onToolResult }) => {
+      await onStreamChunk?.({ content: 'I will create the directory.' });
+      onModelResponse?.({
+        stopKind: 'tool_use',
+        providerStopReason: 'tool_calls',
+      });
+      onToolCall?.({
+        id: 'tool-1',
+        name: 'create_directory',
+        arguments: '{"path":"/tmp/example"}',
+      });
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'create_directory',
+        result: { ok: true, status: 'created' },
+        durationMs: 1,
+      });
+
+      return {
+        assistantText: 'I will create the directory.',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'I will create the directory.' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const chunks = [];
+    const io = {
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+        },
+      },
+      stderr: {
+        isTTY: true,
+        write(chunk) {
+          chunks.push(String(chunk));
+        },
+      },
+    };
+
+    await main(['--verbose', 'hello'], io);
+
+    const output = chunks.join('');
+    expect(output).toContain('I will create the directory.\u001b[90m\n\n  ✓ model.response stopKind=tool_use');
+    expect(output).toContain('tool_calls\n\u001b[0m\u001b[90m\n\n  ↳ create_directory /tmp/example');
   });
 
   it('colors verbose ask_user_input calls gray and leaves a blank line after', async () => {
@@ -587,6 +702,68 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStderr()).toMatch(/\u001b\[90m\n  ↳ ask_user_input \{.*\n\n\u001b\[0m/s);
     expect(io.getStdout()).toContain('assistant needs input:');
+  });
+
+  it('separates malformed ask_user_input diagnostics from assistant text', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const inputArgs = JSON.stringify({
+      questions: '[{"header":"Workflow Setup","id":"workflow-pattern","question":"What next?"}]',
+    });
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onToolCall, onToolResult }) => {
+      await onStreamChunk?.({ content: 'Choose a workflow.' });
+      onToolCall?.({
+        id: 'input-1',
+        name: 'ask_user_input',
+        arguments: inputArgs,
+      });
+      onToolResult?.({
+        id: 'input-1',
+        name: 'ask_user_input',
+        result: {
+          ok: false,
+          status: 'error',
+          errorType: 'tool_parameter_validation_failed',
+        },
+        durationMs: 0,
+      });
+
+      return {
+        assistantText: 'Choose a workflow.',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'Choose a workflow.' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const chunks = [];
+    const io = {
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+        },
+      },
+      stderr: {
+        isTTY: true,
+        write(chunk) {
+          chunks.push(String(chunk));
+        },
+      },
+    };
+
+    await main(['--verbose', 'hello'], io);
+
+    const output = chunks.join('');
+    expect(output).toContain('Choose a workflow.\u001b[90m\n\n  ↳ ask_user_input');
+    expect(output).toContain('\n\n\u001b[0m\u001b[90m\n  ✗ ask_user_input 0ms ·');
   });
 
   it('stores workspace state under --workspace instead of the process cwd', async () => {

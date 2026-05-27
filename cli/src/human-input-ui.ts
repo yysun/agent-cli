@@ -71,6 +71,10 @@ const HUMAN_INPUT_TOOL_NAMES = new Set([
   'ask_user_question',
 ]);
 
+export function isHumanInputToolName(toolName: string): boolean {
+  return HUMAN_INPUT_TOOL_NAMES.has(toolName);
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -167,7 +171,7 @@ export function parseHumanInputRequest(
   payload: unknown,
   fallbackRequestId = '',
 ): PendingHumanInputRequest | null {
-  if (!HUMAN_INPUT_TOOL_NAMES.has(toolName)) {
+  if (!isHumanInputToolName(toolName)) {
     return null;
   }
 
