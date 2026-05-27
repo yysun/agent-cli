@@ -478,9 +478,24 @@ export async function persistCompletedChat({ chat, messages, setCurrent = true }
 }
 
 /**
+ * @param {{ id: string }} chat
+ */
+export async function clearPersistedChatEvents(chat) {
+  await ensureChatStorage();
+  await writeTextAtomic(buildWorldChatEventsPath(chat.id), '');
+}
+
+/**
  * @param {{
  *   chat: { id: string },
- *   streamTraceEvents: Array<{ type: string, text: string, createdAt: string }>,
+ *   streamTraceEvents: Array<{
+ *     type: string,
+ *     text: string,
+ *     createdAt: string,
+ *     stopKind?: string,
+ *     finishReason?: string,
+ *     usage?: { inputTokens?: number, outputTokens?: number, totalTokens?: number },
+ *   }>,
  * }} params
  */
 export async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
@@ -497,6 +512,15 @@ export async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
     type: String(event.type ?? ''),
     text: String(event.text ?? ''),
     createdAt: normalizeTimestamp(event.createdAt, new Date().toISOString()),
+    ...(typeof event.stopKind === 'string' && event.stopKind.trim()
+      ? { stopKind: event.stopKind }
+      : {}),
+    ...(typeof event.finishReason === 'string' && event.finishReason.trim()
+      ? { finishReason: event.finishReason }
+      : {}),
+    ...(event.usage && typeof event.usage === 'object'
+      ? { usage: event.usage }
+      : {}),
   })));
 
   return eventsPath;

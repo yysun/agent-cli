@@ -176,17 +176,35 @@ describe('agent-runtime', () => {
   it('runs a chat turn through llm-runtime with normalized runtime settings', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
-    runCompletionLoop.mockImplementation(async ({ initialState, modelRequest, onTextResponse }) => {
+    runCompletionLoop.mockImplementation(async ({ initialState, modelRequest, onModelResponse, onTextResponse }) => {
       await modelRequest.onChunk?.({ content: 'Hello' });
       await modelRequest.onChunk?.({ content: ' world' });
 
+      const response = {
+        type: 'text',
+        content: 'Hello world',
+        assistantMessage: { role: 'assistant', content: 'Hello world' },
+        stopKind: 'natural_stop',
+        providerStopReason: 'stop',
+        usage: {
+          inputTokens: 4,
+          outputTokens: 2,
+          totalTokens: 6,
+        },
+      };
+      await onModelResponse?.({
+        state: initialState,
+        iteration: 1,
+        elapsedMs: 12,
+        messages: [],
+        rawResponse: response,
+        response,
+        normalizedToolIntent: false,
+      });
+
       const textStep = await onTextResponse({
         state: initialState,
-        response: {
-          type: 'text',
-          content: 'Hello world',
-          assistantMessage: { role: 'assistant', content: 'Hello world' },
-        },
+        response,
         messages: [],
         iteration: 1,
         responseText: 'Hello world',
@@ -200,6 +218,7 @@ describe('agent-runtime', () => {
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
     const onStreamChunk = vi.fn();
+    const onModelResponse = vi.fn();
 
     const result = await runChatTurn({
       chat: {
@@ -226,6 +245,7 @@ describe('agent-runtime', () => {
         },
       },
       onStreamChunk,
+      onModelResponse,
     });
 
     expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
@@ -264,6 +284,15 @@ describe('agent-runtime', () => {
       }),
     }));
     expect(onStreamChunk).toHaveBeenCalledTimes(2);
+    expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({
+      stopKind: 'natural_stop',
+      providerStopReason: 'stop',
+      usage: {
+        inputTokens: 4,
+        outputTokens: 2,
+        totalTokens: 6,
+      },
+    }));
     expect(result.assistantText).toBe('Hello world');
     expect(result.messages.at(-1)).toEqual({ role: 'assistant', content: 'Hello world' });
     expect(runtimeDispose).toHaveBeenCalledTimes(1);

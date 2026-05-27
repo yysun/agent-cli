@@ -250,7 +250,18 @@ describe('chat-store', () => {
     await persistStreamTraceEvents({
       chat,
       streamTraceEvents: [
-        { type: 'warning', text: 'ignored', createdAt: '2026-05-07T12:00:00.000Z' },
+        {
+          type: 'text',
+          text: 'done',
+          createdAt: '2026-05-07T12:00:00.000Z',
+          stopKind: 'natural_stop',
+          finishReason: 'stop',
+          usage: {
+            inputTokens: 7,
+            outputTokens: 3,
+            totalTokens: 10,
+          },
+        },
       ],
     });
 
@@ -258,8 +269,15 @@ describe('chat-store', () => {
     expect(JSON.parse(eventLine)).toMatchObject({
       kind: 'stream_trace',
       chatId: chat.id,
-      type: 'warning',
-      text: 'ignored',
+      type: 'text',
+      text: 'done',
+      stopKind: 'natural_stop',
+      finishReason: 'stop',
+      usage: {
+        inputTokens: 7,
+        outputTokens: 3,
+        totalTokens: 10,
+      },
     });
   });
 

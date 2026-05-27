@@ -8,9 +8,11 @@
  * Key features:
  * - Resolves workspace-local resources from `AGENT_CLI_WORKSPACE` when set, otherwise cwd.
  * - Keeps durable storage directly under `.agent-world` with no world-id folder layer.
+ * - Resolves optional `.agent-world/world.json` startup metadata.
  * - Uses `.agent-world/chats` for chat state and `.agent-world/skills` for workspace skills.
  *
  * Recent changes:
+ * - 2026-05-27: Added the workspace-local Agent World JSON config path.
  * - 2026-05-26: Added explicit global skill roots for opt-in home-directory skill loading.
  * - 2026-05-26: Flattened storage by removing workspace registry, worlds, world ids, and agent paths.
  * - 2026-05-26: Switched workspace skill storage back to `.agent-world/skills`.
@@ -41,6 +43,7 @@ export let AGENTS_SKILLS_ROOT = '';
 export let GLOBAL_SKILLS_ROOTS: string[] = [];
 export let SKILLS_ROOT = '';
 export let AGENT_WORLD_ROOT = '';
+export let AGENT_WORLD_CONFIG_PATH = '';
 export let AGENT_WORLD_CHATS_ROOT = '';
 export let CURRENT_CHAT_PATH = '';
 
@@ -59,6 +62,7 @@ export function configureWorkspaceRoot(
   AGENTS_SKILLS_ROOT = path.join(os.homedir(), '.agents', 'skills');
   GLOBAL_SKILLS_ROOTS = [USER_SKILLS_ROOT, AGENTS_SKILLS_ROOT];
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, '.agent-world');
+  AGENT_WORLD_CONFIG_PATH = path.join(AGENT_WORLD_ROOT, 'world.json');
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, 'skills');
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, 'chats');
   CURRENT_CHAT_PATH = path.join(AGENT_WORLD_CHATS_ROOT, 'current.json');

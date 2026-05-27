@@ -20,7 +20,7 @@ The supported boundary is intentionally small: run agents locally through `agent
 - No web app.
 - No `agent-world-cli` binary.
 - No `agent-cli --remote`.
-- No worlds, world ids, registry, `world.json`, agents folder, or `agent.json`.
+- No worlds, world ids, registry, agents folder, or `agent.json`.
 
 ## Install
 
@@ -127,6 +127,7 @@ Durable workspace state is flat:
 
 ```text
 .agent-world/
+  world.json
   chats/
     current.json
     {chatId}/
@@ -140,7 +141,9 @@ Durable workspace state is flat:
 
 Workspace skills in `.agent-world/skills` always load. Global skills are opt-in: set `AGENT_CLI_GLOBAL_SKILLS=true` to also load `~/.agent-world/skills` and `~/.agents/skills`. Workspace skills win when skill ids collide.
 
-No `.chats` compatibility path is current. No `.agent-world/worlds`, registry, `world.json`, `agents`, or `agent.json` layout is current.
+If `.agent-world/world.json` exists, CLI startup diagnostics validate it with `core/world.schema.json`, then print the configured workflow plus agent list. This file is metadata for display; it does not restore persisted worlds or agent selection.
+
+No `.chats` compatibility path is current. No `.agent-world/worlds`, registry, `agents`, or `agent.json` layout is current.
 
 ## Environment
 

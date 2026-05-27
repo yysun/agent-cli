@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatModelResponseDiagnostic,
   formatToolCallDiagnostic,
   formatToolResultDiagnostic,
 } from '../../cli/src/tool-trace-renderer.ts';
@@ -44,5 +45,19 @@ describe('tool trace renderer', () => {
     expect(resultOutput).not.toContain('<skill_context');
     expect(resultOutput).not.toContain('<description>');
     expect(resultOutput).not.toContain('<skill_root>');
+  });
+
+  it('renders model response stop metadata and token usage', () => {
+    const output = formatModelResponseDiagnostic({
+      stopKind: 'natural_stop',
+      providerStopReason: 'stop',
+      usage: {
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10,
+      },
+    });
+
+    expect(output.trim()).toBe('✓ model.response stopKind=natural_stop · finish_reason=stop · tokens input=8 output=2 total=10');
   });
 });

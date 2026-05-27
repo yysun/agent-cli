@@ -205,9 +205,8 @@ function loadPersistedRuntimeConfig() {
   });
 }
 
-// core/agent-files.ts
-import { promises as fs2 } from "node:fs";
-import path3 from "node:path";
+// core/agent-world-config.ts
+import { promises as fs } from "node:fs";
 
 // core/paths.ts
 import path from "node:path";
@@ -228,6 +227,7 @@ var AGENTS_SKILLS_ROOT = "";
 var GLOBAL_SKILLS_ROOTS = [];
 var SKILLS_ROOT = "";
 var AGENT_WORLD_ROOT = "";
+var AGENT_WORLD_CONFIG_PATH = "";
 var AGENT_WORLD_CHATS_ROOT = "";
 var CURRENT_CHAT_PATH = "";
 function configureWorkspaceRoot(workspaceRoot, options = {}) {
@@ -241,6 +241,7 @@ function configureWorkspaceRoot(workspaceRoot, options = {}) {
   AGENTS_SKILLS_ROOT = path.join(os.homedir(), ".agents", "skills");
   GLOBAL_SKILLS_ROOTS = [USER_SKILLS_ROOT, AGENTS_SKILLS_ROOT];
   AGENT_WORLD_ROOT = path.join(WORKSPACE_ROOT, ".agent-world");
+  AGENT_WORLD_CONFIG_PATH = path.join(AGENT_WORLD_ROOT, "world.json");
   SKILLS_ROOT = path.join(AGENT_WORLD_ROOT, "skills");
   AGENT_WORLD_CHATS_ROOT = path.join(AGENT_WORLD_ROOT, "chats");
   CURRENT_CHAT_PATH = path.join(AGENT_WORLD_CHATS_ROOT, "current.json");
@@ -263,8 +264,476 @@ function buildWorldChatEventsPath(chatId) {
   return path.join(buildWorldChatDirectoryPath(chatId), "events.jsonl");
 }
 
+// core/world.schema.json
+var world_schema_default = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: "https://agent-world.local/world.schema.json",
+  title: "Agent World Config",
+  description: "Schema for .agent-world/world.json. It validates the config shape; the router still validates graph references and prompt file existence at runtime.",
+  type: "object",
+  additionalProperties: false,
+  required: ["world", "workflow", "agents"],
+  properties: {
+    $schema: {
+      type: "string"
+    },
+    world: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "name"],
+      properties: {
+        id: {
+          $ref: "#/$defs/id"
+        },
+        name: {
+          type: "string",
+          minLength: 1
+        },
+        entryAgent: {
+          $ref: "#/$defs/id"
+        },
+        mainAgent: {
+          $ref: "#/$defs/id"
+        },
+        stopToken: {
+          type: "string",
+          default: "<world>pass</world>"
+        },
+        turnLimit: {
+          type: "integer",
+          minimum: 1,
+          default: 30
+        },
+        mode: {
+          type: "string",
+          enum: ["host_driven_router_only", "host_delegated"],
+          default: "host_driven_router_only"
+        }
+      }
+    },
+    workflow: {
+      type: "object",
+      additionalProperties: false,
+      required: ["entry", "entryAgent", "nodes", "edges"],
+      properties: {
+        type: {
+          type: "string",
+          enum: ["dag", "mention_graph"],
+          default: "dag"
+        },
+        entry: {
+          $ref: "#/$defs/id"
+        },
+        entryAgent: {
+          $ref: "#/$defs/id"
+        },
+        enforceEdges: {
+          type: "boolean",
+          default: true
+        },
+        nodes: {
+          type: "object",
+          minProperties: 1,
+          propertyNames: {
+            $ref: "#/$defs/id"
+          },
+          additionalProperties: {
+            $ref: "#/$defs/workflowNode"
+          }
+        },
+        edges: {
+          type: "object",
+          propertyNames: {
+            anyOf: [
+              {
+                $ref: "#/$defs/id"
+              },
+              {
+                const: "human"
+              }
+            ]
+          },
+          additionalProperties: {
+            type: "array",
+            items: {
+              $ref: "#/$defs/id"
+            },
+            uniqueItems: true
+          }
+        }
+      }
+    },
+    routing: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        noMentionFromHumanGoesTo: {
+          $ref: "#/$defs/id"
+        },
+        stopToken: {
+          type: "string"
+        }
+      }
+    },
+    agents: {
+      type: "object",
+      minProperties: 1,
+      propertyNames: {
+        $ref: "#/$defs/id"
+      },
+      additionalProperties: {
+        $ref: "#/$defs/agent"
+      }
+    }
+  },
+  $defs: {
+    id: {
+      type: "string",
+      pattern: "^[A-Za-z0-9_-]+$",
+      minLength: 1
+    },
+    path: {
+      type: "string",
+      minLength: 1,
+      pattern: "^[^\\u0000]+$"
+    },
+    workflowNode: {
+      type: "object",
+      additionalProperties: false,
+      required: ["agent"],
+      properties: {
+        agent: {
+          $ref: "#/$defs/id"
+        },
+        instruction: {
+          type: "string"
+        },
+        requires: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/id"
+          },
+          uniqueItems: true
+        }
+      }
+    },
+    agent: {
+      type: "object",
+      additionalProperties: false,
+      required: ["promptPath"],
+      properties: {
+        name: {
+          type: "string",
+          minLength: 1
+        },
+        role: {
+          type: "string",
+          minLength: 1
+        },
+        promptPath: {
+          $ref: "#/$defs/path"
+        }
+      }
+    }
+  }
+};
+
+// core/agent-world-config.ts
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeScalarText(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+function formatStructuredValue(value) {
+  const scalarText = normalizeScalarText(value);
+  if (scalarText) {
+    return scalarText;
+  }
+  if (Array.isArray(value)) {
+    return value.map(formatStructuredValue).filter(Boolean).join(", ");
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  for (const key of ["pattern", "type", "entry", "entryAgent", "name", "id", "mode"]) {
+    const text = normalizeScalarText(value[key]);
+    if (text) {
+      return text;
+    }
+  }
+  return Object.keys(value).sort((left, right) => left.localeCompare(right)).join(", ");
+}
+function extractWorkflowLabel(config) {
+  return formatStructuredValue(config.workflow ?? config.workflowPattern ?? config.pattern);
+}
+function extractAgentLabel(value, fallbackLabel = "") {
+  const scalarText = normalizeScalarText(value);
+  if (scalarText) {
+    return scalarText;
+  }
+  if (!isRecord(value)) {
+    return fallbackLabel;
+  }
+  for (const key of ["id", "name", "agent", "role"]) {
+    const text = normalizeScalarText(value[key]);
+    if (text) {
+      return text;
+    }
+  }
+  return fallbackLabel;
+}
+function extractAgentLabels(config) {
+  const agents = config.agents;
+  if (Array.isArray(agents)) {
+    return agents.map((agent) => extractAgentLabel(agent)).filter(Boolean);
+  }
+  if (isRecord(agents)) {
+    return Object.keys(agents).filter(Boolean);
+  }
+  return [];
+}
+function readSchemaType(schema) {
+  return normalizeScalarText(schema.type);
+}
+function describeSchemaType(schema) {
+  const type = readSchemaType(schema);
+  return type || "valid value";
+}
+function getJsonType(value) {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (Number.isInteger(value)) {
+    return "integer";
+  }
+  return typeof value;
+}
+function formatJsonPath(pathParts) {
+  return pathParts.length === 0 ? "$" : `$${pathParts.join("")}`;
+}
+function appendPathKey(pathParts, key) {
+  return [...pathParts, /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`];
+}
+function appendPathIndex(pathParts, index) {
+  return [...pathParts, `[${index}]`];
+}
+function resolveSchemaReference(reference, rootSchema) {
+  if (!reference.startsWith("#/")) {
+    return null;
+  }
+  let current = rootSchema;
+  for (const rawPart of reference.slice(2).split("/")) {
+    const part = rawPart.replace(/~1/gu, "/").replace(/~0/gu, "~");
+    if (!isRecord(current)) {
+      return null;
+    }
+    current = current[part];
+  }
+  return isRecord(current) ? current : null;
+}
+function valuesAreUnique(values) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const value of values) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+  }
+  return true;
+}
+function validateJsonSchemaValue({
+  value,
+  schema,
+  rootSchema,
+  pathParts
+}) {
+  const reference = normalizeScalarText(schema.$ref);
+  if (reference) {
+    const resolvedSchema = resolveSchemaReference(reference, rootSchema);
+    if (!resolvedSchema) {
+      return [`${formatJsonPath(pathParts)} uses unsupported schema reference ${reference}`];
+    }
+    return validateJsonSchemaValue({
+      value,
+      schema: resolvedSchema,
+      rootSchema,
+      pathParts
+    });
+  }
+  const anyOf = Array.isArray(schema.anyOf) ? schema.anyOf : [];
+  if (anyOf.length > 0) {
+    const matched = anyOf.some((candidate) => isRecord(candidate) && validateJsonSchemaValue({
+      value,
+      schema: candidate,
+      rootSchema,
+      pathParts
+    }).length === 0);
+    return matched ? [] : [`${formatJsonPath(pathParts)} does not match any allowed schema`];
+  }
+  if ("const" in schema && value !== schema.const) {
+    return [`${formatJsonPath(pathParts)} must be ${JSON.stringify(schema.const)}`];
+  }
+  const errors = [];
+  const type = readSchemaType(schema);
+  if (type) {
+    const actualType = getJsonType(value);
+    const validType = type === "integer" ? Number.isInteger(value) : actualType === type;
+    if (!validType) {
+      return [`${formatJsonPath(pathParts)} must be ${describeSchemaType(schema)}, got ${actualType}`];
+    }
+  }
+  if (type === "string" && typeof value === "string") {
+    const minLength = Number(schema.minLength);
+    if (Number.isFinite(minLength) && value.length < minLength) {
+      errors.push(`${formatJsonPath(pathParts)} must be at least ${minLength} characters`);
+    }
+    const pattern = normalizeScalarText(schema.pattern);
+    if (pattern && !new RegExp(pattern, "u").test(value)) {
+      errors.push(`${formatJsonPath(pathParts)} must match /${pattern}/`);
+    }
+    const enumValues = Array.isArray(schema.enum) ? schema.enum : [];
+    if (enumValues.length > 0 && !enumValues.includes(value)) {
+      errors.push(`${formatJsonPath(pathParts)} must be one of ${enumValues.map((item) => JSON.stringify(item)).join(", ")}`);
+    }
+  }
+  if ((type === "integer" || type === "number") && typeof value === "number") {
+    const minimum = Number(schema.minimum);
+    if (Number.isFinite(minimum) && value < minimum) {
+      errors.push(`${formatJsonPath(pathParts)} must be >= ${minimum}`);
+    }
+  }
+  if (type === "array" && Array.isArray(value)) {
+    const itemsSchema = isRecord(schema.items) ? schema.items : null;
+    if (itemsSchema) {
+      value.forEach((item, index) => {
+        errors.push(...validateJsonSchemaValue({
+          value: item,
+          schema: itemsSchema,
+          rootSchema,
+          pathParts: appendPathIndex(pathParts, index)
+        }));
+      });
+    }
+    if (schema.uniqueItems === true && !valuesAreUnique(value)) {
+      errors.push(`${formatJsonPath(pathParts)} must contain unique items`);
+    }
+  }
+  if (type === "object" && isRecord(value)) {
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
+    for (const key of required) {
+      if (!(key in value)) {
+        errors.push(`${formatJsonPath(pathParts)}.${key} is required`);
+      }
+    }
+    const minProperties = Number(schema.minProperties);
+    if (Number.isFinite(minProperties) && Object.keys(value).length < minProperties) {
+      errors.push(`${formatJsonPath(pathParts)} must have at least ${minProperties} properties`);
+    }
+    if (isRecord(schema.propertyNames)) {
+      for (const key of Object.keys(value)) {
+        errors.push(...validateJsonSchemaValue({
+          value: key,
+          schema: schema.propertyNames,
+          rootSchema,
+          pathParts: appendPathKey(pathParts, key)
+        }).map((error) => `${error} as a property name`));
+      }
+    }
+    const additionalProperties = schema.additionalProperties;
+    for (const [key, propertyValue] of Object.entries(value)) {
+      const propertySchema = properties[key];
+      if (isRecord(propertySchema)) {
+        errors.push(...validateJsonSchemaValue({
+          value: propertyValue,
+          schema: propertySchema,
+          rootSchema,
+          pathParts: appendPathKey(pathParts, key)
+        }));
+        continue;
+      }
+      if (additionalProperties === false) {
+        errors.push(`${formatJsonPath(appendPathKey(pathParts, key))} is not allowed`);
+        continue;
+      }
+      if (isRecord(additionalProperties)) {
+        errors.push(...validateJsonSchemaValue({
+          value: propertyValue,
+          schema: additionalProperties,
+          rootSchema,
+          pathParts: appendPathKey(pathParts, key)
+        }));
+      }
+    }
+  }
+  return errors;
+}
+function validateWorldConfig(config) {
+  if (!isRecord(world_schema_default)) {
+    throw new Error("Invalid bundled Agent World schema: expected a JSON object");
+  }
+  const errors = validateJsonSchemaValue({
+    value: config,
+    schema: world_schema_default,
+    rootSchema: world_schema_default,
+    pathParts: []
+  });
+  if (errors.length > 0) {
+    throw new Error(`Invalid Agent World config: ${AGENT_WORLD_CONFIG_PATH}: ${errors.slice(0, 8).join("; ")}`);
+  }
+}
+async function loadAgentWorldStartupSummary() {
+  let content = "";
+  try {
+    content = await fs.readFile(AGENT_WORLD_CONFIG_PATH, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid Agent World config: ${AGENT_WORLD_CONFIG_PATH}: ${message}`);
+  }
+  validateWorldConfig(parsed);
+  return {
+    filePath: AGENT_WORLD_CONFIG_PATH,
+    workflow: extractWorkflowLabel(parsed),
+    agents: extractAgentLabels(parsed)
+  };
+}
+function agentWorldStartupText(summary) {
+  if (!summary) {
+    return "";
+  }
+  return [
+    "Agent world:",
+    `  workflow: ${summary.workflow || "(not set)"}`,
+    `  agents: ${summary.agents.length > 0 ? summary.agents.join(", ") : "(none)"}`
+  ].join("\n");
+}
+
+// core/agent-files.ts
+import { promises as fs3 } from "node:fs";
+import path3 from "node:path";
+
 // core/workspace-store.ts
-import { promises as fs } from "node:fs";
+import { promises as fs2 } from "node:fs";
 import path2 from "node:path";
 function syncWorkspaceRootFromEnvironment() {
   const configuredWorkspaceRoot = String(process.env[WORKSPACE_ROOT_ENV_KEY] ?? "").trim();
@@ -279,9 +748,9 @@ function syncWorkspaceRootFromEnvironment() {
 async function ensureWorkspaceStorage() {
   syncWorkspaceRootFromEnvironment();
   await Promise.all([
-    fs.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
-    fs.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
-    fs.mkdir(SKILLS_ROOT, { recursive: true })
+    fs2.mkdir(AGENT_WORLD_ROOT, { recursive: true }),
+    fs2.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true }),
+    fs2.mkdir(SKILLS_ROOT, { recursive: true })
   ]);
   return {
     workspaceRoot: WORKSPACE_ROOT,
@@ -311,7 +780,7 @@ function getBuiltInSystemPrompt() {
 async function assertReadableFile(filePath, label) {
   let stats;
   try {
-    stats = await fs2.stat(filePath);
+    stats = await fs3.stat(filePath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -325,7 +794,7 @@ async function assertReadableFile(filePath, label) {
 async function assertReadableDirectory(directoryPath, label) {
   let stats;
   try {
-    stats = await fs2.stat(directoryPath);
+    stats = await fs3.stat(directoryPath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
       throw error;
@@ -368,7 +837,7 @@ async function collectSkillFilePaths(rootPath) {
     if (!currentPath) {
       continue;
     }
-    const entries = await fs2.readdir(currentPath, { withFileTypes: true });
+    const entries = await fs3.readdir(currentPath, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
       const entryPath = path3.join(currentPath, entry.name);
@@ -392,7 +861,7 @@ async function loadWorkspaceSystemPrompt() {
     }
     throw error;
   }
-  const content = (await fs2.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+  const content = (await fs3.readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
   return content;
 }
 async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
@@ -407,7 +876,7 @@ async function loadSkillInventoryFromRoot(skillsRoot, sourceScope) {
   const skillFilePaths = await collectSkillFilePaths(skillsRoot);
   const skills = [];
   for (const skillFilePath of skillFilePaths) {
-    const content = await fs2.readFile(skillFilePath, "utf8");
+    const content = await fs3.readFile(skillFilePath, "utf8");
     const metadata = parseSkillFrontMatter(content);
     if (!metadata.skillId) {
       continue;
@@ -465,7 +934,7 @@ function buildSkillInventoryMessage(skills) {
 }
 
 // core/workspace-environment.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import path4 from "node:path";
 import { config as loadDotEnvConfig } from "dotenv";
 var DOTENV_ALLOWED_ENV_KEYS = /* @__PURE__ */ new Set([
@@ -532,15 +1001,15 @@ function resolveWorkspaceDotEnvPath(workspaceRoot = WORKSPACE_ROOT) {
   return path4.join(workspaceRoot || process.cwd(), ".env");
 }
 function ensureDotEnvExampleFile(dotEnvPath) {
-  if (fs3.existsSync(dotEnvPath)) {
+  if (fs4.existsSync(dotEnvPath)) {
     return;
   }
   const examplePath = path4.join(path4.dirname(dotEnvPath), ".env.example");
-  if (fs3.existsSync(examplePath)) {
+  if (fs4.existsSync(examplePath)) {
     return;
   }
   try {
-    fs3.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: "utf8", flag: "wx" });
+    fs4.writeFileSync(examplePath, DOTENV_EXAMPLE_CONTENT, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") {
       return;
@@ -578,7 +1047,7 @@ function prepareWorkspaceEnvironment(workspaceRoot) {
 
 // core/chat-store.ts
 import { randomUUID } from "node:crypto";
-import { promises as fs4 } from "node:fs";
+import { promises as fs5 } from "node:fs";
 import path5 from "node:path";
 function createChatId(now = /* @__PURE__ */ new Date()) {
   const timestamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
@@ -637,18 +1106,18 @@ async function writeJsonAtomic(filePath, value) {
   const directoryPath = path5.dirname(filePath);
   const fileName = path5.basename(filePath);
   const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs4.mkdir(directoryPath, { recursive: true });
-  await fs4.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
+  await fs5.mkdir(directoryPath, { recursive: true });
+  await fs5.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}
 `, "utf8");
-  await fs4.rename(temporaryPath, filePath);
+  await fs5.rename(temporaryPath, filePath);
 }
 async function writeTextAtomic(filePath, text) {
   const directoryPath = path5.dirname(filePath);
   const fileName = path5.basename(filePath);
   const temporaryPath = path5.join(directoryPath, `.${fileName}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
-  await fs4.mkdir(directoryPath, { recursive: true });
-  await fs4.writeFile(temporaryPath, text, "utf8");
-  await fs4.rename(temporaryPath, filePath);
+  await fs5.mkdir(directoryPath, { recursive: true });
+  await fs5.writeFile(temporaryPath, text, "utf8");
+  await fs5.rename(temporaryPath, filePath);
 }
 async function writeJsonlAtomic(filePath, values) {
   const serialized = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}
@@ -659,14 +1128,14 @@ async function appendJsonl(filePath, values) {
   if (!Array.isArray(values) || values.length === 0) {
     return;
   }
-  await fs4.mkdir(path5.dirname(filePath), { recursive: true });
+  await fs5.mkdir(path5.dirname(filePath), { recursive: true });
   const serialized = `${values.map((value) => JSON.stringify(value)).join("\n")}
 `;
-  await fs4.appendFile(filePath, serialized, "utf8");
+  await fs5.appendFile(filePath, serialized, "utf8");
 }
 async function readJsonIfPresent(filePath) {
   try {
-    return JSON.parse(await fs4.readFile(filePath, "utf8"));
+    return JSON.parse(await fs5.readFile(filePath, "utf8"));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return null;
@@ -676,7 +1145,7 @@ async function readJsonIfPresent(filePath) {
 }
 async function pathExists(filePath) {
   try {
-    await fs4.access(filePath);
+    await fs5.access(filePath);
     return true;
   } catch {
     return false;
@@ -691,7 +1160,7 @@ async function ensureTextFile(filePath, defaultText = "") {
 async function readJsonl(filePath) {
   let rawContent;
   try {
-    rawContent = await fs4.readFile(filePath, "utf8");
+    rawContent = await fs5.readFile(filePath, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error(`Missing chat session file: ${filePath}`);
@@ -707,7 +1176,7 @@ async function readJsonl(filePath) {
 }
 async function ensureChatStorage() {
   await ensureWorkspaceWorld();
-  await fs4.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true });
+  await fs5.mkdir(AGENT_WORLD_CHATS_ROOT, { recursive: true });
 }
 function createEmptyChat() {
   const createdAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -757,7 +1226,7 @@ async function loadWorldChatMetadata(chatId) {
   const metadataPath = buildWorldChatMetadataPath(chatId);
   let rawContent;
   try {
-    rawContent = await fs4.readFile(metadataPath, "utf8");
+    rawContent = await fs5.readFile(metadataPath, "utf8");
   } catch {
     throw new Error(`Missing chat session file: ${buildWorldChatMessagesPath(chatId)}`);
   }
@@ -788,7 +1257,7 @@ async function loadChatById(chatId) {
 async function listPersistedChats() {
   await ensureChatStorage();
   const currentChatId = await readCurrentChatId();
-  const entries = await fs4.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
+  const entries = await fs5.readdir(AGENT_WORLD_CHATS_ROOT, { withFileTypes: true });
   const chats = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -865,6 +1334,10 @@ async function persistCompletedChat({ chat, messages, setCurrent = true }) {
   }
   return persistedChat;
 }
+async function clearPersistedChatEvents(chat) {
+  await ensureChatStorage();
+  await writeTextAtomic(buildWorldChatEventsPath(chat.id), "");
+}
 async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
   if (!Array.isArray(streamTraceEvents) || streamTraceEvents.length === 0) {
     return null;
@@ -876,7 +1349,10 @@ async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
     chatId: chat.id,
     type: String(event.type ?? ""),
     text: String(event.text ?? ""),
-    createdAt: normalizeTimestamp(event.createdAt, (/* @__PURE__ */ new Date()).toISOString())
+    createdAt: normalizeTimestamp(event.createdAt, (/* @__PURE__ */ new Date()).toISOString()),
+    ...typeof event.stopKind === "string" && event.stopKind.trim() ? { stopKind: event.stopKind } : {},
+    ...typeof event.finishReason === "string" && event.finishReason.trim() ? { finishReason: event.finishReason } : {},
+    ...event.usage && typeof event.usage === "object" ? { usage: event.usage } : {}
   })));
   return eventsPath;
 }
@@ -1084,6 +1560,7 @@ async function runChatTurn({
   userMessage,
   stream = true,
   onStreamChunk,
+  onModelResponse,
   onToolCall,
   onToolResult,
   handleToolCall,
@@ -1136,6 +1613,11 @@ async function runChatTurn({
         context: executionContext
       },
       ...abortSignal ? { abortSignal } : {},
+      onModelResponse: async ({ response }) => {
+        if (typeof onModelResponse === "function") {
+          onModelResponse(response);
+        }
+      },
       buildMessages: async ({ state, transientInstruction }) => {
         const baseMessages = [
           ...buildBaseSystemMessages(
@@ -1267,11 +1749,11 @@ var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
   "human_intervention_request",
   "ask_user_question"
 ]);
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function parseJsonRecord(value) {
-  if (isRecord(value)) {
+  if (isRecord2(value)) {
     return value;
   }
   if (typeof value !== "string") {
@@ -1279,7 +1761,7 @@ function parseJsonRecord(value) {
   }
   try {
     const parsed = JSON.parse(value);
-    return isRecord(parsed) ? parsed : null;
+    return isRecord2(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -1298,7 +1780,7 @@ function parseHumanInputOption(value, index) {
       label: sanitizeDisplayText(value)
     };
   }
-  if (!isRecord(value)) {
+  if (!isRecord2(value)) {
     return null;
   }
   const label = readTrimmedString(value, "label") ?? readTrimmedString(value, "text");
@@ -1312,7 +1794,7 @@ function parseHumanInputOption(value, index) {
   };
 }
 function parseHumanInputQuestion(value, index) {
-  if (!isRecord(value)) {
+  if (!isRecord2(value)) {
     return null;
   }
   const question = readTrimmedString(value, "question") ?? readTrimmedString(value, "prompt");
@@ -1540,7 +2022,7 @@ var MAX_COMMAND_WIDTH = 100;
 var MAX_PREVIEW_LINES = 5;
 var MAX_PREVIEW_LINE_WIDTH = 120;
 var MAX_VERBOSE_JSON_WIDTH = 320;
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function stringifyCompact(value) {
@@ -1551,7 +2033,7 @@ function stringifyCompact(value) {
   }
 }
 function parseJsonRecord2(value) {
-  if (isRecord2(value)) {
+  if (isRecord3(value)) {
     return value;
   }
   if (typeof value !== "string") {
@@ -1559,7 +2041,7 @@ function parseJsonRecord2(value) {
   }
   try {
     const parsed = JSON.parse(value);
-    return isRecord2(parsed) ? parsed : null;
+    return isRecord3(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -1679,7 +2161,7 @@ function formatFileSize(bytes) {
 }
 function extractMeaningfulLine(value) {
   if (typeof value !== "string") {
-    if (isRecord2(value)) {
+    if (isRecord3(value)) {
       return extractMeaningfulLine(
         readFirstString(value, "message", "error", "stderr", "stdout", "detail", "reason")
       );
@@ -1939,7 +2421,7 @@ function summarizeResolveObjectResult(result, forcedDurationMs) {
     return summarizeGenericToolResult(result, "resolve_object", forcedDurationMs);
   }
   const data = readDataField(result);
-  const matches = Array.isArray(data) ? data.filter(isRecord2) : [];
+  const matches = Array.isArray(data) ? data.filter(isRecord3) : [];
   const first = matches[0];
   const displayName = readFirstString(first ?? null, "displayName");
   const canonicalPath = readFirstString(first ?? null, "canonicalPath");
@@ -1961,7 +2443,7 @@ function summarizeSearchContentResult(result, forcedDurationMs) {
     return summarizeGenericToolResult(result, "search_content", forcedDurationMs);
   }
   const data = readDataField(result);
-  const matches = Array.isArray(data) ? data.filter(isRecord2) : [];
+  const matches = Array.isArray(data) ? data.filter(isRecord3) : [];
   const firstPath = readFirstString(matches[0] ?? null, "path");
   return {
     name: "search_content",
@@ -1980,7 +2462,7 @@ function summarizeListContentResult(result, forcedDurationMs) {
     return summarizeGenericToolResult(result, "list_content", forcedDurationMs);
   }
   const data = readDataField(result);
-  const entries = Array.isArray(data) ? data.filter(isRecord2) : [];
+  const entries = Array.isArray(data) ? data.filter(isRecord3) : [];
   const firstPath = readFirstString(entries[0] ?? null, "path");
   return {
     name: "list_content",
@@ -2021,7 +2503,7 @@ function summarizeAiwContentMutationResult(toolName, result, forcedDurationMs) {
   if (!ok) {
     return summarizeGenericToolResult(result, toolName, forcedDurationMs);
   }
-  const data = isRecord2(record?.data) ? record.data : null;
+  const data = isRecord3(record?.data) ? record.data : null;
   const path7 = readFirstString(data, "path") ?? readFirstString(record, "path");
   const summary = toolName === "delete_content" ? "deleted" : toolName === "create_content" || readFirstBoolean(data, "created") === true ? "created" : "updated";
   return {
@@ -2089,7 +2571,7 @@ function rawFieldLines(record) {
   }).filter((line) => line !== null);
 }
 function formatRawCallPayload(toolName, args) {
-  if (toolName === "shell_cmd" && isRecord2(args)) {
+  if (toolName === "shell_cmd" && isRecord3(args)) {
     const lines = [];
     if (typeof args.command === "string") {
       lines.push(`  command: ${JSON.stringify(args.command)}`);
@@ -2108,7 +2590,7 @@ function formatRawCallPayload(toolName, args) {
     return lines.length > 0 ? `
 ${lines.join("\n")}` : "";
   }
-  if (isRecord2(args)) {
+  if (isRecord3(args)) {
     const lines = rawFieldLines(args);
     return lines.length > 0 ? `
 ${lines.join("\n")}` : "";
@@ -2245,6 +2727,38 @@ function formatToolResultDiagnostic(toolResult, mode = "default") {
   const view = summarizeToolResult(toolResult.name, toolResult.result, toolResult.durationMs, toolResult.arguments);
   return renderToolResult(view, mode);
 }
+function formatTokenUsage(usage) {
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+  const parts = [];
+  if (typeof usage.inputTokens === "number" && Number.isFinite(usage.inputTokens)) {
+    parts.push(`input=${usage.inputTokens}`);
+  }
+  if (typeof usage.outputTokens === "number" && Number.isFinite(usage.outputTokens)) {
+    parts.push(`output=${usage.outputTokens}`);
+  }
+  if (typeof usage.totalTokens === "number" && Number.isFinite(usage.totalTokens)) {
+    parts.push(`total=${usage.totalTokens}`);
+  }
+  return parts.length > 0 ? `tokens ${parts.join(" ")}` : null;
+}
+function formatModelResponseDiagnostic(response) {
+  const parts = [];
+  if (typeof response.stopKind === "string" && response.stopKind.trim()) {
+    parts.push(`stopKind=${response.stopKind}`);
+  }
+  if (typeof response.providerStopReason === "string" && response.providerStopReason.trim()) {
+    parts.push(`finish_reason=${response.providerStopReason}`);
+  }
+  const usage = formatTokenUsage(response.usage);
+  if (usage) {
+    parts.push(usage);
+  }
+  return parts.length > 0 ? `
+  \u2713 model.response ${parts.join(" \xB7 ")}
+` : "";
+}
 
 // cli/src/turn-executor.ts
 var ANSI_GRAY = "\x1B[90m";
@@ -2279,6 +2793,19 @@ function shouldHoldPotentialHumanInputPrompt(text) {
   ];
   return promptPrefixes.some((prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix));
 }
+function normalizeStreamTraceUsage(value) {
+  if (!value || typeof value !== "object") {
+    return void 0;
+  }
+  const usage = value;
+  const normalizedUsage = {};
+  for (const key of ["inputTokens", "outputTokens", "totalTokens"]) {
+    if (typeof usage[key] === "number" && Number.isFinite(usage[key])) {
+      normalizedUsage[key] = usage[key];
+    }
+  }
+  return Object.keys(normalizedUsage).length > 0 ? normalizedUsage : void 0;
+}
 async function resolveEffectiveAgentConfig(options = {}) {
   const persistedAgentConfig = loadPersistedRuntimeConfig();
   const baseAgentConfig = {
@@ -2303,6 +2830,7 @@ function createTurnExecutor(options) {
   }) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
     const streamTraceEvents = [];
+    const pendingTextTraceEvents = [];
     let lastStreamType = null;
     let reasoningDiagnosticOpen = false;
     let heldAssistantText = "";
@@ -2344,6 +2872,26 @@ function createTurnExecutor(options) {
       }
       writeAssistantText(heldAssistantText);
       heldAssistantText = "";
+    }
+    function annotatePendingTextTraceEvents(response) {
+      if (pendingTextTraceEvents.length === 0) {
+        return;
+      }
+      const stopKind = typeof response.stopKind === "string" && response.stopKind.trim() ? response.stopKind : void 0;
+      const finishReason = typeof response.providerStopReason === "string" && response.providerStopReason.trim() ? response.providerStopReason : void 0;
+      const usage = normalizeStreamTraceUsage(response.usage);
+      for (const event of pendingTextTraceEvents) {
+        if (stopKind) {
+          event.stopKind = stopKind;
+        }
+        if (finishReason) {
+          event.finishReason = finishReason;
+        }
+        if (usage) {
+          event.usage = usage;
+        }
+      }
+      pendingTextTraceEvents.length = 0;
     }
     try {
       if (!options.streamOff) {
@@ -2434,13 +2982,28 @@ function createTurnExecutor(options) {
               writeAssistantText(chunk.content);
             }
             if (streamTraceEnabled) {
-              streamTraceEvents.push({
+              const textTraceEvent = {
                 type: "text",
                 text: chunk.content,
                 createdAt: (/* @__PURE__ */ new Date()).toISOString()
-              });
+              };
+              streamTraceEvents.push(textTraceEvent);
+              pendingTextTraceEvents.push(textTraceEvent);
             }
             lastStreamType = "text";
+          }
+        },
+        onModelResponse: options.streamOff ? void 0 : (response) => {
+          if (streamTraceEnabled) {
+            annotatePendingTextTraceEvents(response);
+          }
+          if (options.verbose) {
+            pendingDisplay.clear();
+            const closedReasoning = closeReasoningDiagnostic();
+            const diagnostic = formatModelResponseDiagnostic(response);
+            if (diagnostic) {
+              stderr.write(grayForTerminal(stderr, closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic));
+            }
           }
         },
         onToolCall: options.streamOff ? void 0 : (toolCall) => {
@@ -2458,7 +3021,11 @@ function createTurnExecutor(options) {
           if (options.verbose) {
             const closedReasoning = closeReasoningDiagnostic();
             const diagnostic = formatToolCallDiagnostic(toolCall);
-            stderr.write(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
+            const displayDiagnostic = humanInputRequest ? `${diagnostic}
+
+` : diagnostic;
+            const outputDiagnostic = closedReasoning ? stripLeadingLineBreaks(displayDiagnostic) : displayDiagnostic;
+            stderr.write(humanInputRequest ? grayForTerminal(stderr, outputDiagnostic) : outputDiagnostic);
           }
           if (streamTraceEnabled) {
             streamTraceEvents.push({
@@ -2634,7 +3201,7 @@ function usageText() {
     '  agent-cli --provider google --model gemini-2.5-pro "Summarize this repo"'
   ].join("\n");
 }
-function startupText(cwd = WORKSPACE_ROOT, runtimeSettings, scopedSkills) {
+function startupText(cwd = WORKSPACE_ROOT, runtimeSettings, scopedSkills, agentWorldSummary) {
   const lines = [
     `Agent CLI starting in ${cwd}`
   ];
@@ -2646,6 +3213,10 @@ function startupText(cwd = WORKSPACE_ROOT, runtimeSettings, scopedSkills) {
     if (skillText) {
       lines.push(skillText);
     }
+  }
+  const worldText = agentWorldStartupText(agentWorldSummary ?? null);
+  if (worldText) {
+    lines.push(worldText);
   }
   return lines.join("\n");
 }
@@ -2910,6 +3481,7 @@ async function runInteractiveSession({
           chat,
           messages: []
         });
+        await clearPersistedChatEvents(chat);
         io.stdout.write("history cleared\n\n");
         continue;
       }
@@ -2990,18 +3562,20 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     runtimeOverrides
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
-  const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory, agentWorldSummary] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
-    loadRequestedChat({ newChat })
+    loadAgentWorldStartupSummary()
   ]);
+  const chat = await loadRequestedChat({ newChat });
   const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
   if (options.startupDiagnostics) {
     (io.stderr ?? process.stderr).write(
       `${startupText(
         WORKSPACE_ROOT,
         runtimeSettingsForStartup(agentConfig),
-        scopedSkillInventory
+        scopedSkillInventory,
+        agentWorldSummary
       )}
 `
     );

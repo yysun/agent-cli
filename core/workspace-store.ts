@@ -8,7 +8,7 @@
  * Key features:
  * - Creates `.agent-world/chats` and `.agent-world/skills`.
  * - Keeps the historical `ensureWorkspaceWorld` export as a compatibility name for local storage setup.
- * - Does not create registries, world ids, `world.json`, agents, or queues.
+ * - Does not create registries, world ids, agents, or queues.
  *
  * Recent changes:
  * - 2026-05-26: Re-resolved `AGENT_CLI_WORKSPACE` before creating workspace storage.

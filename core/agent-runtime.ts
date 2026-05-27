@@ -381,6 +381,12 @@ function selectContextMessages(messages, historyMessageLimit) {
  *     errors?: unknown[],
  *     warnings?: unknown[],
  *   }) => void,
+ *   onModelResponse?: (response: {
+ *     type?: string,
+ *     stopKind?: string,
+ *     providerStopReason?: string,
+ *     usage?: { inputTokens?: number, outputTokens?: number, totalTokens?: number },
+ *   }) => void,
  *   onToolCall?: (toolCall: { id: string, name: string, arguments?: string }) => void,
  *   onToolResult?: (toolResult: { id: string, name: string, result: unknown, arguments?: string, durationMs?: number }) => void,
  *   handleToolCall?: RuntimeToolCallHandler,
@@ -399,6 +405,7 @@ export async function runChatTurn({
   userMessage,
   stream = true,
   onStreamChunk,
+  onModelResponse,
   onToolCall,
   onToolResult,
   handleToolCall,
@@ -453,6 +460,11 @@ export async function runChatTurn({
         context: executionContext,
       },
       ...(abortSignal ? { abortSignal } : {}),
+      onModelResponse: async ({ response }) => {
+        if (typeof onModelResponse === 'function') {
+          onModelResponse(response);
+        }
+      },
       buildMessages: async ({ state, transientInstruction }) => {
         const baseMessages = [
           ...buildBaseSystemMessages(

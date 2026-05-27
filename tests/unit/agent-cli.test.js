@@ -305,6 +305,69 @@ describe('agent-cli entrypoint', () => {
     expect(stdoutChunks.join('')).toContain('done\n');
   });
 
+  it('persists text stream trace response metadata and usage', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.AGENT_CLI_STREAM_TRACE = 'true';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onModelResponse }) => {
+      await onStreamChunk?.({ content: 'done' });
+      await onModelResponse?.({
+        type: 'text',
+        content: 'done',
+        assistantMessage: { role: 'assistant', content: 'done' },
+        stopKind: 'natural_stop',
+        providerStopReason: 'stop',
+        usage: {
+          inputTokens: 8,
+          outputTokens: 2,
+          totalTokens: 10,
+        },
+      });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+
+    const io = createIoCapture();
+    await main(['--verbose', 'hello'], io);
+
+    const chatRoot = path.join(rootPath, '.agent-world', 'chats');
+    const chatIds = (await readdir(chatRoot)).filter((entry) => entry !== 'current.json');
+    const events = (await readFile(path.join(chatRoot, chatIds[0], 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'stream_trace',
+      type: 'text',
+      text: 'done',
+      stopKind: 'natural_stop',
+      finishReason: 'stop',
+      usage: {
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10,
+      },
+    }));
+    expect(io.getStderr()).toContain(
+      '✓ model.response stopKind=natural_stop · finish_reason=stop · tokens input=8 output=2 total=10',
+    );
+  });
+
   it('clears restarted pending dots before ending a streamed turn', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -480,6 +543,52 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toContain('\ndone\n');
   });
 
+  it('colors verbose ask_user_input calls gray and leaves a blank line after', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const inputArgs = JSON.stringify({
+      type: 'single-select',
+      question: 'Continue?',
+      options: ['Yes'],
+      allowFreeformInput: false,
+    });
+    const runChatTurn = vi.fn().mockImplementation(async ({ onToolCall, handleToolCall }) => {
+      onToolCall?.({
+        id: 'input-1',
+        name: 'ask_user_input',
+        arguments: inputArgs,
+      });
+      await handleToolCall?.({
+        toolCall: { id: 'input-1' },
+        toolName: 'ask_user_input',
+        arguments: inputArgs,
+      });
+
+      return {
+        assistantText: '',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: '' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stderrIsTTY: true });
+    const interactivePrompt = createScriptedPrompt(['1']);
+
+    await main(['--verbose', 'hello'], io, { interactivePrompt });
+
+    expect(io.getStderr()).toMatch(/\u001b\[90m\n  ↳ ask_user_input \{.*\n\n\u001b\[0m/s);
+    expect(io.getStdout()).toContain('assistant needs input:');
+  });
+
   it('stores workspace state under --workspace instead of the process cwd', async () => {
     const rootPath = await createTestRoot();
     const cwdRoot = await createTestRoot();
@@ -645,15 +754,20 @@ describe('agent-cli entrypoint', () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.AGENT_CLI_STREAM_TRACE = 'true';
 
-    const runChatTurn = vi.fn().mockImplementation(async ({ chat, userMessage }) => ({
-      assistantText: 'ok',
-      messages: [
-        ...chat.messages,
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: 'ok' },
-      ],
-    }));
+    const runChatTurn = vi.fn().mockImplementation(async ({ chat, userMessage, onStreamChunk }) => {
+      await onStreamChunk?.({ content: 'ok' });
+
+      return {
+        assistantText: 'ok',
+        messages: [
+          ...chat.messages,
+          { role: 'user', content: userMessage },
+          { role: 'assistant', content: 'ok' },
+        ],
+      };
+    });
     const { main } = await loadCliModule(rootPath, {
       runtimeClient: {
         runChatTurn,
@@ -672,9 +786,14 @@ describe('agent-cli entrypoint', () => {
       path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'),
       'utf8',
     );
+    const eventsFile = await readFile(
+      path.join(rootPath, '.agent-world', 'chats', current.chatId, 'events.jsonl'),
+      'utf8',
+    );
 
     expect(chatDirectories).toEqual([current.chatId]);
     expect(messagesFile).toBe('');
+    expect(eventsFile).toBe('');
     expect(io.getStdout()).toContain('history cleared');
   });
 
@@ -757,6 +876,123 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStderr()).toContain('  user: user-skill');
     expect(io.getStderr()).toContain('  project: project-skill');
     expect(io.getStderr()).toContain('Synthetic turn failure');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('logs workflow and agents from workspace world json on startup', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.agent-world', 'world.json'),
+      JSON.stringify({
+        $schema: 'https://agent-world.local/world.schema.json',
+        world: {
+          id: 'demo',
+          name: 'Demo World',
+        },
+        workflow: {
+          type: 'dag',
+          entry: 'planner',
+          entryAgent: 'planner',
+          nodes: {
+            planner: {
+              agent: 'planner',
+            },
+            reviewer: {
+              agent: 'reviewer',
+              requires: ['planner'],
+            },
+            executor: {
+              agent: 'executor',
+              requires: ['reviewer'],
+            },
+          },
+          edges: {
+            planner: ['reviewer'],
+            reviewer: ['executor'],
+            executor: [],
+          },
+        },
+        agents: {
+          planner: {
+            name: 'Planner',
+            role: 'planning',
+            promptPath: 'prompts/planner.md',
+          },
+          reviewer: {
+            name: 'Reviewer',
+            promptPath: 'prompts/reviewer.md',
+          },
+          executor: {
+            role: 'executor',
+            promptPath: 'prompts/executor.md',
+          },
+        },
+      }, null, 2),
+      'utf8',
+    );
+
+    const { runCli } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockRejectedValue(new Error('Synthetic turn failure')),
+      },
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['hello'], io);
+
+    expect(io.getStderr()).toContain('Agent world:');
+    expect(io.getStderr()).toContain('  workflow: dag');
+    expect(io.getStderr()).toContain('  agents: planner, reviewer, executor');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = originalExitCode;
+  });
+
+  it('rejects workspace world json that does not match the bundled schema', async () => {
+    applyMinimalRuntimeEnvironment();
+
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    await mkdir(path.join(rootPath, '.agent-world'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.agent-world', 'world.json'),
+      JSON.stringify({
+        workflow: {
+          type: 'dag',
+        },
+        agents: [],
+      }, null, 2),
+      'utf8',
+    );
+
+    const { runCli } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn: vi.fn().mockResolvedValue({
+          assistantText: 'should not run',
+          messages: [],
+        }),
+      },
+    });
+    const io = createIoCapture();
+    const originalExitCode = process.exitCode;
+
+    process.exitCode = undefined;
+    await runCli(['hello'], io);
+
+    expect(io.getStdout()).toBe('');
+    expect(io.getStderr()).toContain('Invalid Agent World config:');
+    expect(io.getStderr()).toContain('$.world is required');
+    expect(io.getStderr()).toContain('$.agents must be object');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;

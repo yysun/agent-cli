@@ -10,6 +10,7 @@
  * - Prints startup diagnostics for workspace root and runtime selection.
  *
  * Recent changes:
+ * - 2026-05-27: Printed optional `.agent-world/world.json` workflow and agents on startup.
  * - 2026-05-26: Renamed chat persistence import to chat-store.
  * - 2026-05-26: Omit empty skill scopes from verbose startup diagnostics.
  * - 2026-05-26: Removed world, agent selection, and persisted `agent.json` runtime config.
@@ -26,6 +27,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizeAgentConfig } from '../../core/agent-config.js';
 import {
+  type AgentWorldStartupSummary,
+  agentWorldStartupText,
+  loadAgentWorldStartupSummary,
+} from '../../core/agent-world-config.js';
+import {
   flattenSkillInventoryByPrecedence,
   loadSkillInventoryByScope,
   loadWorkspaceSystemPrompt,
@@ -37,6 +43,7 @@ import {
 import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
 import { ensureWorkspaceWorld } from '../../core/workspace-store.js';
 import {
+  clearPersistedChatEvents,
   createPersistedChat,
   loadRequestedChat,
   listPersistedChats,
@@ -185,6 +192,7 @@ export function startupText(
   cwd = WORKSPACE_ROOT,
   runtimeSettings?: { provider: string; model: string },
   scopedSkills?: SkillScopesForStartup,
+  agentWorldSummary?: AgentWorldStartupSummary | null,
 ): string {
   const lines = [
     `Agent CLI starting in ${cwd}`,
@@ -200,6 +208,11 @@ export function startupText(
     if (skillText) {
       lines.push(skillText);
     }
+  }
+
+  const worldText = agentWorldStartupText(agentWorldSummary ?? null);
+  if (worldText) {
+    lines.push(worldText);
   }
 
   return lines.join('\n');
@@ -556,6 +569,7 @@ async function runInteractiveSession({
           chat,
           messages: [],
         });
+        await clearPersistedChatEvents(chat);
         io.stdout.write('history cleared\n\n');
         continue;
       }
@@ -643,11 +657,12 @@ export async function main(
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
 
-  const [workspaceSystemPrompt, scopedSkillInventory, chat] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory, agentWorldSummary] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
-    loadRequestedChat({ newChat }),
+    loadAgentWorldStartupSummary(),
   ]);
+  const chat = await loadRequestedChat({ newChat });
   const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
 
   if (options.startupDiagnostics) {
@@ -656,6 +671,7 @@ export async function main(
         WORKSPACE_ROOT,
         runtimeSettingsForStartup(agentConfig),
         scopedSkillInventory,
+        agentWorldSummary,
       )}\n`,
     );
   }

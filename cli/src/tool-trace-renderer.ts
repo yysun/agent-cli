@@ -34,6 +34,16 @@ export interface ToolResultView {
   raw?: unknown;
 }
 
+export interface ModelResponseDiagnostic {
+  stopKind?: unknown;
+  providerStopReason?: unknown;
+  usage?: {
+    inputTokens?: unknown;
+    outputTokens?: unknown;
+    totalTokens?: unknown;
+  };
+}
+
 const MAX_COMMAND_WIDTH = 100;
 const MAX_PREVIEW_LINES = 5;
 const MAX_PREVIEW_LINE_WIDTH = 120;
@@ -945,4 +955,43 @@ export function formatToolResultDiagnostic(
 ): string {
   const view = summarizeToolResult(toolResult.name, toolResult.result, toolResult.durationMs, toolResult.arguments);
   return renderToolResult(view, mode);
+}
+
+function formatTokenUsage(usage: ModelResponseDiagnostic['usage']): string | null {
+  if (!usage || typeof usage !== 'object') {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (typeof usage.inputTokens === 'number' && Number.isFinite(usage.inputTokens)) {
+    parts.push(`input=${usage.inputTokens}`);
+  }
+
+  if (typeof usage.outputTokens === 'number' && Number.isFinite(usage.outputTokens)) {
+    parts.push(`output=${usage.outputTokens}`);
+  }
+
+  if (typeof usage.totalTokens === 'number' && Number.isFinite(usage.totalTokens)) {
+    parts.push(`total=${usage.totalTokens}`);
+  }
+
+  return parts.length > 0 ? `tokens ${parts.join(' ')}` : null;
+}
+
+export function formatModelResponseDiagnostic(response: ModelResponseDiagnostic): string {
+  const parts: string[] = [];
+  if (typeof response.stopKind === 'string' && response.stopKind.trim()) {
+    parts.push(`stopKind=${response.stopKind}`);
+  }
+
+  if (typeof response.providerStopReason === 'string' && response.providerStopReason.trim()) {
+    parts.push(`finish_reason=${response.providerStopReason}`);
+  }
+
+  const usage = formatTokenUsage(response.usage);
+  if (usage) {
+    parts.push(usage);
+  }
+
+  return parts.length > 0 ? `\n  ✓ model.response ${parts.join(' · ')}\n` : '';
 }

@@ -30,6 +30,7 @@ import {
 } from './human-input-ui.js';
 import { createPendingDisplay } from './pending-display.js';
 import {
+  formatModelResponseDiagnostic,
   formatToolCallDiagnostic,
   formatToolResultDiagnostic,
 } from './tool-trace-renderer.js';
@@ -75,6 +76,13 @@ export interface StreamTraceEvent {
   type: string;
   text: string;
   createdAt: string;
+  stopKind?: string;
+  finishReason?: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
 }
 
 export interface ResolveEffectiveAgentConfigOptions {
@@ -143,6 +151,23 @@ function shouldHoldPotentialHumanInputPrompt(text: string): boolean {
   ));
 }
 
+function normalizeStreamTraceUsage(value: unknown): StreamTraceEvent['usage'] {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const usage = value as Record<string, unknown>;
+  const normalizedUsage: NonNullable<StreamTraceEvent['usage']> = {};
+
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens'] as const) {
+    if (typeof usage[key] === 'number' && Number.isFinite(usage[key])) {
+      normalizedUsage[key] = usage[key];
+    }
+  }
+
+  return Object.keys(normalizedUsage).length > 0 ? normalizedUsage : undefined;
+}
+
 export async function resolveEffectiveAgentConfig(
   options: ResolveEffectiveAgentConfigOptions = {},
 ): Promise<Record<string, unknown>> {
@@ -172,6 +197,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
   }: ExecuteTurnParams) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
     const streamTraceEvents: StreamTraceEvent[] = [];
+    const pendingTextTraceEvents: StreamTraceEvent[] = [];
     let lastStreamType: string | null = null;
     let reasoningDiagnosticOpen = false;
     let heldAssistantText = '';
@@ -221,6 +247,40 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
       writeAssistantText(heldAssistantText);
       heldAssistantText = '';
+    }
+
+    function annotatePendingTextTraceEvents(response: {
+      stopKind?: unknown;
+      providerStopReason?: unknown;
+      usage?: unknown;
+    }): void {
+      if (pendingTextTraceEvents.length === 0) {
+        return;
+      }
+
+      const stopKind = typeof response.stopKind === 'string' && response.stopKind.trim()
+        ? response.stopKind
+        : undefined;
+      const finishReason = typeof response.providerStopReason === 'string' && response.providerStopReason.trim()
+        ? response.providerStopReason
+        : undefined;
+      const usage = normalizeStreamTraceUsage(response.usage);
+
+      for (const event of pendingTextTraceEvents) {
+        if (stopKind) {
+          event.stopKind = stopKind;
+        }
+
+        if (finishReason) {
+          event.finishReason = finishReason;
+        }
+
+        if (usage) {
+          event.usage = usage;
+        }
+      }
+
+      pendingTextTraceEvents.length = 0;
     }
 
     try {
@@ -333,14 +393,33 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               }
 
               if (streamTraceEnabled) {
-                streamTraceEvents.push({
+                const textTraceEvent: StreamTraceEvent = {
                   type: 'text',
                   text: chunk.content,
                   createdAt: new Date().toISOString(),
-                });
+                };
+
+                streamTraceEvents.push(textTraceEvent);
+                pendingTextTraceEvents.push(textTraceEvent);
               }
 
               lastStreamType = 'text';
+            }
+          },
+        onModelResponse: options.streamOff
+          ? undefined
+          : (response: { stopKind?: unknown; providerStopReason?: unknown; usage?: unknown }) => {
+            if (streamTraceEnabled) {
+              annotatePendingTextTraceEvents(response);
+            }
+
+            if (options.verbose) {
+              pendingDisplay.clear();
+              const closedReasoning = closeReasoningDiagnostic();
+              const diagnostic = formatModelResponseDiagnostic(response);
+              if (diagnostic) {
+                stderr.write(grayForTerminal(stderr, closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic));
+              }
             }
           },
         onToolCall: options.streamOff
@@ -362,7 +441,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             if (options.verbose) {
               const closedReasoning = closeReasoningDiagnostic();
               const diagnostic = formatToolCallDiagnostic(toolCall);
-              stderr.write(closedReasoning ? stripLeadingLineBreaks(diagnostic) : diagnostic);
+              const displayDiagnostic = humanInputRequest ? `${diagnostic}\n\n` : diagnostic;
+              const outputDiagnostic = closedReasoning ? stripLeadingLineBreaks(displayDiagnostic) : displayDiagnostic;
+              stderr.write(humanInputRequest ? grayForTerminal(stderr, outputDiagnostic) : outputDiagnostic);
             }
 
             if (streamTraceEnabled) {

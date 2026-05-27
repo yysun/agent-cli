@@ -8,7 +8,7 @@
  * Key features:
  * - Reads LLM-time defaults from `AGENT_CLI_*` environment variables.
  * - Normalizes common CLI aliases such as `modal`, `tokens`, `permissions`, and `reasoning`.
- * - Keeps runtime defaults out of `.agent-world`; there is no `world.json` or `agent.json`.
+ * - Keeps runtime defaults out of `.agent-world`; `world.json` is startup metadata, not runtime config.
  *
  * Recent changes:
  * - 2026-05-26: Added `.env` defaults for temperature, max tokens, permissions, reasoning, history, stream, trace, and web search.
