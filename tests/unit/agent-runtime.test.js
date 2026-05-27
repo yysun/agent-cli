@@ -199,6 +199,7 @@ describe('agent-runtime', () => {
     streamComplete.mockImplementation(() => eventStream([
       { type: 'model_start', iteration: 1 },
       { type: 'text_delta', delta: 'Hello', iteration: 1 },
+      { type: 'reasoning_delta', delta: 'Thinking', iteration: 1 },
       { type: 'text_delta', delta: ' world', iteration: 1 },
       {
         type: 'assistant_message',
@@ -274,7 +275,8 @@ describe('agent-runtime', () => {
         toolPermission: 'ask',
       }),
     }));
-    expect(onStreamChunk).toHaveBeenCalledTimes(2);
+    expect(onStreamChunk).toHaveBeenCalledTimes(3);
+    expect(onStreamChunk).toHaveBeenNthCalledWith(2, { reasoningContent: 'Thinking' });
     expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({ type: 'tool_calls' }));
     expect(result.assistantText).toBe('Hello world');
     expect(result.messages.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: 'Hello world' }));

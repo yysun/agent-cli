@@ -866,6 +866,11 @@ async function runChatTurn({
               onStreamChunk({ content: event.delta });
             }
             break;
+          case "reasoning_delta":
+            if (typeof onStreamChunk === "function") {
+              onStreamChunk({ reasoningContent: event.delta });
+            }
+            break;
           case "assistant_message":
             emitModelResponse(
               onModelResponse,
