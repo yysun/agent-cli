@@ -346,6 +346,47 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).not.toMatch(/\.\.\.\n$/);
   });
 
+  it('clears pending dots before verbose tool diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onToolCall, onToolResult }) => {
+      onToolCall?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        arguments: '{"skill_id":"agent-world-skill"}',
+      });
+      onToolResult?.({
+        id: 'tool-1',
+        name: 'load_skill',
+        result: 'Loaded',
+        durationMs: 7,
+      });
+
+      return {
+        assistantText: '',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: '' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true });
+
+    await main(['--verbose', 'hello'], io);
+
+    expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K');
+    expect(io.getStderr()).toContain('↳ load_skill {"skill_id":"agent-world-skill"}');
+    expect(io.getStderr()).toContain('✓ load_skill 7ms · Loaded');
+  });
+
   it('colors verbose reasoning and tool results gray on TTY stderr', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -483,6 +524,44 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toContain('history cleared');
     expect(io.getStdout()).toContain('messages');
     expect(io.getStderr()).toContain('command failed: Missing chat session file: ');
+  });
+
+  it('clears the current chat without creating a new chat', async () => {
+    applyMinimalRuntimeEnvironment();
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ chat, userMessage }) => ({
+      assistantText: 'ok',
+      messages: [
+        ...chat.messages,
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: 'ok' },
+      ],
+    }));
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture();
+    const interactivePrompt = createScriptedPrompt(['hello', '/clear', '/exit']);
+
+    await main([], io, { interactivePrompt });
+
+    const chatDirectories = (await readdir(path.join(rootPath, '.agent-world', 'chats'), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const messagesFile = await readFile(
+      path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'),
+      'utf8',
+    );
+
+    expect(chatDirectories).toEqual([current.chatId]);
+    expect(messagesFile).toBe('');
+    expect(io.getStdout()).toContain('history cleared');
   });
 
   it('reports missing runtime environment variables before attempting the turn', async () => {

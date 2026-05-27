@@ -837,17 +837,17 @@ async function setCurrentChat(chatId) {
 async function loadRequestedChat({ newChat }) {
   await ensureChatStorage();
   if (newChat) {
-    return createEmptyChat();
+    return await createPersistedChat();
   }
   const chatId = await readCurrentChatId();
   if (!chatId) {
-    return createEmptyChat();
+    return await createPersistedChat();
   }
   try {
     return await loadChatById(chatId);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Missing chat session file: ")) {
-      return createEmptyChat();
+      return await createPersistedChat();
     }
     throw error;
   }
@@ -2344,6 +2344,7 @@ function createTurnExecutor(options) {
               warning && typeof warning === "object" && "message" in warning ? warning.message : JSON.stringify(warning ?? null)
             );
             if (options.verbose) {
+              pendingDisplay.clear();
               const closedReasoning = closeReasoningDiagnostic();
               if (!closedReasoning) {
                 writeTypeTransitionSeparator(stderr, lastStreamType, "warning");
@@ -2364,6 +2365,7 @@ function createTurnExecutor(options) {
               streamError && typeof streamError === "object" && "message" in streamError ? streamError.message : JSON.stringify(streamError ?? null)
             );
             if (options.verbose) {
+              pendingDisplay.clear();
               const closedReasoning = closeReasoningDiagnostic();
               if (!closedReasoning) {
                 writeTypeTransitionSeparator(stderr, lastStreamType, "error");
@@ -2412,6 +2414,7 @@ function createTurnExecutor(options) {
           }
         },
         onToolCall: options.streamOff ? void 0 : (toolCall) => {
+          pendingDisplay.clear();
           if (options.verbose) {
             const closedReasoning = closeReasoningDiagnostic();
             const diagnostic = formatToolCallDiagnostic(toolCall);
@@ -2427,6 +2430,7 @@ function createTurnExecutor(options) {
           lastStreamType = "tool_call";
         },
         onToolResult: options.streamOff ? void 0 : (toolResult) => {
+          pendingDisplay.clear();
           if (options.verbose) {
             const closedReasoning = closeReasoningDiagnostic();
             const diagnostic = formatToolResultDiagnostic(toolResult);
@@ -2786,11 +2790,19 @@ async function runInteractiveSession({
       if (input === "/exit" || input === "/quit") {
         break;
       }
-      if (input === "/new" || input === "/clear") {
+      if (input === "/new") {
         chat = await createPersistedChat();
-        io.stdout.write(input === "/clear" ? "history cleared\n\n" : `new chat ${chat.id}
+        io.stdout.write(`new chat ${chat.id}
 
 `);
+        continue;
+      }
+      if (input === "/clear") {
+        chat = await persistCompletedChat({
+          chat,
+          messages: []
+        });
+        io.stdout.write("history cleared\n\n");
         continue;
       }
       if (input === "/chats") {

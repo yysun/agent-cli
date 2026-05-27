@@ -11,6 +11,7 @@
  * - Does not persist worlds, world ids, agents, `agent.json`, or runtime defaults.
  *
  * Recent changes:
+ * - 2026-05-26: Made requested or missing current chats persist as the selected chat immediately.
  * - 2026-05-26: Ensured new chat requests also initialize workspace storage.
  * - 2026-05-26: Flattened storage to `.agent-world/chats` and removed persisted agent/world state.
  */
@@ -437,20 +438,20 @@ export async function loadRequestedChat({ newChat }) {
   await ensureChatStorage();
 
   if (newChat) {
-    return createEmptyChat();
+    return await createPersistedChat();
   }
 
   const chatId = await readCurrentChatId();
 
   if (!chatId) {
-    return createEmptyChat();
+    return await createPersistedChat();
   }
 
   try {
     return await loadChatById(chatId);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Missing chat session file: ')) {
-      return createEmptyChat();
+      return await createPersistedChat();
     }
 
     throw error;

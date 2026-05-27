@@ -40,6 +40,7 @@ import {
   createPersistedChat,
   loadRequestedChat,
   listPersistedChats,
+  persistCompletedChat,
   setCurrentChat,
 } from '../../core/chat-store.js';
 import {
@@ -458,9 +459,18 @@ async function runInteractiveSession({
         break;
       }
 
-      if (input === '/new' || input === '/clear') {
+      if (input === '/new') {
         chat = await createPersistedChat();
-        io.stdout.write(input === '/clear' ? 'history cleared\n\n' : `new chat ${chat.id}\n\n`);
+        io.stdout.write(`new chat ${chat.id}\n\n`);
+        continue;
+      }
+
+      if (input === '/clear') {
+        chat = await persistCompletedChat({
+          chat,
+          messages: [],
+        });
+        io.stdout.write('history cleared\n\n');
         continue;
       }
 

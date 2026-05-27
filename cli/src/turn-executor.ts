@@ -221,6 +221,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               );
 
               if (options.verbose) {
+                pendingDisplay.clear();
                 const closedReasoning = closeReasoningDiagnostic();
                 if (!closedReasoning) {
                   writeTypeTransitionSeparator(stderr, lastStreamType, 'warning');
@@ -247,6 +248,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               );
 
               if (options.verbose) {
+                pendingDisplay.clear();
                 const closedReasoning = closeReasoningDiagnostic();
                 if (!closedReasoning) {
                   writeTypeTransitionSeparator(stderr, lastStreamType, 'error');
@@ -305,6 +307,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         onToolCall: options.streamOff
           ? undefined
           : (toolCall) => {
+            pendingDisplay.clear();
+
             if (options.verbose) {
               const closedReasoning = closeReasoningDiagnostic();
               const diagnostic = formatToolCallDiagnostic(toolCall);
@@ -324,6 +328,8 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         onToolResult: options.streamOff
           ? undefined
           : (toolResult) => {
+            pendingDisplay.clear();
+
             if (options.verbose) {
               const closedReasoning = closeReasoningDiagnostic();
               const diagnostic = formatToolResultDiagnostic(toolResult);

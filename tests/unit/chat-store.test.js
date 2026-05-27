@@ -129,6 +129,41 @@ describe('chat-store', () => {
     ]);
   });
 
+  it('creates a persisted current chat only when requested or when no current chat exists', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const { listPersistedChats, loadRequestedChat } = await loadChatStore(rootPath);
+
+    const firstChat = await loadRequestedChat({ newChat: false });
+    const firstCurrent = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+
+    expect(firstCurrent.chatId).toBe(firstChat.id);
+    expect(await listPersistedChats()).toEqual([
+      expect.objectContaining({
+        id: firstChat.id,
+        isCurrent: true,
+        messageCount: 0,
+      }),
+    ]);
+
+    const loadedCurrent = await loadRequestedChat({ newChat: false });
+    expect(loadedCurrent.id).toBe(firstChat.id);
+    expect(await listPersistedChats()).toHaveLength(1);
+
+    const secondChat = await loadRequestedChat({ newChat: true });
+    const secondCurrent = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const chats = await listPersistedChats();
+
+    expect(secondChat.id).not.toBe(firstChat.id);
+    expect(secondCurrent.chatId).toBe(secondChat.id);
+    expect(chats).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: firstChat.id, isCurrent: false }),
+      expect.objectContaining({ id: secondChat.id, isCurrent: true }),
+    ]));
+    expect(chats).toHaveLength(2);
+  });
+
   it('lists persisted chats and marks the current chat', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -196,9 +231,12 @@ describe('chat-store', () => {
       deleted: true,
     });
     await expect(readFile(path.join(rootPath, '.agent-world', 'chats', chat.id, 'chat.json'), 'utf8')).rejects.toThrow();
-    await expect(loadRequestedChat({ newChat: false })).resolves.toMatchObject({
+    const replacementChat = await loadRequestedChat({ newChat: false });
+    expect(replacementChat.id).not.toBe(chat.id);
+    expect(replacementChat).toMatchObject({
       messages: [],
     });
+    await expect(readFile(path.join(rootPath, '.agent-world', 'chats', replacementChat.id, 'chat.json'), 'utf8')).resolves.toContain(replacementChat.id);
   });
 
   it('persists stream trace events inside the chat folder', async () => {
@@ -246,6 +284,12 @@ describe('chat-store', () => {
     expect(current.messages).toEqual([]);
 
     const chats = await listPersistedChats();
-    expect(chats).toEqual([]);
+    expect(chats).toEqual([
+      expect.objectContaining({
+        id: current.id,
+        isCurrent: true,
+        messageCount: 0,
+      }),
+    ]);
   });
 });
