@@ -26,6 +26,7 @@ export interface PendingDisplay {
 
 export function createPendingDisplay(output: PendingDisplaySink): PendingDisplay {
   const frames = ['.', '..', '...'];
+  const clearFrame = `\r\u001b[2K${' '.repeat(Math.max(...frames.map((frame) => frame.length)))}\r\u001b[2K`;
   let frameIndex = frames.length - 1;
   let interval: NodeJS.Timeout | null = null;
   let pendingVisible = false;
@@ -62,7 +63,7 @@ export function createPendingDisplay(output: PendingDisplaySink): PendingDisplay
       stop();
 
       if (pendingVisible) {
-        output.write('\r\u001b[2K');
+        output.write(clearFrame);
         pendingVisible = false;
       }
     },

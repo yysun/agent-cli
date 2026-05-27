@@ -377,6 +377,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         pendingDisplay.clear();
         options.io.stdout.write(`${turnResult.assistantText}\n`);
       } else if (pendingDisplay.hasWrittenText()) {
+        pendingDisplay.clear();
         options.io.stdout.write('\n');
       } else {
         pendingDisplay.clear();

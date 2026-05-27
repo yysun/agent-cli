@@ -1487,6 +1487,7 @@ ${formatHumanInputCheckpoint(request, question)}`);
 // cli/src/pending-display.ts
 function createPendingDisplay(output) {
   const frames = [".", "..", "..."];
+  const clearFrame = `\r\x1B[2K${" ".repeat(Math.max(...frames.map((frame) => frame.length)))}\r\x1B[2K`;
   let frameIndex = frames.length - 1;
   let interval = null;
   let pendingVisible = false;
@@ -1517,7 +1518,7 @@ function createPendingDisplay(output) {
     clear() {
       stop();
       if (pendingVisible) {
-        output.write("\r\x1B[2K");
+        output.write(clearFrame);
         pendingVisible = false;
       }
     },
@@ -2472,6 +2473,7 @@ function createTurnExecutor(options) {
         options.io.stdout.write(`${turnResult.assistantText}
 `);
       } else if (pendingDisplay.hasWrittenText()) {
+        pendingDisplay.clear();
         options.io.stdout.write("\n");
       } else {
         pendingDisplay.clear();

@@ -305,6 +305,47 @@ describe('agent-cli entrypoint', () => {
     expect(stdoutChunks.join('')).toContain('done\n');
   });
 
+  it('clears restarted pending dots before ending a streamed turn', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, handleToolCall }) => {
+      await onStreamChunk?.({ content: 'partial' });
+      await handleToolCall?.({
+        toolCall: { id: 'input-1' },
+        toolName: 'ask_user_input',
+        arguments: JSON.stringify({
+          question: 'Continue?',
+          options: ['Yes'],
+          allowFreeformInput: false,
+        }),
+      });
+
+      return {
+        assistantText: 'partial',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'partial' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true });
+    const inputPrompt = createScriptedPrompt(['1']);
+
+    await main(['hello'], io, { inputPrompt });
+
+    expect(io.getStdout()).toContain('partial');
+    expect(io.getStdout()).toMatch(/\r\u001b\[2K {3}\r\u001b\[2K\n$/);
+    expect(io.getStdout()).not.toMatch(/\.\.\.\n$/);
+  });
+
   it('colors verbose reasoning and tool results gray on TTY stderr', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
