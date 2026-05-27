@@ -123,6 +123,26 @@ function stripLeadingLineBreaks(text: string): string {
   return text.replace(/^\n+/, '');
 }
 
+function shouldHoldPotentialHumanInputPrompt(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trimStart().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  const promptPrefixes = [
+    'please select',
+    'select',
+    'please choose',
+    'choose',
+    'reply with',
+    'answer with',
+  ];
+
+  return promptPrefixes.some((prefix) => (
+    prefix.startsWith(normalized) || normalized.startsWith(prefix)
+  ));
+}
+
 export async function resolveEffectiveAgentConfig(
   options: ResolveEffectiveAgentConfigOptions = {},
 ): Promise<Record<string, unknown>> {
@@ -154,6 +174,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
     const streamTraceEvents: StreamTraceEvent[] = [];
     let lastStreamType: string | null = null;
     let reasoningDiagnosticOpen = false;
+    let heldAssistantText = '';
     const pendingDisplay = createPendingDisplay(options.io.stdout);
     const pastMessages = Number(options.agentConfig.pastMessages);
     const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
@@ -186,6 +207,20 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       reasoningDiagnosticOpen = false;
       lastStreamType = 'reasoning';
       return true;
+    }
+
+    function writeAssistantText(text: string): void {
+      pendingDisplay.writeText(text);
+      void onAssistantChunk?.(text);
+    }
+
+    function flushHeldAssistantText(): void {
+      if (!heldAssistantText) {
+        return;
+      }
+
+      writeAssistantText(heldAssistantText);
+      heldAssistantText = '';
     }
 
     try {
@@ -290,8 +325,12 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               if (!closedReasoning && options.verbose && lastStreamType === 'tool_result') {
                 options.io.stdout.write('\n');
               }
-              pendingDisplay.writeText(chunk.content);
-              await onAssistantChunk?.(chunk.content);
+
+              if (heldAssistantText || shouldHoldPotentialHumanInputPrompt(chunk.content)) {
+                heldAssistantText += chunk.content;
+              } else {
+                writeAssistantText(chunk.content);
+              }
 
               if (streamTraceEnabled) {
                 streamTraceEvents.push({
@@ -308,6 +347,17 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           ? undefined
           : (toolCall) => {
             pendingDisplay.clear();
+            const humanInputRequest = parseHumanInputRequest(
+              toolCall.name,
+              toolCall.arguments,
+              toolCall.id,
+            );
+
+            if (humanInputRequest) {
+              heldAssistantText = '';
+            } else {
+              flushHeldAssistantText();
+            }
 
             if (options.verbose) {
               const closedReasoning = closeReasoningDiagnostic();
@@ -345,6 +395,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             return { handled: false };
           }
 
+          heldAssistantText = '';
           pendingDisplay.clear();
           const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
           if (!options.streamOff) {
@@ -364,6 +415,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       });
 
       closeReasoningDiagnostic();
+      flushHeldAssistantText();
 
       await persistCompletedChat({
         chat,

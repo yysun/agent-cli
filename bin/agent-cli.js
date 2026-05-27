@@ -2264,6 +2264,21 @@ function grayForTerminal(stderr, text) {
 function stripLeadingLineBreaks(text) {
   return text.replace(/^\n+/, "");
 }
+function shouldHoldPotentialHumanInputPrompt(text) {
+  const normalized = text.replace(/\s+/g, " ").trimStart().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const promptPrefixes = [
+    "please select",
+    "select",
+    "please choose",
+    "choose",
+    "reply with",
+    "answer with"
+  ];
+  return promptPrefixes.some((prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix));
+}
 async function resolveEffectiveAgentConfig(options = {}) {
   const persistedAgentConfig = loadPersistedRuntimeConfig();
   const baseAgentConfig = {
@@ -2290,6 +2305,7 @@ function createTurnExecutor(options) {
     const streamTraceEvents = [];
     let lastStreamType = null;
     let reasoningDiagnosticOpen = false;
+    let heldAssistantText = "";
     const pendingDisplay = createPendingDisplay(options.io.stdout);
     const pastMessages = Number(options.agentConfig.pastMessages);
     const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0 ? pastMessages : 0;
@@ -2317,6 +2333,17 @@ function createTurnExecutor(options) {
       reasoningDiagnosticOpen = false;
       lastStreamType = "reasoning";
       return true;
+    }
+    function writeAssistantText(text) {
+      pendingDisplay.writeText(text);
+      void onAssistantChunk?.(text);
+    }
+    function flushHeldAssistantText() {
+      if (!heldAssistantText) {
+        return;
+      }
+      writeAssistantText(heldAssistantText);
+      heldAssistantText = "";
     }
     try {
       if (!options.streamOff) {
@@ -2401,8 +2428,11 @@ function createTurnExecutor(options) {
             if (!closedReasoning && options.verbose && lastStreamType === "tool_result") {
               options.io.stdout.write("\n");
             }
-            pendingDisplay.writeText(chunk.content);
-            await onAssistantChunk?.(chunk.content);
+            if (heldAssistantText || shouldHoldPotentialHumanInputPrompt(chunk.content)) {
+              heldAssistantText += chunk.content;
+            } else {
+              writeAssistantText(chunk.content);
+            }
             if (streamTraceEnabled) {
               streamTraceEvents.push({
                 type: "text",
@@ -2415,6 +2445,16 @@ function createTurnExecutor(options) {
         },
         onToolCall: options.streamOff ? void 0 : (toolCall) => {
           pendingDisplay.clear();
+          const humanInputRequest = parseHumanInputRequest(
+            toolCall.name,
+            toolCall.arguments,
+            toolCall.id
+          );
+          if (humanInputRequest) {
+            heldAssistantText = "";
+          } else {
+            flushHeldAssistantText();
+          }
           if (options.verbose) {
             const closedReasoning = closeReasoningDiagnostic();
             const diagnostic = formatToolCallDiagnostic(toolCall);
@@ -2444,6 +2484,7 @@ function createTurnExecutor(options) {
           if (!request) {
             return { handled: false };
           }
+          heldAssistantText = "";
           pendingDisplay.clear();
           const result = await collectHumanInputAnswer(request, inputPrompt, options.io.stdout);
           if (!options.streamOff) {
@@ -2461,6 +2502,7 @@ function createTurnExecutor(options) {
         agentConfig: options.agentConfig
       });
       closeReasoningDiagnostic();
+      flushHeldAssistantText();
       await persistCompletedChat({
         chat,
         messages: turnResult.messages
@@ -2505,6 +2547,72 @@ function createTurnExecutor(options) {
 
 // cli/src/agent-cli.ts
 var WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
+function readMessageContent(message) {
+  if (!message || typeof message !== "object" || !("content" in message)) {
+    return "";
+  }
+  const content = message.content;
+  return typeof content === "string" ? content : "";
+}
+function findLastAssistantText(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      continue;
+    }
+    const content = readMessageContent(message);
+    if (content.trim()) {
+      return content;
+    }
+  }
+  return "";
+}
+function asksForNumberedOptionReply(text) {
+  const normalized = text.replace(/\s+/g, " ").toLowerCase();
+  return [
+    "please select",
+    "select one",
+    "choose one",
+    "reply with the exact",
+    "reply with exact",
+    "exact pattern name",
+    "select a number"
+  ].some((phrase) => normalized.includes(phrase));
+}
+function extractNumberedOptionLabel(rawOptionText) {
+  const optionText = rawOptionText.trim();
+  const formattedLabel = optionText.match(/^(?:\*\*([^*]+)\*\*|`([^`]+)`)/);
+  if (formattedLabel) {
+    return String(formattedLabel[1] ?? formattedLabel[2] ?? "").trim();
+  }
+  const separatedLabel = optionText.match(/^(.+?)(?:\s+[\u2013\u2014-]\s+|\s*:\s+|\s+\(|$)/);
+  return String(separatedLabel?.[1] ?? optionText).trim().replace(/^\*\*|\*\*$/g, "").replace(/^`|`$/g, "");
+}
+function extractNumberedOptionReply(text, selectedNumber) {
+  if (!asksForNumberedOptionReply(text)) {
+    return null;
+  }
+  const optionLinePattern = /^\s*(\d+)[.)]\s+(.+?)\s*$/gm;
+  let match;
+  while ((match = optionLinePattern.exec(text)) !== null) {
+    const optionNumber = Number(match[1]);
+    if (optionNumber !== selectedNumber) {
+      continue;
+    }
+    const label = extractNumberedOptionLabel(match[2] ?? "");
+    return label || null;
+  }
+  return null;
+}
+function normalizeNumberedOptionReply(chat, input) {
+  const trimmedInput = input.trim();
+  if (!/^[1-9]\d*$/.test(trimmedInput)) {
+    return input;
+  }
+  const assistantText = findLastAssistantText(chat.messages ?? []);
+  const selectedOption = extractNumberedOptionReply(assistantText, Number(trimmedInput));
+  return selectedOption ?? input;
+}
 function usageText() {
   return [
     "Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>",
@@ -2837,10 +2945,11 @@ async function runInteractiveSession({
 `);
         continue;
       }
+      const normalizedInput = normalizeNumberedOptionReply(chat, input);
       try {
         await executeTurn({
           chat,
-          message: input,
+          message: normalizedInput,
           inputPrompt: prompt
         });
         io.stdout.write("\n");
@@ -2919,7 +3028,7 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
   try {
     return await executeTurn({
       chat,
-      message,
+      message: normalizeNumberedOptionReply(chat, message),
       inputPrompt: oneShotInputPrompt
     });
   } finally {
@@ -2949,6 +3058,7 @@ export {
   WORKSPACE_ENV_KEY,
   isCliEntrypoint,
   main,
+  normalizeNumberedOptionReply,
   parseArguments,
   runCli,
   runtimeSelectionText,

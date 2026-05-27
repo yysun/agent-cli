@@ -346,6 +346,60 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).not.toMatch(/\.\.\.\n$/);
   });
 
+  it('suppresses streamed prompt text when structured user input follows', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, handleToolCall }) => {
+      await onStreamChunk?.({
+        content: 'Please select one workflow pattern.\n\n1. linear\n2. router\n3. supervisor\n4. review-loop\n5. multi-review\n6. parallel-fanout\n7. map-reduce\n8. state-machine\n9. single-agent\n',
+      });
+      await handleToolCall?.({
+        toolCall: { id: 'input-1' },
+        toolName: 'ask_user_input',
+        arguments: JSON.stringify({
+          type: 'single-select',
+          question: 'Select exactly one Agent World workflow pattern to initialize:',
+          options: [
+            'linear',
+            'router',
+            'supervisor',
+            'review-loop',
+            'multi-review',
+            'parallel-fanout',
+            'map-reduce',
+            'state-machine',
+            'single-agent',
+          ],
+          allowFreeformInput: false,
+        }),
+      });
+
+      return {
+        assistantText: '',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: '' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture();
+    const inputPrompt = createScriptedPrompt(['9']);
+
+    await main(['hello'], io, { interactivePrompt: inputPrompt });
+
+    expect(io.getStdout()).not.toContain('Please select one workflow pattern.');
+    expect(io.getStdout()).toContain('assistant needs input:');
+    expect(io.getStdout()).toContain('9. single-agent');
+  });
+
   it('clears pending dots before verbose tool diagnostics', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
@@ -491,6 +545,66 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toContain('Agent CLI interactive mode.');
     expect(io.getStdout()).toContain('interactive ok\n\n');
     expect(io.getStderr()).toBe('');
+  });
+
+  it('normalizes numbered replies to the previous assistant option label', async () => {
+    applyMinimalRuntimeEnvironment();
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    const patternPrompt = [
+      'Please select one of the following nine supported patterns:',
+      '',
+      '1. **linear** - Fixed sequential agents.',
+      '2. **router** - A router agent decides.',
+      '3. **supervisor** - A supervisor delegates.',
+      '4. **review-loop** - Worker with reviewer feedback.',
+      '5. **multi-review** - Worker with multiple reviewers.',
+      '6. **parallel-fanout** - Parallel agents then aggregate.',
+      '7. **map-reduce** - Map chunks then reduce.',
+      '8. **state-machine** - Explicit transitions.',
+      '9. **single-agent** - One agent handles everything.',
+      '',
+      'Reply with the exact pattern name.',
+    ].join('\n');
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ chat, userMessage, onStreamChunk }) => {
+      if (userMessage === 'init') {
+        onStreamChunk?.({ content: patternPrompt });
+
+        return {
+          assistantText: patternPrompt,
+          messages: [
+            ...chat.messages,
+            { role: 'user', content: userMessage },
+            { role: 'assistant', content: patternPrompt },
+          ],
+        };
+      }
+
+      return {
+        assistantText: 'ok',
+        messages: [
+          ...chat.messages,
+          { role: 'user', content: userMessage },
+          { role: 'assistant', content: 'ok' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture();
+    const interactivePrompt = createScriptedPrompt(['init', '9', '/exit']);
+
+    await main([], io, { interactivePrompt });
+
+    expect(runChatTurn).toHaveBeenCalledTimes(2);
+    expect(runChatTurn.mock.calls[1][0]).toEqual(expect.objectContaining({
+      userMessage: 'single-agent',
+    }));
   });
 
   it('handles interactive chat commands without running a model turn', async () => {

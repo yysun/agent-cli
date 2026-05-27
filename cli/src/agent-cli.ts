@@ -73,6 +73,92 @@ export interface InteractivePrompt {
   close?(): void;
 }
 
+function readMessageContent(message: unknown): string {
+  if (!message || typeof message !== 'object' || !('content' in message)) {
+    return '';
+  }
+
+  const content = (message as { content?: unknown }).content;
+  return typeof content === 'string' ? content : '';
+}
+
+function findLastAssistantText(messages: unknown[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== 'object' || (message as { role?: unknown }).role !== 'assistant') {
+      continue;
+    }
+
+    const content = readMessageContent(message);
+    if (content.trim()) {
+      return content;
+    }
+  }
+
+  return '';
+}
+
+function asksForNumberedOptionReply(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').toLowerCase();
+
+  return [
+    'please select',
+    'select one',
+    'choose one',
+    'reply with the exact',
+    'reply with exact',
+    'exact pattern name',
+    'select a number',
+  ].some((phrase) => normalized.includes(phrase));
+}
+
+function extractNumberedOptionLabel(rawOptionText: string): string {
+  const optionText = rawOptionText.trim();
+  const formattedLabel = optionText.match(/^(?:\*\*([^*]+)\*\*|`([^`]+)`)/);
+  if (formattedLabel) {
+    return String(formattedLabel[1] ?? formattedLabel[2] ?? '').trim();
+  }
+
+  const separatedLabel = optionText.match(/^(.+?)(?:\s+[\u2013\u2014-]\s+|\s*:\s+|\s+\(|$)/);
+  return String(separatedLabel?.[1] ?? optionText).trim().replace(/^\*\*|\*\*$/g, '').replace(/^`|`$/g, '');
+}
+
+function extractNumberedOptionReply(text: string, selectedNumber: number): string | null {
+  if (!asksForNumberedOptionReply(text)) {
+    return null;
+  }
+
+  const optionLinePattern = /^\s*(\d+)[.)]\s+(.+?)\s*$/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = optionLinePattern.exec(text)) !== null) {
+    const optionNumber = Number(match[1]);
+    if (optionNumber !== selectedNumber) {
+      continue;
+    }
+
+    const label = extractNumberedOptionLabel(match[2] ?? '');
+    return label || null;
+  }
+
+  return null;
+}
+
+export function normalizeNumberedOptionReply(
+  chat: { messages?: unknown[] },
+  input: string,
+): string {
+  const trimmedInput = input.trim();
+  if (!/^[1-9]\d*$/.test(trimmedInput)) {
+    return input;
+  }
+
+  const assistantText = findLastAssistantText(chat.messages ?? []);
+  const selectedOption = extractNumberedOptionReply(assistantText, Number(trimmedInput));
+
+  return selectedOption ?? input;
+}
+
 export function usageText(): string {
   return [
     'Usage: agent-cli [--workspace <path>] [--new-chat] [--verbose] [--stream-off] [runtime options] <message>',
@@ -504,10 +590,12 @@ async function runInteractiveSession({
         continue;
       }
 
+      const normalizedInput = normalizeNumberedOptionReply(chat, input);
+
       try {
         await executeTurn({
           chat,
-          message: input,
+          message: normalizedInput,
           inputPrompt: prompt,
         });
         io.stdout.write('\n');
@@ -602,7 +690,7 @@ export async function main(
   try {
     return await executeTurn({
       chat,
-      message,
+      message: normalizeNumberedOptionReply(chat, message),
       inputPrompt: oneShotInputPrompt,
     });
   } finally {
