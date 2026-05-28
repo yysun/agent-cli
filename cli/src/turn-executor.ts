@@ -10,6 +10,7 @@
  * - Formats verbose tool activity through a dedicated trace renderer.
  *
  * Recent changes:
+ * - 2026-05-28: Restored pending dots after verbose continuation diagnostics while waiting for assistant text.
  * - 2026-05-26: Removed agent-id-specific persisted runtime config and chat persistence.
  * - 2026-05-23: Renamed from agent-runtime to clarify this is the CLI turn executor.
  * - 2026-05-23: Renamed root prompt option from project to workspace terminology.
@@ -203,6 +204,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         return;
       }
 
+      pendingDisplay.clear();
       verboseDisplay.beforeAssistantText(lastStreamType);
       writeAssistantText(heldAssistantText);
       heldAssistantText = '';
@@ -240,6 +242,12 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       }
 
       pendingTextTraceEvents.length = 0;
+    }
+
+    function resumePendingAssistantText(): void {
+      if (!options.streamOff) {
+        pendingDisplay.start({ separateFromText: true });
+      }
     }
 
     try {
@@ -337,6 +345,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             if (chunk.content) {
               const closedReasoning = verboseDisplay.closeReasoning();
               if (!closedReasoning) {
+                pendingDisplay.clear();
                 verboseDisplay.beforeAssistantText(lastStreamType);
               }
 
@@ -372,8 +381,11 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
                 verboseDisplay.writeDiagnostic(diagnostic, 'model_response');
                 lastStreamType = 'model_response';
               }
+              if (isToolContinuationModelResponse(response)) {
+                resumePendingAssistantText();
+              }
             } else if (!options.streamOff && isToolContinuationModelResponse(response)) {
-              pendingDisplay.start({ separateFromText: true });
+              resumePendingAssistantText();
             }
           },
         onToolCall: (toolCall) => {
@@ -393,13 +405,16 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             if (options.verbose || humanInputRequest) {
               pendingDisplay.clear();
             } else if (!options.streamOff) {
-              pendingDisplay.start({ separateFromText: true });
+              resumePendingAssistantText();
             }
 
             if (options.verbose) {
               const diagnostic = formatToolCallDiagnostic(toolCall);
               const displayDiagnostic = humanInputToolCall ? `${diagnostic}\n\n` : diagnostic;
               verboseDisplay.writeDiagnostic(displayDiagnostic, 'tool_call');
+              if (!humanInputRequest) {
+                resumePendingAssistantText();
+              }
             }
 
             if (streamTraceEnabled) {
@@ -417,8 +432,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
               pendingDisplay.clear();
               const diagnostic = formatToolResultDiagnostic(toolResult);
               verboseDisplay.writeDiagnostic(diagnostic, 'tool_result');
+              resumePendingAssistantText();
             } else if (!options.streamOff) {
-              pendingDisplay.start({ separateFromText: true });
+              resumePendingAssistantText();
             }
 
             lastStreamType = 'tool_result';
@@ -435,9 +451,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           const humanInputOutput = options.verbose ? stderr : options.io.stdout;
           const result = await collectHumanInputAnswer(request, inputPrompt, humanInputOutput);
           pendingDisplay.noteExternalOutput();
-          if (!options.streamOff) {
-            pendingDisplay.start({ separateFromText: true });
-          }
+          resumePendingAssistantText();
 
           return {
             handled: true,

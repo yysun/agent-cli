@@ -6,6 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-05-28: Covered verbose pending dots as a waiting-for-assistant-text indicator.
  * - 2026-05-26: Covered workspace-local `.env` loading and `.env.example` creation.
  * - 2026-05-26: Asserted generated initial `.env.example` exactly matches the checked-in example.
  * - 2026-05-26: Added coverage for omitting empty startup skill scopes.
@@ -502,9 +503,78 @@ describe('agent-cli entrypoint', () => {
 
     await main(['--verbose', 'hello'], io);
 
-    expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K');
+    expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K...\r\u001b[2K   \r\u001b[2K...\r\u001b[2K   \r\u001b[2K');
     expect(io.getStderr()).toContain('\u001b[90m\n  ↳ load_skill {"skill_id":"agent-world-skill"}\u001b[0m');
     expect(io.getStderr()).toContain('\u001b[90m\n  ✓ load_skill 7ms · Loaded\n\u001b[0m');
+  });
+
+  it('restarts pending dots after verbose model continuation diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onModelResponse }) => {
+      onModelResponse?.({
+        stopKind: 'tool_use',
+        providerStopReason: 'tool_calls',
+      });
+
+      return {
+        assistantText: '',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: '' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true, stderrIsTTY: true });
+
+    await main(['--verbose', 'hello'], io);
+
+    expect(io.getStdout().match(/\.\.\./g)).toHaveLength(2);
+    expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K...\r\u001b[2K   \r\u001b[2K');
+    expect(io.getStderr()).toContain('✓ model.response stopKind=tool_use · finish_reason=tool_calls');
+  });
+
+  it('does not restart pending dots after verbose natural-stop diagnostics', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onStreamChunk, onModelResponse }) => {
+      await onStreamChunk?.({ content: 'done' });
+      onModelResponse?.({
+        stopKind: 'natural_stop',
+        providerStopReason: 'stop',
+      });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stdoutIsTTY: true, stderrIsTTY: true });
+
+    await main(['--verbose', 'hello'], io);
+
+    expect(io.getStdout().match(/\.\.\./g)).toHaveLength(1);
+    expect(io.getStdout()).toContain('done\n');
+    expect(io.getStderr()).toContain('✓ model.response stopKind=natural_stop · finish_reason=stop');
   });
 
   it('keeps pending dots visible during non-verbose tool calls before assistant text', async () => {

@@ -3121,6 +3121,7 @@ function createTurnExecutor(options) {
       if (!heldAssistantText) {
         return;
       }
+      pendingDisplay.clear();
       verboseDisplay.beforeAssistantText(lastStreamType);
       writeAssistantText(heldAssistantText);
       heldAssistantText = "";
@@ -3144,6 +3145,11 @@ function createTurnExecutor(options) {
         }
       }
       pendingTextTraceEvents.length = 0;
+    }
+    function resumePendingAssistantText() {
+      if (!options.streamOff) {
+        pendingDisplay.start({ separateFromText: true });
+      }
     }
     try {
       if (!options.streamOff) {
@@ -3223,6 +3229,7 @@ function createTurnExecutor(options) {
           if (chunk.content) {
             const closedReasoning = verboseDisplay.closeReasoning();
             if (!closedReasoning) {
+              pendingDisplay.clear();
               verboseDisplay.beforeAssistantText(lastStreamType);
             }
             if (heldAssistantText || shouldHoldPotentialHumanInputPrompt(chunk.content)) {
@@ -3253,8 +3260,11 @@ function createTurnExecutor(options) {
               verboseDisplay.writeDiagnostic(diagnostic, "model_response");
               lastStreamType = "model_response";
             }
+            if (isToolContinuationModelResponse(response)) {
+              resumePendingAssistantText();
+            }
           } else if (!options.streamOff && isToolContinuationModelResponse(response)) {
-            pendingDisplay.start({ separateFromText: true });
+            resumePendingAssistantText();
           }
         },
         onToolCall: (toolCall) => {
@@ -3272,7 +3282,7 @@ function createTurnExecutor(options) {
           if (options.verbose || humanInputRequest) {
             pendingDisplay.clear();
           } else if (!options.streamOff) {
-            pendingDisplay.start({ separateFromText: true });
+            resumePendingAssistantText();
           }
           if (options.verbose) {
             const diagnostic = formatToolCallDiagnostic(toolCall);
@@ -3280,6 +3290,9 @@ function createTurnExecutor(options) {
 
 ` : diagnostic;
             verboseDisplay.writeDiagnostic(displayDiagnostic, "tool_call");
+            if (!humanInputRequest) {
+              resumePendingAssistantText();
+            }
           }
           if (streamTraceEnabled) {
             streamTraceEvents.push({
@@ -3295,8 +3308,9 @@ function createTurnExecutor(options) {
             pendingDisplay.clear();
             const diagnostic = formatToolResultDiagnostic(toolResult);
             verboseDisplay.writeDiagnostic(diagnostic, "tool_result");
+            resumePendingAssistantText();
           } else if (!options.streamOff) {
-            pendingDisplay.start({ separateFromText: true });
+            resumePendingAssistantText();
           }
           lastStreamType = "tool_result";
         },
@@ -3311,9 +3325,7 @@ function createTurnExecutor(options) {
           const humanInputOutput = options.verbose ? stderr : options.io.stdout;
           const result = await collectHumanInputAnswer(request, inputPrompt, humanInputOutput);
           pendingDisplay.noteExternalOutput();
-          if (!options.streamOff) {
-            pendingDisplay.start({ separateFromText: true });
-          }
+          resumePendingAssistantText();
           return {
             handled: true,
             result
