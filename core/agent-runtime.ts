@@ -12,10 +12,10 @@
  *
  * Recent changes:
  * - 2026-05-27: Tightened JSDoc boundary types so editor check-js sees runtime options and callbacks correctly.
- * - 2026-05-27: Passed an explicit built-in tool selection so shell, write, and directory creation tools are available outside read-only mode.
+ * - 2026-05-28: Updated for `llm-runtime` 0.6.3 runtime-owned tool permissions and `answer_delta` events.
  * - 2026-05-27: Preserved plain-text final responses when the runtime rejects only the missing control-tool wrapper without persisting rejected retry drafts.
  * - 2026-05-27: Let `llm-runtime` own the default completion tool surface so simple chat does not expose mutating tools that require write evidence.
- * - 2026-05-27: Forwarded `final_answer_delta` events as assistant content for improved control-tool answer streaming.
+ * - 2026-05-27: Forwarded answer delta events as assistant content for improved control-tool answer streaming.
  * - 2026-05-27: Routed stream-off turns through runtime `complete(...)` and preserved provider response metadata for CLI diagnostics.
  * - 2026-05-27: Exposed shared runtime selection so CLI startup diagnostics no longer duplicate provider/model default logic.
  * - 2026-05-27: Switched from `runCompletionLoop` to `complete(...)` so the loop defaults to control-tool termination; added `onFinalAnswerToolCall` / `onNeedUserInputToolCall` / `onBlockedToolCall` handlers that populate `finalText` from the model's control-tool output.
@@ -34,7 +34,6 @@ import {
   streamComplete,
 } from 'llm-runtime';
 import type {
-  BuiltInToolSelection,
   LLMChatMessage,
   LLMEnvironmentOptions,
   LLMProviderConfigs,
@@ -186,28 +185,6 @@ function buildExecutionContext(agentConfig?: Pick<RuntimeAgentConfig, 'reasoning
   }
 
   return context;
-}
-
-/**
- * @param {{ toolPermission?: ToolPermission }} [agentConfig]
- * @returns {BuiltInToolSelection}
- */
-function buildRuntimeBuiltIns(agentConfig?: Pick<RuntimeAgentConfig, 'toolPermission'>): BuiltInToolSelection {
-  const config = agentConfig ?? {};
-  const mutatingToolsEnabled = config.toolPermission !== 'read';
-
-  return {
-    load_skill: true,
-    ask_user_input: true,
-    read_file: true,
-    list_files: true,
-    search_files: true,
-    path_exists: true,
-    shell_cmd: mutatingToolsEnabled,
-    write_file: mutatingToolsEnabled,
-    create_directory: mutatingToolsEnabled,
-    web_fetch: false,
-  };
 }
 
 /**
@@ -593,7 +570,6 @@ export async function runChatTurn({
       provider: runtimeSettings.provider,
       model: runtimeSettings.model,
       messages: [...systemMessages, ...contextMessages, pendingUserMessage],
-      builtIns: buildRuntimeBuiltIns(runtimeAgentConfig),
       context: { ...executionContext, ...(abortSignal ? { abortSignal } : {}) },
       ...(typeof runtimeAgentConfig.temperature === 'number' ? { temperature: runtimeAgentConfig.temperature } : {}),
       ...(typeof runtimeAgentConfig.maxTokens === 'number' ? { maxTokens: runtimeAgentConfig.maxTokens } : {}),
@@ -701,7 +677,7 @@ export async function runChatTurn({
               onStreamChunk({ reasoningContent: event.delta });
             }
             break;
-          case 'final_answer_delta':
+          case 'answer_delta':
             streamedAssistantText += event.delta;
             if (typeof onStreamChunk === 'function') {
               onStreamChunk({ content: event.delta });

@@ -12,9 +12,9 @@
  *
  * Recent changes:
  * - 2026-05-27: Added check-js annotations for mocked stream events and captured runtime callbacks.
- * - 2026-05-27: Covered explicit built-ins for shell/write/directory tools outside read-only mode.
+ * - 2026-05-28: Covered omitted default built-ins and streamed `answer_delta` content for `llm-runtime` 0.6.3.
  * - 2026-05-27: Covered plain-text fallback when runtime rejects only the missing control-tool wrapper without persisting retry drafts.
- * - 2026-05-27: Covered explicit built-ins and streamed `final_answer_delta` content.
+ * - 2026-05-27: Covered explicit built-ins and streamed answer delta content.
  * - 2026-05-27: Covered stream-off `complete(...)` routing and provider metadata forwarding.
  * - 2026-05-27: Covered shared runtime selection separately from credential validation.
  * - 2026-05-26: Covered runtime skill roots for opt-in global skill loading.
@@ -281,18 +281,7 @@ describe('agent-runtime', () => {
         toolPermission: 'ask',
       }),
     }));
-    expect(streamComplete.mock.calls[0][0].builtIns).toEqual({
-      load_skill: true,
-      ask_user_input: true,
-      read_file: true,
-      list_files: true,
-      search_files: true,
-      path_exists: true,
-      shell_cmd: true,
-      write_file: true,
-      create_directory: true,
-      web_fetch: false,
-    });
+    expect(streamComplete.mock.calls[0][0]).not.toHaveProperty('builtIns');
     expect(onStreamChunk).toHaveBeenCalledTimes(2);
     expect(onStreamChunk).toHaveBeenNthCalledWith(1, { reasoningContent: 'Thinking' });
     expect(onStreamChunk).toHaveBeenNthCalledWith(2, { content: 'Hello world' });
@@ -302,12 +291,12 @@ describe('agent-runtime', () => {
     expect(runtimeDispose).toHaveBeenCalledTimes(1);
   });
 
-  it('streams final answer deltas as assistant content', async () => {
+  it('streams answer deltas as assistant content', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
     streamComplete.mockImplementation(() => eventStream([
       { type: 'model_start', iteration: 1 },
-      { type: 'final_answer_delta', delta: 'Done', iteration: 1 },
+      { type: 'answer_delta', delta: 'Done', iteration: 1 },
       { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Done', messages: [] } },
     ]));
 
@@ -332,7 +321,7 @@ describe('agent-runtime', () => {
     expect(result.assistantText).toBe('Done');
   });
 
-  it('disables mutating built-ins in read-only tool permission mode', async () => {
+  it('passes read-only tool permission through without overriding runtime built-ins', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
     streamComplete.mockImplementation(() => eventStream([
@@ -354,13 +343,9 @@ describe('agent-runtime', () => {
       },
     });
 
-    expect(streamComplete.mock.calls[0][0].builtIns).toMatchObject({
-      shell_cmd: false,
-      write_file: false,
-      create_directory: false,
-      read_file: true,
-      search_files: true,
-      path_exists: true,
+    expect(streamComplete.mock.calls[0][0]).not.toHaveProperty('builtIns');
+    expect(streamComplete.mock.calls[0][0].context).toMatchObject({
+      toolPermission: 'read',
     });
   });
 
@@ -551,11 +536,7 @@ describe('agent-runtime', () => {
       provider: 'openai',
       model: 'gpt-5',
     }));
-    expect(complete.mock.calls[0][0].builtIns).toMatchObject({
-      shell_cmd: true,
-      write_file: true,
-      create_directory: true,
-    });
+    expect(complete.mock.calls[0][0]).not.toHaveProperty('builtIns');
     expect(streamComplete).not.toHaveBeenCalled();
     expect(onToolCall).not.toHaveBeenCalled();
     expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({

@@ -529,22 +529,6 @@ function buildExecutionContext(agentConfig) {
   }
   return context;
 }
-function buildRuntimeBuiltIns(agentConfig) {
-  const config = agentConfig ?? {};
-  const mutatingToolsEnabled = config.toolPermission !== "read";
-  return {
-    load_skill: true,
-    ask_user_input: true,
-    read_file: true,
-    list_files: true,
-    search_files: true,
-    path_exists: true,
-    shell_cmd: mutatingToolsEnabled,
-    write_file: mutatingToolsEnabled,
-    create_directory: mutatingToolsEnabled,
-    web_fetch: false
-  };
-}
 function requireEnvironmentVariable(environment, variableName) {
   const value = String(environment[variableName] ?? "").trim();
   if (!value) {
@@ -792,7 +776,6 @@ async function runChatTurn({
       provider: runtimeSettings.provider,
       model: runtimeSettings.model,
       messages: [...systemMessages, ...contextMessages, pendingUserMessage],
-      builtIns: buildRuntimeBuiltIns(runtimeAgentConfig),
       context: { ...executionContext, ...abortSignal ? { abortSignal } : {} },
       ...typeof runtimeAgentConfig.temperature === "number" ? { temperature: runtimeAgentConfig.temperature } : {},
       ...typeof runtimeAgentConfig.maxTokens === "number" ? { maxTokens: runtimeAgentConfig.maxTokens } : {},
@@ -888,7 +871,7 @@ async function runChatTurn({
               onStreamChunk({ reasoningContent: event.delta });
             }
             break;
-          case "final_answer_delta":
+          case "answer_delta":
             streamedAssistantText += event.delta;
             if (typeof onStreamChunk === "function") {
               onStreamChunk({ content: event.delta });
