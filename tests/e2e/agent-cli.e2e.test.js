@@ -402,14 +402,14 @@ describe('agent-cli CLI', () => {
     const { main } = await loadCli(rootPath);
     const io = /** @type {import('../../cli/src/turn-executor.js').CliIo} */ (createIoCapture());
 
-    await main(['follow up'], io);
+    await main(['Say that a new chat was started.'], io);
 
     const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
     const chatMessages = await readJsonl(path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'));
     const assistantText = extractAssistantTextFromCliStdout(io.getStdout());
 
     expect(assistantText.length).toBeGreaterThan(0);
-    expect(chatMessages[0]).toMatchObject({ role: 'user', content: 'follow up' });
+    expect(chatMessages[0]).toMatchObject({ role: 'user', content: 'Say that a new chat was started.' });
     expect(chatMessages.at(-1)?.role).toBe('assistant');
   }, LIVE_E2E_TIMEOUT_MS);
 

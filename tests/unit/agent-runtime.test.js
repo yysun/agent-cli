@@ -11,6 +11,10 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-05-27: Added check-js annotations for mocked stream events and captured runtime callbacks.
+ * - 2026-05-27: Covered explicit built-ins for shell/write/directory tools outside read-only mode.
+ * - 2026-05-27: Covered plain-text fallback when runtime rejects only the missing control-tool wrapper without persisting retry drafts.
+ * - 2026-05-27: Covered explicit built-ins and streamed `final_answer_delta` content.
  * - 2026-05-27: Covered stream-off `complete(...)` routing and provider metadata forwarding.
  * - 2026-05-27: Covered shared runtime selection separately from credential validation.
  * - 2026-05-26: Covered runtime skill roots for opt-in global skill loading.
@@ -33,6 +37,9 @@ vi.mock('llm-runtime', () => ({
   streamComplete,
 }));
 
+/**
+ * @param {Array<Record<string, any>>} events
+ */
 function eventStream(events) {
   return (async function* () {
     for (const event of events) {
@@ -268,19 +275,179 @@ describe('agent-runtime', () => {
       webSearch: {
         searchContextSize: 'low',
       },
-      builtIns: 'all',
       context: expect.objectContaining({
         workingDirectory: expect.any(String),
         reasoningEffort: 'medium',
         toolPermission: 'ask',
       }),
     }));
-    expect(onStreamChunk).toHaveBeenCalledTimes(3);
-    expect(onStreamChunk).toHaveBeenNthCalledWith(2, { reasoningContent: 'Thinking' });
+    expect(streamComplete.mock.calls[0][0].builtIns).toEqual({
+      load_skill: true,
+      ask_user_input: true,
+      read_file: true,
+      list_files: true,
+      search_files: true,
+      path_exists: true,
+      shell_cmd: true,
+      write_file: true,
+      create_directory: true,
+      web_fetch: false,
+    });
+    expect(onStreamChunk).toHaveBeenCalledTimes(2);
+    expect(onStreamChunk).toHaveBeenNthCalledWith(1, { reasoningContent: 'Thinking' });
+    expect(onStreamChunk).toHaveBeenNthCalledWith(2, { content: 'Hello world' });
     expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({ type: 'tool_calls' }));
     expect(result.assistantText).toBe('Hello world');
     expect(result.messages.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: 'Hello world' }));
     expect(runtimeDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('streams final answer deltas as assistant content', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'model_start', iteration: 1 },
+      { type: 'final_answer_delta', delta: 'Done', iteration: 1 },
+      { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Done', messages: [] } },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onStreamChunk = vi.fn();
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onStreamChunk,
+    });
+
+    expect(onStreamChunk).toHaveBeenCalledWith({ content: 'Done' });
+    expect(onStreamChunk).toHaveBeenCalledTimes(1);
+    expect(result.assistantText).toBe('Done');
+  });
+
+  it('disables mutating built-ins in read-only tool permission mode', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Done', messages: [] } },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+
+    await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+        toolPermission: 'read',
+      },
+    });
+
+    expect(streamComplete.mock.calls[0][0].builtIns).toMatchObject({
+      shell_cmd: false,
+      write_file: false,
+      create_directory: false,
+      read_file: true,
+      search_files: true,
+      path_exists: true,
+    });
+  });
+
+  it('preserves rejected plain-text final responses as a compatibility fallback', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'model_start', iteration: 1 },
+      { type: 'assistant_message', message: { role: 'assistant', content: 'Plain answer' }, iteration: 1 },
+      {
+        type: 'failed',
+        iteration: 1,
+        result: {
+          status: 'failed',
+          messages: [],
+          error: 'Assistant response did not complete the task with required evidence: Plain answer',
+        },
+      },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+
+    const onStreamChunk = vi.fn();
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onStreamChunk,
+    });
+
+    expect(onStreamChunk).toHaveBeenCalledWith({ content: 'Plain answer' });
+    expect(onStreamChunk).toHaveBeenCalledTimes(1);
+    expect(result.assistantText).toBe('Plain answer');
+    expect(result.messages.at(-1)).toEqual(expect.objectContaining({
+      role: 'assistant',
+      content: 'Plain answer',
+    }));
+    expect(result.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
+  });
+
+  it('does not persist rejected retry text after a later completed answer', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'assistant_message', message: { role: 'assistant', content: 'Draft answer' }, iteration: 1 },
+      {
+        type: 'failed',
+        iteration: 1,
+        result: {
+          status: 'failed',
+          messages: [],
+          error: 'Assistant response did not complete the task with required evidence: Draft answer',
+        },
+      },
+      { type: 'completed', iteration: 2, result: { status: 'completed', output: 'Final answer', messages: [] } },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+    });
+
+    expect(result.assistantText).toBe('Final answer');
+    expect(result.messages.at(-1)).toEqual(expect.objectContaining({
+      role: 'assistant',
+      content: 'Final answer',
+    }));
+    expect(result.messages).not.toContainEqual(expect.objectContaining({
+      role: 'assistant',
+      content: 'Draft answer',
+    }));
   });
 
   it('forwards provider response metadata from runtime completion events', async () => {
@@ -383,8 +550,12 @@ describe('agent-runtime', () => {
       environment: expect.objectContaining({ runtimeId: 'runtime-1' }),
       provider: 'openai',
       model: 'gpt-5',
-      builtIns: 'all',
     }));
+    expect(complete.mock.calls[0][0].builtIns).toMatchObject({
+      shell_cmd: true,
+      write_file: true,
+      create_directory: true,
+    });
     expect(streamComplete).not.toHaveBeenCalled();
     expect(onToolCall).not.toHaveBeenCalled();
     expect(onModelResponse).toHaveBeenCalledWith(expect.objectContaining({
@@ -464,6 +635,7 @@ describe('agent-runtime', () => {
   it('forwards approval denials to the runtime via onToolApproval', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
+    /** @type {undefined | ((request: Record<string, any>) => Promise<Record<string, any>> | Record<string, any>)} */
     let receivedOnToolApproval;
     streamComplete.mockImplementation(({ onToolApproval }) => {
       receivedOnToolApproval = onToolApproval;
@@ -491,6 +663,9 @@ describe('agent-runtime', () => {
     });
 
     expect(typeof receivedOnToolApproval).toBe('function');
+    if (typeof receivedOnToolApproval !== 'function') {
+      throw new Error('streamComplete did not receive onToolApproval');
+    }
     const decision = await receivedOnToolApproval({
       toolCall: { id: 'tool-1', function: { name: 'load_skill', arguments: '{"skillId":"agent-cli-core"}' } },
       toolName: 'load_skill',
@@ -508,6 +683,7 @@ describe('agent-runtime', () => {
   it('forwards CLI tool-call handlers to the runtime via onToolCall', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
+    /** @type {undefined | ((request: Record<string, any>) => Promise<Record<string, any>> | Record<string, any>)} */
     let receivedOnToolCall;
     streamComplete.mockImplementation(({ onToolCall }) => {
       receivedOnToolCall = onToolCall;
@@ -517,6 +693,7 @@ describe('agent-runtime', () => {
     });
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
+    /** @type {string[]} */
     const callOrder = [];
     const onToolCall = vi.fn(() => {
       callOrder.push('onToolCall');
@@ -543,6 +720,9 @@ describe('agent-runtime', () => {
     });
 
     expect(typeof receivedOnToolCall).toBe('function');
+    if (typeof receivedOnToolCall !== 'function') {
+      throw new Error('streamComplete did not receive onToolCall');
+    }
     const handlerOutcome = await receivedOnToolCall({
       toolCall: { id: 'tool-input-1', function: { name: 'ask_user_input', arguments: '{"question":"Choose","options":["A","B"]}' } },
       toolName: 'ask_user_input',

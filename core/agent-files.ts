@@ -11,6 +11,7 @@
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
+ * - 2026-05-27: Made the runtime final-answer control-tool requirement explicit for `llm-runtime` completion.
  * - 2026-05-26: Gated global skill loading behind `AGENT_CLI_GLOBAL_SKILLS` and added `~/.agents/skills`.
  * - 2026-05-26: Removed selected-world skill discovery and switched workspace skills to `.agent-world/skills`.
  * - 2026-05-23: Renamed AGENTS.md prompt loading terminology from project to workspace.
@@ -33,6 +34,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   'Prefer workspace evidence over speculation when an answer depends on files, configuration, environment variables, logs, generated outputs, or repository state.',
   'Use available read-only tools before asking the user for information that may already exist in the workspace.',
   'When a task depends on domain-specific instructions, procedures, or contracts, use `load_skill` when a relevant skill is available.',
+  'When the task is complete, call the `final_answer` control tool with the final user-facing answer instead of sending final answers as plain assistant text.',
   'Do not claim files, configuration, or prerequisites are missing until you have inspected likely sources when appropriate.',
   'Do not reveal secret values by default; report presence, absence, or non-sensitive metadata unless the user explicitly asks to inspect file contents.',
 ].join(' ');

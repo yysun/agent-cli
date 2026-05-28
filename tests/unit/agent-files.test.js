@@ -191,6 +191,7 @@ describe('agent-files', () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain('Prefer workspace evidence over speculation');
     expect(DEFAULT_SYSTEM_PROMPT).toContain('Use available read-only tools before asking the user');
     expect(DEFAULT_SYSTEM_PROMPT).toContain('use `load_skill` when a relevant skill is available');
+    expect(DEFAULT_SYSTEM_PROMPT).toContain('call the `final_answer` control tool');
     expect(DEFAULT_SYSTEM_PROMPT).toContain('Do not reveal secret values by default');
   });
 

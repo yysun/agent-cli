@@ -317,6 +317,7 @@ var DEFAULT_SYSTEM_PROMPT = [
   "Prefer workspace evidence over speculation when an answer depends on files, configuration, environment variables, logs, generated outputs, or repository state.",
   "Use available read-only tools before asking the user for information that may already exist in the workspace.",
   "When a task depends on domain-specific instructions, procedures, or contracts, use `load_skill` when a relevant skill is available.",
+  "When the task is complete, call the `final_answer` control tool with the final user-facing answer instead of sending final answers as plain assistant text.",
   "Do not claim files, configuration, or prerequisites are missing until you have inspected likely sources when appropriate.",
   "Do not reveal secret values by default; report presence, absence, or non-sensitive metadata unless the user explicitly asks to inspect file contents."
 ].join(" ");
@@ -492,41 +493,57 @@ var SUPPORTED_PROVIDERS = /* @__PURE__ */ new Set([
 var DEFAULT_MODELS = {
   openai: "gpt-5"
 };
-function resolveRuntimeSelection(environment = process.env, agentConfig = {}) {
-  const provider = String(agentConfig.provider ?? "openai").trim().toLowerCase();
-  const providerDefaultModel = provider === "azure" ? String(environment.AZURE_OPENAI_DEPLOYMENT_NAME ?? "").trim() : DEFAULT_MODELS[
-    /** @type {LLMProviderName} */
-    provider
-  ];
+function resolveRuntimeSelection(environment = process.env, agentConfig) {
+  const config = agentConfig ?? {};
+  const provider = String(config.provider ?? "openai").trim().toLowerCase();
+  const providerDefaultModel = provider === "azure" ? String(environment.AZURE_OPENAI_DEPLOYMENT_NAME ?? "").trim() : DEFAULT_MODELS[provider];
   const model = String(
-    agentConfig.model ?? providerDefaultModel ?? ""
+    config.model ?? providerDefaultModel ?? ""
   ).trim();
   return { provider, model };
 }
-function buildEnvironmentDefaults(agentConfig = {}) {
+function buildEnvironmentDefaults(agentConfig) {
+  const config = agentConfig ?? {};
   const defaults = {};
-  if (agentConfig.reasoningEffort) {
-    defaults.reasoningEffort = agentConfig.reasoningEffort;
+  if (config.reasoningEffort) {
+    defaults.reasoningEffort = config.reasoningEffort;
   }
-  if (agentConfig.toolPermission) {
-    defaults.toolPermission = agentConfig.toolPermission;
+  if (config.toolPermission) {
+    defaults.toolPermission = config.toolPermission;
   }
   return defaults;
 }
-function buildExecutionContext(agentConfig = {}) {
+function buildExecutionContext(agentConfig) {
+  const config = agentConfig ?? {};
   const context = {
     workingDirectory: WORKSPACE_ROOT
   };
-  if (agentConfig.reasoningEffort) {
-    context.reasoningEffort = agentConfig.reasoningEffort;
+  if (config.reasoningEffort) {
+    context.reasoningEffort = config.reasoningEffort;
   }
-  if (agentConfig.toolPermission) {
-    context.toolPermission = agentConfig.toolPermission;
+  if (config.toolPermission) {
+    context.toolPermission = config.toolPermission;
   }
-  if (agentConfig.abortSignal) {
-    context.abortSignal = agentConfig.abortSignal;
+  if (config.abortSignal) {
+    context.abortSignal = config.abortSignal;
   }
   return context;
+}
+function buildRuntimeBuiltIns(agentConfig) {
+  const config = agentConfig ?? {};
+  const mutatingToolsEnabled = config.toolPermission !== "read";
+  return {
+    load_skill: true,
+    ask_user_input: true,
+    read_file: true,
+    list_files: true,
+    search_files: true,
+    path_exists: true,
+    shell_cmd: mutatingToolsEnabled,
+    write_file: mutatingToolsEnabled,
+    create_directory: mutatingToolsEnabled,
+    web_fetch: false
+  };
 }
 function requireEnvironmentVariable(environment, variableName) {
   const value = String(environment[variableName] ?? "").trim();
@@ -577,27 +594,18 @@ function validateRuntimeEnvironment(environment = process.env, agentConfig = {})
   const runtimeSelection = resolveRuntimeSelection(environment, agentConfig);
   const configuredProvider = runtimeSelection.provider;
   const normalizedProvider = configuredProvider.toLowerCase();
-  if (!SUPPORTED_PROVIDERS.has(
-    /** @type {LLMProviderName} */
-    normalizedProvider
-  )) {
+  if (!SUPPORTED_PROVIDERS.has(normalizedProvider)) {
     throw new Error(`Unsupported LLM provider: ${configuredProvider}`);
   }
-  const provider = (
-    /** @type {LLMProviderName} */
-    normalizedProvider
-  );
+  const provider = normalizedProvider;
   const providerConfig = resolveProviderConfig(provider, environment);
   const model = runtimeSelection.model || (provider === "azure" && "deployment" in providerConfig ? providerConfig.deployment : "");
   if (!model) {
     throw new Error(`Missing LLM model. Set AGENT_CLI_MODEL in .env or pass --model for provider ${provider}.`);
   }
-  const providers = (
-    /** @type {LLMProviderConfigs} */
-    {
-      [provider]: providerConfig
-    }
-  );
+  const providers = {
+    [provider]: providerConfig
+  };
   return {
     provider,
     model,
@@ -624,8 +632,8 @@ function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, ski
     content: layers.join("\n\n")
   }];
 }
-var DEFAULT_BUILT_INS = "all";
 var RUNTIME_CONTROL_TOOL_NAMES = /* @__PURE__ */ new Set(["final_answer", "need_user_input", "blocked"]);
+var REJECTED_TEXT_RESPONSE_PREFIX = "Assistant response did not complete the task with required evidence:";
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -633,10 +641,7 @@ function extractModelResponseMetadata(raw, fallbackType) {
   if (!isRecord(raw)) {
     return fallbackType ? { type: fallbackType } : void 0;
   }
-  const response = (
-    /** @type {Record<string, unknown>} */
-    raw
-  );
+  const response = raw;
   const metadata = {};
   if (typeof response.type === "string" && response.type.trim()) {
     metadata.type = response.type;
@@ -678,6 +683,13 @@ function parseSerializedToolResult(content) {
   } catch {
     return content;
   }
+}
+function extractRejectedTextResponse(error) {
+  const message = String(error ?? "");
+  if (!message.startsWith(REJECTED_TEXT_RESPONSE_PREFIX)) {
+    return "";
+  }
+  return message.slice(REJECTED_TEXT_RESPONSE_PREFIX.length).trim();
 }
 function selectContextMessages(messages, historyMessageLimit) {
   if (typeof historyMessageLimit !== "number" || !Number.isInteger(historyMessageLimit) || historyMessageLimit < 0) {
@@ -741,13 +753,14 @@ async function runChatTurn({
   projectSystemPrompt,
   skillInventory,
   approvalGate,
-  agentConfig = {},
+  agentConfig,
   abortSignal
 }) {
-  const runtimeSettings = validateRuntimeEnvironment(process.env, agentConfig);
-  const environmentDefaults = buildEnvironmentDefaults(agentConfig);
+  const runtimeAgentConfig = agentConfig ?? {};
+  const runtimeSettings = validateRuntimeEnvironment(process.env, runtimeAgentConfig);
+  const environmentDefaults = buildEnvironmentDefaults(runtimeAgentConfig);
   const executionContext = buildExecutionContext({
-    ...agentConfig,
+    ...runtimeAgentConfig,
     abortSignal
   });
   const runtime = createRuntime({
@@ -771,18 +784,20 @@ async function runChatTurn({
     const toolStartTimes = /* @__PURE__ */ new Map();
     const emittedToolCallIds = /* @__PURE__ */ new Set();
     let finalText = "";
+    let streamedAssistantText = "";
+    let fallbackRejectedText = "";
     let failureError = null;
     const completionOptions = {
       environment: runtime,
       provider: runtimeSettings.provider,
       model: runtimeSettings.model,
       messages: [...systemMessages, ...contextMessages, pendingUserMessage],
-      builtIns: DEFAULT_BUILT_INS,
+      builtIns: buildRuntimeBuiltIns(runtimeAgentConfig),
       context: { ...executionContext, ...abortSignal ? { abortSignal } : {} },
-      ...typeof agentConfig.temperature === "number" ? { temperature: agentConfig.temperature } : {},
-      ...typeof agentConfig.maxTokens === "number" ? { maxTokens: agentConfig.maxTokens } : {},
-      ...typeof agentConfig.maxToolTurns === "number" ? { maxConsecutiveToolTurns: agentConfig.maxToolTurns } : {},
-      ...agentConfig.webSearch !== void 0 ? { webSearch: agentConfig.webSearch } : {},
+      ...typeof runtimeAgentConfig.temperature === "number" ? { temperature: runtimeAgentConfig.temperature } : {},
+      ...typeof runtimeAgentConfig.maxTokens === "number" ? { maxTokens: runtimeAgentConfig.maxTokens } : {},
+      ...typeof runtimeAgentConfig.maxToolTurns === "number" ? { maxConsecutiveToolTurns: runtimeAgentConfig.maxToolTurns } : {},
+      ...runtimeAgentConfig.webSearch !== void 0 ? { webSearch: runtimeAgentConfig.webSearch } : {},
       onToolApproval: async ({ toolCall, toolName, parsedArguments }) => {
         if (executionContext.toolPermission !== "ask" || typeof approvalGate?.requestApproval !== "function") {
           return { approved: true };
@@ -830,7 +845,12 @@ async function runChatTurn({
       const completionResult = await complete(completionOptions);
       emitModelResponse(onModelResponse, completionResult.raw, void 0);
       if (completionResult.status === "failed") {
-        failureError = completionResult.error || "LLM turn failed.";
+        const rejectedText = extractRejectedTextResponse(completionResult.error);
+        if (rejectedText) {
+          finalText = rejectedText;
+        } else {
+          failureError = String(completionResult.error || "LLM turn failed.");
+        }
       } else if (completionResult.status === "tool_calls") {
         const pendingNames = (completionResult.toolCalls ?? []).map((tc) => tc.function?.name ?? "unknown_tool").join(", ");
         failureError = `LLM turn paused for host-handled tools (${pendingNames || "none"}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
@@ -862,13 +882,16 @@ async function runChatTurn({
       for await (const event of streamComplete(completionOptions)) {
         switch (event.type) {
           case "text_delta":
-            if (typeof onStreamChunk === "function") {
-              onStreamChunk({ content: event.delta });
-            }
             break;
           case "reasoning_delta":
             if (typeof onStreamChunk === "function") {
               onStreamChunk({ reasoningContent: event.delta });
+            }
+            break;
+          case "final_answer_delta":
+            streamedAssistantText += event.delta;
+            if (typeof onStreamChunk === "function") {
+              onStreamChunk({ content: event.delta });
             }
             break;
           case "assistant_message":
@@ -877,10 +900,12 @@ async function runChatTurn({
               void 0,
               event.message.tool_calls?.length ? "tool_calls" : "text"
             );
-            persistedMessages.push({
-              ...event.message,
-              createdAt: (/* @__PURE__ */ new Date()).toISOString()
-            });
+            if (event.message.tool_calls?.length) {
+              persistedMessages.push({
+                ...event.message,
+                createdAt: (/* @__PURE__ */ new Date()).toISOString()
+              });
+            }
             break;
           case "tool_start":
             toolStartTimes.set(event.toolCall.id, Date.now());
@@ -919,6 +944,13 @@ async function runChatTurn({
             emitModelResponse(onModelResponse, event.result.raw, void 0);
             if (event.result.status === "completed" && typeof event.result.output === "string") {
               finalText = event.result.output;
+              if (typeof onStreamChunk === "function") {
+                const remainingFinalText = finalText.startsWith(streamedAssistantText) ? finalText.slice(streamedAssistantText.length) : streamedAssistantText ? "" : finalText;
+                if (remainingFinalText) {
+                  streamedAssistantText += remainingFinalText;
+                  onStreamChunk({ content: remainingFinalText });
+                }
+              }
               persistedMessages.push({
                 role: "assistant",
                 content: event.result.output,
@@ -934,12 +966,31 @@ async function runChatTurn({
           }
           case "failed":
             emitModelResponse(onModelResponse, event.result.raw, void 0);
-            failureError = event.result.error || `LLM turn failed with status ${event.result.status}.`;
+            {
+              const rejectedText = extractRejectedTextResponse(event.result.error);
+              if (rejectedText) {
+                fallbackRejectedText = rejectedText;
+              } else {
+                failureError = String(event.result.error || `LLM turn failed with status ${event.result.status}.`);
+              }
+            }
             break;
           default:
             break;
         }
       }
+    }
+    if (!finalText.trim() && fallbackRejectedText) {
+      finalText = fallbackRejectedText;
+      if (typeof onStreamChunk === "function" && !streamedAssistantText) {
+        streamedAssistantText = fallbackRejectedText;
+        onStreamChunk({ content: fallbackRejectedText });
+      }
+      persistedMessages.push({
+        role: "assistant",
+        content: fallbackRejectedText,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
     }
     if (failureError) {
       throw new Error(failureError);
