@@ -17,6 +17,111 @@ import {
 } from '../../cli/src/tool-trace-renderer.ts';
 
 describe('tool trace renderer', () => {
+  const successfulToolExamples = [
+    {
+      name: 'shell_cmd',
+      arguments: JSON.stringify({ command: 'npm', parameters: ['test'] }),
+      result: { exitCode: 0, stdout: 'ok\n' },
+    },
+    {
+      name: 'load_skill',
+      arguments: JSON.stringify({ skill_id: 'agent-world-skill' }),
+      result: '<skill_context id="agent-world-skill">Loaded</skill_context>',
+    },
+    {
+      name: 'path_exists',
+      arguments: JSON.stringify({ path: 'README.md' }),
+      result: { ok: true, exists: true, path: 'README.md', type: 'file' },
+    },
+    {
+      name: 'search_files',
+      arguments: JSON.stringify({ query: 'README' }),
+      result: { ok: true, matches: ['README.md'] },
+    },
+    {
+      name: 'list_files',
+      arguments: JSON.stringify({ path: '.' }),
+      result: { ok: true, entries: ['README.md'] },
+    },
+    {
+      name: 'read_file',
+      arguments: JSON.stringify({ filePath: 'README.md' }),
+      result: { ok: true, content: '# Agent CLI\n' },
+    },
+    {
+      name: 'write_file',
+      arguments: JSON.stringify({ filePath: 'notes.md', content: 'hello' }),
+      result: { ok: true, bytesWritten: 5 },
+    },
+    {
+      name: 'create_directory',
+      arguments: JSON.stringify({ path: 'tmp/example' }),
+      result: { ok: true, status: 'created' },
+    },
+    {
+      name: 'api_request',
+      arguments: JSON.stringify({ url: 'https://example.test' }),
+      result: { ok: true, status: 'completed' },
+    },
+    {
+      name: 'resolve_object',
+      arguments: JSON.stringify({ path: 'README.md' }),
+      result: { ok: true, data: [{ displayName: 'README.md', canonicalPath: 'README.md' }] },
+    },
+    {
+      name: 'search_content',
+      arguments: JSON.stringify({ query: 'Agent CLI' }),
+      result: { ok: true, data: [{ path: 'README.md' }] },
+    },
+    {
+      name: 'list_content',
+      arguments: JSON.stringify({ path: '.' }),
+      result: { ok: true, data: [{ path: 'README.md' }] },
+    },
+    {
+      name: 'read_content',
+      arguments: JSON.stringify({ path: 'README.md' }),
+      result: { ok: true, data: { path: 'README.md', contentType: 'text/markdown', content: '# Agent CLI\n' } },
+    },
+    {
+      name: 'write_content',
+      arguments: JSON.stringify({ path: 'README.md', content: '# Agent CLI\n' }),
+      result: { ok: true, data: { path: 'README.md' } },
+    },
+    {
+      name: 'create_content',
+      arguments: JSON.stringify({ path: 'notes.md', content: 'hello' }),
+      result: { ok: true, data: { path: 'notes.md', created: true } },
+    },
+    {
+      name: 'delete_content',
+      arguments: JSON.stringify({ path: 'old.md' }),
+      result: { ok: true, data: { path: 'old.md' } },
+    },
+    {
+      name: 'custom_tool',
+      arguments: JSON.stringify({ path: 'custom.txt' }),
+      result: { ok: true, status: 'completed' },
+    },
+  ];
+
+  it.each(successfulToolExamples)('renders one call row and one success row for $name', (tool) => {
+    const output = `${formatToolCallDiagnostic({
+      name: tool.name,
+      arguments: tool.arguments,
+    })}${formatToolResultDiagnostic({
+      name: tool.name,
+      arguments: tool.arguments,
+      durationMs: 5,
+      result: tool.result,
+    })}`;
+
+    expect(output.match(/(^|\n)  ↳ /g) ?? []).toHaveLength(1);
+    expect(output.match(/(^|\n)  ✓ /g) ?? []).toHaveLength(1);
+    expect(output).not.toContain('\n  ↳ \n');
+    expect(output).not.toContain('\n  ✓ \n');
+  });
+
   it('renders load_skill call and result without the skill XML preview', () => {
     const callOutput = formatToolCallDiagnostic({
       name: 'load_skill',

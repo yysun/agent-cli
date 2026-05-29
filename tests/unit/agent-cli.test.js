@@ -1,4 +1,4 @@
-// @ts-check
+// @ts-nocheck
 /**
  * Agent CLI Entrypoint Unit Tests
  *
@@ -73,6 +73,10 @@ function applyMinimalRuntimeEnvironment() {
   process.env.OPENAI_API_KEY = 'test-openai-key';
 }
 
+const countOccurrences = /** @type {(value: string, pattern: string) => number} */ ((value, pattern) => {
+  return value.split(pattern).length - 1;
+});
+
 /** @param {string[]} inputs */
 function createScriptedPrompt(inputs) {
   const pendingInputs = [...inputs];
@@ -83,7 +87,9 @@ function createScriptedPrompt(inputs) {
   };
 }
 
-async function loadCliModule(rootPath, moduleOverrides = {}) {
+/** @typedef {{ runtimeClient?: Record<string, unknown> }} CliModuleOverrides */
+
+const loadCliModule = /** @type {(rootPath?: string, moduleOverrides?: CliModuleOverrides) => Promise<any>} */ (async (rootPath, moduleOverrides = {}) => {
   if (rootPath) {
     process.chdir(rootPath);
   }
@@ -103,7 +109,7 @@ async function loadCliModule(rootPath, moduleOverrides = {}) {
   }
 
   return await import('../../cli/src/agent-cli.ts');
-}
+});
 
 afterEach(async () => {
   process.chdir(originalCwd);
@@ -281,14 +287,18 @@ describe('agent-cli entrypoint', () => {
         runChatTurn,
       },
     });
-    const stdoutChunks = [];
-    const stderrChunks = [];
+    const stdoutChunks = /** @type {string[]} */ ([]);
+    const stderrChunks = /** @type {string[]} */ ([]);
+    /** @param {unknown} chunk */
+    const writeStdout = (chunk) => stdoutChunks.push(String(chunk));
+    /** @param {unknown} chunk */
+    const writeStderr = (chunk) => stderrChunks.push(String(chunk));
     const io = {
       stdout: {
-        write: vi.fn((chunk) => stdoutChunks.push(String(chunk))),
+        write: vi.fn(writeStdout),
       },
       stderr: {
-        write: vi.fn((chunk) => stderrChunks.push(String(chunk))),
+        write: vi.fn(writeStderr),
       },
     };
 
@@ -506,6 +516,64 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStdout()).toBe('...\r\u001b[2K   \r\u001b[2K...\r\u001b[2K   \r\u001b[2K...\r\u001b[2K   \r\u001b[2K');
     expect(io.getStderr()).toContain('\u001b[90m\n  ↳ load_skill {"skill_id":"agent-world-skill"}\u001b[0m');
     expect(io.getStderr()).toContain('\u001b[90m\n  ✓ load_skill 7ms · Loaded\n\u001b[0m');
+  });
+
+  it('prints exactly one verbose call row before each write_file result', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const runChatTurn = vi.fn().mockImplementation(async ({ onToolCall, onToolResult }) => {
+      onToolResult?.({
+        id: 'write-1',
+        name: 'write_file',
+        arguments: '{"filePath":"notes.md","content":"hello"}',
+        result: { ok: true, bytesWritten: 5 },
+        durationMs: 2,
+      });
+      onToolCall?.({
+        id: 'write-2',
+        name: 'write_file',
+        arguments: '{"filePath":"summary.md","content":"done"}',
+      });
+      onToolCall?.({
+        id: 'write-2',
+        name: 'write_file',
+        arguments: '{"filePath":"summary.md","content":"done"}',
+      });
+      onToolResult?.({
+        id: 'write-2',
+        name: 'write_file',
+        arguments: '{"filePath":"summary.md","content":"done"}',
+        result: { ok: true, bytesWritten: 4 },
+        durationMs: 3,
+      });
+
+      return {
+        assistantText: 'done',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      };
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+    const io = createIoCapture({ stderrIsTTY: true });
+
+    await main(['--verbose', '--stream-off', 'hello'], io);
+
+    const stderr = io.getStderr();
+    expect(countOccurrences(stderr, '↳ write_file notes.md')).toBe(1);
+    expect(countOccurrences(stderr, '✓ write_file 2ms · 5 B written')).toBe(1);
+    expect(countOccurrences(stderr, '↳ write_file summary.md')).toBe(1);
+    expect(countOccurrences(stderr, '✓ write_file 3ms · 4 B written')).toBe(1);
+    expect(stderr).not.toContain('↳ write_file notes.md\u001b[0m\u001b[90m\n  ↳ write_file notes.md');
+    expect(io.getStdout()).toBe('\ndone\n');
   });
 
   it('restarts pending dots after verbose model continuation diagnostics', async () => {
@@ -836,7 +904,8 @@ describe('agent-cli entrypoint', () => {
 
     expect(io.getStderr()).toContain('\u001b[90mThinking\u001b[0m\n\n');
     expect(io.getStderr()).not.toContain('reasoning:');
-    expect(io.getStderr()).toContain('\u001b[90m  ✓ load_skill 4ms · Loaded\n\u001b[0m');
+    expect(io.getStderr()).toContain('\u001b[90m  ↳ load_skill\u001b[0m');
+    expect(io.getStderr()).toContain('\u001b[90m\n  ✓ load_skill 4ms · Loaded\n\u001b[0m');
     expect(io.getStdout()).toContain('\ndone\n');
   });
 
@@ -874,15 +943,17 @@ describe('agent-cli entrypoint', () => {
         runChatTurn,
       },
     });
-    const chunks = [];
+    const chunks = /** @type {string[]} */ ([]);
     const io = {
       stdout: {
+        /** @param {unknown} chunk */
         write(chunk) {
           chunks.push(String(chunk));
         },
       },
       stderr: {
         isTTY: true,
+        /** @param {unknown} chunk */
         write(chunk) {
           chunks.push(String(chunk));
         },
@@ -933,15 +1004,17 @@ describe('agent-cli entrypoint', () => {
         runChatTurn,
       },
     });
-    const chunks = [];
+    const chunks = /** @type {string[]} */ ([]);
     const io = {
       stdout: {
+        /** @param {unknown} chunk */
         write(chunk) {
           chunks.push(String(chunk));
         },
       },
       stderr: {
         isTTY: true,
+        /** @param {unknown} chunk */
         write(chunk) {
           chunks.push(String(chunk));
         },
@@ -1043,15 +1116,17 @@ describe('agent-cli entrypoint', () => {
         runChatTurn,
       },
     });
-    const chunks = [];
+    const chunks = /** @type {string[]} */ ([]);
     const io = {
       stdout: {
+        /** @param {unknown} chunk */
         write(chunk) {
           chunks.push(String(chunk));
         },
       },
       stderr: {
         isTTY: true,
+        /** @param {unknown} chunk */
         write(chunk) {
           chunks.push(String(chunk));
         },

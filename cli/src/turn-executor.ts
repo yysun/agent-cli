@@ -179,6 +179,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
     const streamTraceEnabled = options.agentConfig.streamTrace === true;
     const streamTraceEvents: StreamTraceEvent[] = [];
     const pendingTextTraceEvents: StreamTraceEvent[] = [];
+    const displayedVerboseToolCallIds = new Set<string>();
     let lastStreamType: string | null = null;
     let heldAssistantText = '';
     const pendingDisplay = createPendingDisplay(options.io.stdout);
@@ -409,9 +410,12 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             }
 
             if (options.verbose) {
-              const diagnostic = formatToolCallDiagnostic(toolCall);
-              const displayDiagnostic = humanInputToolCall ? `${diagnostic}\n\n` : diagnostic;
-              verboseDisplay.writeDiagnostic(displayDiagnostic, 'tool_call');
+              if (!displayedVerboseToolCallIds.has(toolCall.id)) {
+                displayedVerboseToolCallIds.add(toolCall.id);
+                const diagnostic = formatToolCallDiagnostic(toolCall);
+                const displayDiagnostic = humanInputToolCall ? `${diagnostic}\n\n` : diagnostic;
+                verboseDisplay.writeDiagnostic(displayDiagnostic, 'tool_call');
+              }
               if (!humanInputRequest) {
                 resumePendingAssistantText();
               }
@@ -430,6 +434,10 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         onToolResult: (toolResult) => {
             if (options.verbose) {
               pendingDisplay.clear();
+              if (!displayedVerboseToolCallIds.has(toolResult.id)) {
+                displayedVerboseToolCallIds.add(toolResult.id);
+                verboseDisplay.writeDiagnostic(formatToolCallDiagnostic(toolResult), 'tool_call');
+              }
               const diagnostic = formatToolResultDiagnostic(toolResult);
               verboseDisplay.writeDiagnostic(diagnostic, 'tool_result');
               resumePendingAssistantText();
