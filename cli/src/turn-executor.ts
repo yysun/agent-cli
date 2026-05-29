@@ -149,6 +149,12 @@ function isToolContinuationModelResponse(response: {
   return stopKind.includes('tool') || finishReason.includes('tool');
 }
 
+function toolDisplayKey(toolEvent: { id?: unknown; name?: unknown; arguments?: unknown }): string {
+  return typeof toolEvent.id === 'string' && toolEvent.id.trim()
+    ? toolEvent.id
+    : `${String(toolEvent.name ?? 'unknown_tool')}\u0000${String(toolEvent.arguments ?? '')}`;
+}
+
 export async function resolveEffectiveAgentConfig(
   options: ResolveEffectiveAgentConfigOptions = {},
 ): Promise<Record<string, unknown>> {
@@ -410,14 +416,12 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
             }
 
             if (options.verbose) {
-              if (!displayedVerboseToolCallIds.has(toolCall.id)) {
-                displayedVerboseToolCallIds.add(toolCall.id);
+              const displayKey = toolDisplayKey(toolCall);
+              if (!displayedVerboseToolCallIds.has(displayKey)) {
+                displayedVerboseToolCallIds.add(displayKey);
                 const diagnostic = formatToolCallDiagnostic(toolCall);
                 const displayDiagnostic = humanInputToolCall ? `${diagnostic}\n\n` : diagnostic;
                 verboseDisplay.writeDiagnostic(displayDiagnostic, 'tool_call');
-              }
-              if (!humanInputRequest) {
-                resumePendingAssistantText();
               }
             }
 
@@ -434,8 +438,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         onToolResult: (toolResult) => {
             if (options.verbose) {
               pendingDisplay.clear();
-              if (!displayedVerboseToolCallIds.has(toolResult.id)) {
-                displayedVerboseToolCallIds.add(toolResult.id);
+              const displayKey = toolDisplayKey(toolResult);
+              if (!displayedVerboseToolCallIds.has(displayKey)) {
+                displayedVerboseToolCallIds.add(displayKey);
                 verboseDisplay.writeDiagnostic(formatToolCallDiagnostic(toolResult), 'tool_call');
               }
               const diagnostic = formatToolResultDiagnostic(toolResult);
