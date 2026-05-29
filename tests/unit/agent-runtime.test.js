@@ -548,6 +548,156 @@ describe('agent-runtime', () => {
     expect(result.messages.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: 'Done' }));
   });
 
+  it('returns host-owned tool_calls from complete without throwing', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const toolCall = {
+      id: 'ask-1',
+      function: {
+        name: 'ask_user_input',
+        arguments: '{"questions":[{"id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"}]}]}',
+      },
+    };
+    complete.mockResolvedValue({
+      status: 'tool_calls',
+      toolCalls: [toolCall],
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'hello' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [toolCall],
+        },
+      ],
+      raw: {
+        type: 'tool_calls',
+        providerStopReason: 'tool_calls',
+      },
+    });
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onToolCall = vi.fn();
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: false,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onToolCall,
+    });
+
+    expect(result.status).toBe('tool_calls');
+    expect(result.toolCalls).toEqual([toolCall]);
+    expect(result.assistantText).toBe('');
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'assistant',
+      tool_calls: [toolCall],
+    }));
+    expect(onToolCall).toHaveBeenCalledWith({
+      id: 'ask-1',
+      name: 'ask_user_input',
+      arguments: toolCall.function.arguments,
+    });
+    expect(streamComplete).not.toHaveBeenCalled();
+  });
+
+  it('handles and resumes host-owned tool_calls from complete through the shell callback', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const toolCall = {
+      id: 'ask-resume-1',
+      function: {
+        name: 'ask_user_input',
+        arguments: '{"questions":[{"id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"}]}]}',
+      },
+    };
+
+    complete
+      .mockResolvedValueOnce({
+        status: 'tool_calls',
+        toolCalls: [toolCall],
+        messages: [
+          { role: 'system', content: 'System prompt' },
+          { role: 'user', content: 'hello' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [toolCall],
+          },
+        ],
+        raw: {
+          type: 'tool_calls',
+          providerStopReason: 'tool_calls',
+        },
+      })
+      .mockImplementationOnce(async (request) => {
+        expect(request.messages).toContainEqual(expect.objectContaining({
+          role: 'tool',
+          tool_call_id: 'ask-resume-1',
+          content: expect.stringContaining('"answered"'),
+        }));
+        return {
+          status: 'completed',
+          output: 'Done',
+          messages: [
+            ...request.messages,
+            { role: 'assistant', content: 'Done' },
+          ],
+        };
+      });
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onToolCall = vi.fn();
+    const onToolResult = vi.fn();
+    const handleToolCall = vi.fn().mockResolvedValue({
+      handled: true,
+      result: { ok: true, status: 'answered', selections: [] },
+    });
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: false,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onToolCall,
+      onToolResult,
+      handleToolCall,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.assistantText).toBe('Done');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(handleToolCall).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'ask_user_input',
+      parsedArguments: expect.objectContaining({
+        questions: expect.any(Array),
+      }),
+    }));
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ask-resume-1',
+      name: 'ask_user_input',
+      result: { ok: true, status: 'answered', selections: [] },
+    }));
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'tool',
+      tool_call_id: 'ask-resume-1',
+      content: expect.stringContaining('"answered"'),
+    }));
+    expect(streamComplete).not.toHaveBeenCalled();
+  });
+
   it('forwards tool calls and tool results from streamComplete events', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
@@ -611,6 +761,192 @@ describe('agent-runtime', () => {
       content: '{\n  "ok": true,\n  "status": "loaded"\n}',
     }));
     expect(result.assistantText).toBe('Loaded skill');
+  });
+
+  it('returns host-owned tool_calls from streamComplete without throwing', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const toolCall = {
+      id: 'ask-stream-1',
+      function: {
+        name: 'ask_user_input',
+        arguments: '{"questions":[{"id":"format","question":"Which format?","options":[{"id":"pdf","label":"PDF"}]}]}',
+      },
+    };
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'model_start', iteration: 1 },
+      {
+        type: 'assistant_message',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [toolCall],
+        },
+        iteration: 1,
+      },
+      {
+        type: 'tool_calls',
+        iteration: 1,
+        result: {
+          status: 'tool_calls',
+          toolCalls: [toolCall],
+          messages: [
+            { role: 'system', content: 'System prompt' },
+            { role: 'user', content: 'hello' },
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [toolCall],
+            },
+          ],
+          raw: {
+            type: 'tool_calls',
+            providerStopReason: 'tool_calls',
+          },
+        },
+      },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onToolCall = vi.fn();
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onToolCall,
+    });
+
+    expect(result.status).toBe('tool_calls');
+    expect(result.toolCalls).toEqual([toolCall]);
+    expect(result.assistantText).toBe('');
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'assistant',
+      tool_calls: [toolCall],
+    }));
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+    expect(onToolCall).toHaveBeenCalledWith({
+      id: 'ask-stream-1',
+      name: 'ask_user_input',
+      arguments: toolCall.function.arguments,
+    });
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('handles and resumes host-owned tool_calls from streamComplete through the shell callback', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const toolCall = {
+      id: 'ask-stream-resume-1',
+      function: {
+        name: 'ask_user_input',
+        arguments: '{"questions":[{"id":"format","question":"Which format?","options":[{"id":"pdf","label":"PDF"}]}]}',
+      },
+    };
+
+    streamComplete
+      .mockImplementationOnce(() => eventStream([
+        { type: 'model_start', iteration: 1 },
+        {
+          type: 'assistant_message',
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [toolCall],
+          },
+          iteration: 1,
+        },
+        {
+          type: 'tool_calls',
+          iteration: 1,
+          result: {
+            status: 'tool_calls',
+            toolCalls: [toolCall],
+            messages: [
+              { role: 'system', content: 'System prompt' },
+              { role: 'user', content: 'hello' },
+              {
+                role: 'assistant',
+                content: '',
+                tool_calls: [toolCall],
+              },
+            ],
+            raw: {
+              type: 'tool_calls',
+              providerStopReason: 'tool_calls',
+            },
+          },
+        },
+      ]))
+      .mockImplementationOnce((request) => {
+        expect(request.messages).toContainEqual(expect.objectContaining({
+          role: 'tool',
+          tool_call_id: 'ask-stream-resume-1',
+          content: expect.stringContaining('"answered"'),
+        }));
+        return eventStream([
+          {
+            type: 'completed',
+            iteration: 2,
+            result: {
+              status: 'completed',
+              output: 'Done streaming',
+              messages: [],
+            },
+          },
+        ]);
+      });
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onToolCall = vi.fn();
+    const onToolResult = vi.fn();
+    const handleToolCall = vi.fn().mockResolvedValue({
+      handled: true,
+      result: { ok: true, status: 'answered', selections: [] },
+    });
+
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+      onToolCall,
+      onToolResult,
+      handleToolCall,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.assistantText).toBe('Done streaming');
+    expect(streamComplete).toHaveBeenCalledTimes(2);
+    expect(handleToolCall).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'ask_user_input',
+      parsedArguments: expect.objectContaining({
+        questions: expect.any(Array),
+      }),
+    }));
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ask-stream-resume-1',
+      name: 'ask_user_input',
+      result: { ok: true, status: 'answered', selections: [] },
+    }));
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'tool',
+      tool_call_id: 'ask-stream-resume-1',
+      content: expect.stringContaining('"answered"'),
+    }));
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it('forwards approval denials to the runtime via onToolApproval', async () => {

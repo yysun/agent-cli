@@ -668,6 +668,18 @@ function parseSerializedToolResult(content) {
     return content;
   }
 }
+function parseToolCallArguments(toolCall) {
+  const rawArguments = toolCall?.function?.arguments;
+  if (typeof rawArguments !== "string" || !rawArguments.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(rawArguments);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 function extractRejectedTextResponse(error) {
   const message = String(error ?? "");
   if (!message.startsWith(REJECTED_TEXT_RESPONSE_PREFIX)) {
@@ -771,6 +783,7 @@ async function runChatTurn({
     let streamedAssistantText = "";
     let fallbackRejectedText = "";
     let failureError = null;
+    let pendingToolCalls = [];
     const completionOptions = {
       environment: runtime,
       provider: runtimeSettings.provider,
@@ -824,143 +837,228 @@ async function runChatTurn({
         }
       } : {}
     };
-    if (!stream) {
-      const completionResult = await complete(completionOptions);
-      emitModelResponse(onModelResponse, completionResult.raw, void 0);
-      if (completionResult.status === "failed") {
-        const rejectedText = extractRejectedTextResponse(completionResult.error);
-        if (rejectedText) {
-          finalText = rejectedText;
-        } else {
-          failureError = String(completionResult.error || "LLM turn failed.");
+    let resumeMessages = completionOptions.messages;
+    const handlePendingToolCalls = async () => {
+      if (pendingToolCalls.length === 0 || typeof handleToolCall !== "function") {
+        return false;
+      }
+      const toolMessages = [];
+      for (const toolCall of pendingToolCalls) {
+        const toolName = toolCall.function?.name ?? "unknown_tool";
+        const parsedArguments = parseToolCallArguments(toolCall);
+        const startedAt = Date.now();
+        if (typeof onToolCall === "function" && !emittedToolCallIds.has(toolCall.id)) {
+          emittedToolCallIds.add(toolCall.id);
+          toolStartTimes.set(toolCall.id, startedAt);
+          onToolCall({
+            id: toolCall.id,
+            name: toolName,
+            arguments: toolCall.function?.arguments
+          });
         }
-      } else if (completionResult.status === "tool_calls") {
-        const pendingNames = (completionResult.toolCalls ?? []).map((tc) => tc.function?.name ?? "unknown_tool").join(", ");
-        failureError = `LLM turn paused for host-handled tools (${pendingNames || "none"}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
-      } else if (completionResult.status === "completed" && typeof completionResult.output === "string") {
-        finalText = completionResult.output;
-      } else {
-        failureError = `LLM turn failed with status ${completionResult.status}.`;
-      }
-      const runtimeMessages = selectNewRuntimeMessages(
-        completionResult.messages ?? [],
-        completionOptions.messages.length
-      );
-      emitCompletedToolEvents(runtimeMessages, { onToolCall, onToolResult });
-      for (const message of runtimeMessages) {
+        const handlerResult = await handleToolCall({
+          toolCall,
+          toolName,
+          arguments: toolCall.function?.arguments,
+          parsedArguments,
+          context: {
+            ...executionContext,
+            messages: [...resumeMessages, ...toolMessages]
+          },
+          executeDefault: async () => ({
+            ok: false,
+            status: "unhandled",
+            message: `Tool "${toolName}" is host-owned and has no default executor.`
+          })
+        });
+        if (!handlerResult?.handled) {
+          return false;
+        }
+        const resultValue = handlerResult.result;
+        const toolMessage = {
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: serializeToolResult(resultValue)
+        };
+        toolMessages.push(toolMessage);
+        if (typeof onToolResult === "function") {
+          onToolResult({
+            id: toolCall.id,
+            name: toolName,
+            result: resultValue,
+            arguments: toolCall.function?.arguments,
+            durationMs: Date.now() - startedAt
+          });
+        }
         persistedMessages.push({
-          ...message,
+          ...toolMessage,
           createdAt: (/* @__PURE__ */ new Date()).toISOString()
         });
       }
-      if (finalText.trim() && !runtimeMessages.some((message) => message?.role === "assistant" && String(message.content ?? "") === finalText)) {
-        persistedMessages.push({
-          role: "assistant",
-          content: finalText,
-          createdAt: (/* @__PURE__ */ new Date()).toISOString()
-        });
+      completionOptions.messages = [...resumeMessages, ...toolMessages];
+      pendingToolCalls = [];
+      return true;
+    };
+    while (true) {
+      pendingToolCalls = [];
+      resumeMessages = completionOptions.messages;
+      if (!stream) {
+        const completionResult = await complete(completionOptions);
+        emitModelResponse(onModelResponse, completionResult.raw, void 0);
+        resumeMessages = completionResult.messages ?? completionOptions.messages;
+        if (completionResult.status === "failed") {
+          const rejectedText = extractRejectedTextResponse(completionResult.error);
+          if (rejectedText) {
+            finalText = rejectedText;
+          } else {
+            failureError = String(completionResult.error || "LLM turn failed.");
+          }
+        } else if (completionResult.status === "tool_calls") {
+          pendingToolCalls = completionResult.toolCalls ?? [];
+        } else if (completionResult.status === "completed" && typeof completionResult.output === "string") {
+          finalText = completionResult.output;
+        } else {
+          failureError = `LLM turn failed with status ${completionResult.status}.`;
+        }
+        const runtimeMessages = selectNewRuntimeMessages(
+          completionResult.messages ?? [],
+          completionOptions.messages.length
+        );
+        emitCompletedToolEvents(runtimeMessages, { onToolCall, onToolResult });
+        for (const message of runtimeMessages) {
+          for (const toolCall of message?.role === "assistant" ? message.tool_calls ?? [] : []) {
+            emittedToolCallIds.add(toolCall.id);
+          }
+          persistedMessages.push({
+            ...message,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
+        if (finalText.trim() && !runtimeMessages.some((message) => message?.role === "assistant" && String(message.content ?? "") === finalText)) {
+          persistedMessages.push({
+            role: "assistant",
+            content: finalText,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
       }
-    }
-    if (stream) {
-      for await (const event of streamComplete(completionOptions)) {
-        switch (event.type) {
-          case "text_delta":
-            break;
-          case "reasoning_delta":
-            if (typeof onStreamChunk === "function") {
-              onStreamChunk({ reasoningContent: event.delta });
-            }
-            break;
-          case "answer_delta":
-            streamedAssistantText += event.delta;
-            if (typeof onStreamChunk === "function") {
-              onStreamChunk({ content: event.delta });
-            }
-            break;
-          case "assistant_message":
-            emitModelResponse(
-              onModelResponse,
-              void 0,
-              event.message.tool_calls?.length ? "tool_calls" : "text"
-            );
-            if (event.message.tool_calls?.length) {
+      if (stream) {
+        for await (const event of streamComplete(completionOptions)) {
+          switch (event.type) {
+            case "text_delta":
+              break;
+            case "reasoning_delta":
+              if (typeof onStreamChunk === "function") {
+                onStreamChunk({ reasoningContent: event.delta });
+              }
+              break;
+            case "answer_delta":
+              streamedAssistantText += event.delta;
+              if (typeof onStreamChunk === "function") {
+                onStreamChunk({ content: event.delta });
+              }
+              break;
+            case "assistant_message":
+              emitModelResponse(
+                onModelResponse,
+                void 0,
+                event.message.tool_calls?.length ? "tool_calls" : "text"
+              );
+              if (event.message.tool_calls?.length) {
+                persistedMessages.push({
+                  ...event.message,
+                  createdAt: (/* @__PURE__ */ new Date()).toISOString()
+                });
+              }
+              break;
+            case "tool_start":
+              toolStartTimes.set(event.toolCall.id, Date.now());
+              if (typeof onToolCall === "function" && !emittedToolCallIds.has(event.toolCall.id)) {
+                emittedToolCallIds.add(event.toolCall.id);
+                onToolCall({
+                  id: event.toolCall.id,
+                  name: event.toolCall.function?.name ?? "unknown_tool",
+                  arguments: event.toolCall.function?.arguments
+                });
+              }
+              break;
+            case "tool_result":
+            case "tool_error": {
+              const resultValue = event.type === "tool_result" ? event.result : { error: event.error };
+              const toolName = event.toolCall.function?.name ?? "unknown_tool";
+              const startedAt = toolStartTimes.get(event.toolCall.id);
+              if (typeof onToolResult === "function") {
+                onToolResult({
+                  id: event.toolCall.id,
+                  name: toolName,
+                  result: resultValue,
+                  arguments: event.toolCall.function?.arguments,
+                  ...typeof startedAt === "number" ? { durationMs: Date.now() - startedAt } : {}
+                });
+              }
               persistedMessages.push({
-                ...event.message,
+                role: "tool",
+                tool_call_id: event.toolCall.id,
+                content: serializeToolResult(resultValue),
                 createdAt: (/* @__PURE__ */ new Date()).toISOString()
               });
+              break;
             }
-            break;
-          case "tool_start":
-            toolStartTimes.set(event.toolCall.id, Date.now());
-            if (typeof onToolCall === "function" && !emittedToolCallIds.has(event.toolCall.id)) {
-              emittedToolCallIds.add(event.toolCall.id);
-              onToolCall({
-                id: event.toolCall.id,
-                name: event.toolCall.function?.name ?? "unknown_tool",
-                arguments: event.toolCall.function?.arguments
-              });
-            }
-            break;
-          case "tool_result":
-          case "tool_error": {
-            const resultValue = event.type === "tool_result" ? event.result : { error: event.error };
-            const toolName = event.toolCall.function?.name ?? "unknown_tool";
-            const startedAt = toolStartTimes.get(event.toolCall.id);
-            if (typeof onToolResult === "function") {
-              onToolResult({
-                id: event.toolCall.id,
-                name: toolName,
-                result: resultValue,
-                arguments: event.toolCall.function?.arguments,
-                ...typeof startedAt === "number" ? { durationMs: Date.now() - startedAt } : {}
-              });
-            }
-            persistedMessages.push({
-              role: "tool",
-              tool_call_id: event.toolCall.id,
-              content: serializeToolResult(resultValue),
-              createdAt: (/* @__PURE__ */ new Date()).toISOString()
-            });
-            break;
-          }
-          case "completed":
-            emitModelResponse(onModelResponse, event.result.raw, void 0);
-            if (event.result.status === "completed" && typeof event.result.output === "string") {
-              finalText = event.result.output;
-              if (typeof onStreamChunk === "function") {
-                const remainingFinalText = finalText.startsWith(streamedAssistantText) ? finalText.slice(streamedAssistantText.length) : streamedAssistantText ? "" : finalText;
-                if (remainingFinalText) {
-                  streamedAssistantText += remainingFinalText;
-                  onStreamChunk({ content: remainingFinalText });
+            case "completed":
+              emitModelResponse(onModelResponse, event.result.raw, void 0);
+              if (event.result.status === "completed" && typeof event.result.output === "string") {
+                finalText = event.result.output;
+                if (typeof onStreamChunk === "function") {
+                  const remainingFinalText = finalText.startsWith(streamedAssistantText) ? finalText.slice(streamedAssistantText.length) : streamedAssistantText ? "" : finalText;
+                  if (remainingFinalText) {
+                    streamedAssistantText += remainingFinalText;
+                    onStreamChunk({ content: remainingFinalText });
+                  }
+                }
+                persistedMessages.push({
+                  role: "assistant",
+                  content: event.result.output,
+                  createdAt: (/* @__PURE__ */ new Date()).toISOString()
+                });
+              }
+              break;
+            case "tool_calls": {
+              emitModelResponse(onModelResponse, event.result.raw, void 0);
+              pendingToolCalls = event.result.toolCalls ?? [];
+              resumeMessages = event.result.messages ?? resumeMessages;
+              for (const toolCall of pendingToolCalls) {
+                if (typeof onToolCall === "function" && !emittedToolCallIds.has(toolCall.id)) {
+                  emittedToolCallIds.add(toolCall.id);
+                  onToolCall({
+                    id: toolCall.id,
+                    name: toolCall.function?.name ?? "unknown_tool",
+                    arguments: toolCall.function?.arguments
+                  });
                 }
               }
-              persistedMessages.push({
-                role: "assistant",
-                content: event.result.output,
-                createdAt: (/* @__PURE__ */ new Date()).toISOString()
-              });
+              break;
             }
-            break;
-          case "tool_calls": {
-            emitModelResponse(onModelResponse, event.result.raw, void 0);
-            const pendingNames = (event.result.toolCalls ?? []).map((tc) => tc.function?.name ?? "unknown_tool").join(", ");
-            failureError = `LLM turn paused for host-handled tools (${pendingNames || "none"}). Provide a handleToolCall handler that resolves them, or pass them as executable extraTools.`;
-            break;
-          }
-          case "failed":
-            emitModelResponse(onModelResponse, event.result.raw, void 0);
-            {
-              const rejectedText = extractRejectedTextResponse(event.result.error);
-              if (rejectedText) {
-                fallbackRejectedText = rejectedText;
-              } else {
-                failureError = String(event.result.error || `LLM turn failed with status ${event.result.status}.`);
+            case "failed":
+              emitModelResponse(onModelResponse, event.result.raw, void 0);
+              {
+                const rejectedText = extractRejectedTextResponse(event.result.error);
+                if (rejectedText) {
+                  fallbackRejectedText = rejectedText;
+                } else {
+                  failureError = String(event.result.error || `LLM turn failed with status ${event.result.status}.`);
+                }
               }
-            }
-            break;
-          default:
-            break;
+              break;
+            default:
+              break;
+          }
         }
+      }
+      if (failureError || pendingToolCalls.length === 0) {
+        break;
+      }
+      if (!await handlePendingToolCalls()) {
+        break;
       }
     }
     if (!finalText.trim() && fallbackRejectedText) {
@@ -978,10 +1076,19 @@ async function runChatTurn({
     if (failureError) {
       throw new Error(failureError);
     }
+    if (pendingToolCalls.length > 0) {
+      return {
+        status: "tool_calls",
+        toolCalls: pendingToolCalls,
+        assistantText: finalText.trim(),
+        messages: persistedMessages
+      };
+    }
     if (!finalText.trim()) {
       throw new Error("LLM turn ended without a final text response.");
     }
     return {
+      status: "completed",
       assistantText: finalText.trim(),
       messages: persistedMessages
     };
@@ -3059,6 +3166,9 @@ function isToolContinuationModelResponse(response) {
   const finishReason = typeof response.providerStopReason === "string" ? response.providerStopReason.toLowerCase() : "";
   return stopKind.includes("tool") || finishReason.includes("tool");
 }
+function toolDisplayKey(toolEvent) {
+  return typeof toolEvent.id === "string" && toolEvent.id.trim() ? toolEvent.id : `${String(toolEvent.name ?? "unknown_tool")}\0${String(toolEvent.arguments ?? "")}`;
+}
 async function resolveEffectiveAgentConfig(options = {}) {
   const persistedAgentConfig = loadPersistedRuntimeConfig();
   const baseAgentConfig = {
@@ -3269,16 +3379,14 @@ function createTurnExecutor(options) {
             resumePendingAssistantText();
           }
           if (options.verbose) {
-            if (!displayedVerboseToolCallIds.has(toolCall.id)) {
-              displayedVerboseToolCallIds.add(toolCall.id);
+            const displayKey = toolDisplayKey(toolCall);
+            if (!displayedVerboseToolCallIds.has(displayKey)) {
+              displayedVerboseToolCallIds.add(displayKey);
               const diagnostic = formatToolCallDiagnostic(toolCall);
               const displayDiagnostic = humanInputToolCall ? `${diagnostic}
 
 ` : diagnostic;
               verboseDisplay.writeDiagnostic(displayDiagnostic, "tool_call");
-            }
-            if (!humanInputRequest) {
-              resumePendingAssistantText();
             }
           }
           if (streamTraceEnabled) {
@@ -3293,8 +3401,9 @@ function createTurnExecutor(options) {
         onToolResult: (toolResult) => {
           if (options.verbose) {
             pendingDisplay.clear();
-            if (!displayedVerboseToolCallIds.has(toolResult.id)) {
-              displayedVerboseToolCallIds.add(toolResult.id);
+            const displayKey = toolDisplayKey(toolResult);
+            if (!displayedVerboseToolCallIds.has(displayKey)) {
+              displayedVerboseToolCallIds.add(displayKey);
               verboseDisplay.writeDiagnostic(formatToolCallDiagnostic(toolResult), "tool_call");
             }
             const diagnostic = formatToolResultDiagnostic(toolResult);
