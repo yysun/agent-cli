@@ -1679,7 +1679,7 @@ describe('agent-cli entrypoint', () => {
           name: 'Demo World',
         },
         workflow: {
-          type: 'dag',
+          type: 'sequential-pipeline',
           entry: 'planner',
           entryAgent: 'planner',
           nodes: {
@@ -1732,14 +1732,14 @@ describe('agent-cli entrypoint', () => {
     await runCli(['hello'], io);
 
     expect(io.getStderr()).toContain('Agent world:');
-    expect(io.getStderr()).toContain('  workflow: dag');
+    expect(io.getStderr()).toContain('  workflow: sequential-pipeline');
     expect(io.getStderr()).toContain('  agents: planner, reviewer, executor');
     expect(process.exitCode).toBe(1);
 
     process.exitCode = originalExitCode;
   });
 
-  it('rejects workspace world json that does not match the bundled schema', async () => {
+  it('warns and continues when workspace world json does not match the bundled schema', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -1750,19 +1750,20 @@ describe('agent-cli entrypoint', () => {
       path.join(rootPath, '.agent-world', 'world.json'),
       JSON.stringify({
         workflow: {
-          type: 'dag',
+          type: 'broadcast',
         },
         agents: [],
       }, null, 2),
       'utf8',
     );
 
+    const runChatTurn = vi.fn().mockResolvedValue({
+      assistantText: 'continued',
+      messages: [],
+    });
     const { runCli } = await loadCliModule(rootPath, {
       runtimeClient: {
-        runChatTurn: vi.fn().mockResolvedValue({
-          assistantText: 'should not run',
-          messages: [],
-        }),
+        runChatTurn,
       },
     });
     const io = createIoCapture();
@@ -1775,7 +1776,8 @@ describe('agent-cli entrypoint', () => {
     expect(io.getStderr()).toContain('Invalid Agent World config:');
     expect(io.getStderr()).toContain('$.world is required');
     expect(io.getStderr()).toContain('$.agents must be object');
-    expect(process.exitCode).toBe(1);
+    expect(runChatTurn).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBeUndefined();
 
     process.exitCode = originalExitCode;
   });

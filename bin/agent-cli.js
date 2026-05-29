@@ -1150,12 +1150,23 @@ var world_schema_default = {
     workflow: {
       type: "object",
       additionalProperties: false,
-      required: ["entry", "entryAgent", "nodes", "edges"],
+      required: ["type", "entry", "entryAgent", "nodes", "edges"],
       properties: {
         type: {
+          description: "Canonical workflow pattern id. Use custom-dag only for explicitly customized user-defined workflow graphs; it is not a default init option.",
           type: "string",
-          enum: ["dag", "mention_graph"],
-          default: "dag"
+          enum: [
+            "broadcast",
+            "direct-handoff",
+            "multi-agent-fan-out",
+            "fan-in-collector",
+            "sequential-pipeline",
+            "intent-router",
+            "fsm-state-token",
+            "debate-ping-pong-loop",
+            "orchestrator-worker",
+            "custom-dag"
+          ]
         },
         entry: {
           $ref: "#/$defs/id"
@@ -3615,6 +3626,23 @@ function createDefaultInteractivePrompt() {
     output: process.stdout
   });
 }
+async function loadAgentWorldStartupForCli() {
+  try {
+    return {
+      summary: await loadAgentWorldStartupSummary(),
+      warning: ""
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith("Invalid Agent World config:")) {
+      throw error;
+    }
+    return {
+      summary: null,
+      warning: message
+    };
+  }
+}
 function isCliEntrypoint(argvPath = process.argv[1], moduleUrl = import.meta.url) {
   if (!argvPath) {
     return false;
@@ -3921,20 +3949,24 @@ async function main(argv = process.argv.slice(2), io = { stdout: process.stdout,
     runtimeOverrides
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
-  const [workspaceSystemPrompt, scopedSkillInventory, agentWorldSummary] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory, agentWorldStartup] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
-    loadAgentWorldStartupSummary()
+    loadAgentWorldStartupForCli()
   ]);
   const chat = await loadRequestedChat({ newChat });
   const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
+  if (agentWorldStartup.warning) {
+    (io.stderr ?? process.stderr).write(`${agentWorldStartup.warning.trim()}
+`);
+  }
   if (options.startupDiagnostics) {
     (io.stderr ?? process.stderr).write(
       `${startupText(
         WORKSPACE_ROOT,
         resolveRuntimeSelection(process.env, agentConfig),
         scopedSkillInventory,
-        agentWorldSummary
+        agentWorldStartup.summary
       )}
 `
     );

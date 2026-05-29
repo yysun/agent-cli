@@ -229,6 +229,11 @@ type SkillScopesForStartup = {
   project: Array<{ skillId: string }>;
 };
 
+type AgentWorldStartupLoad = {
+  summary: AgentWorldStartupSummary | null;
+  warning: string;
+};
+
 function formatSkillIds(skills: Array<{ skillId: string }>): string {
   return skills.map((skill) => skill.skillId).sort((left, right) => left.localeCompare(right)).join(', ');
 }
@@ -254,6 +259,25 @@ function createDefaultInteractivePrompt(): InteractivePrompt {
     input: process.stdin,
     output: process.stdout,
   });
+}
+
+async function loadAgentWorldStartupForCli(): Promise<AgentWorldStartupLoad> {
+  try {
+    return {
+      summary: await loadAgentWorldStartupSummary(),
+      warning: '',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith('Invalid Agent World config:')) {
+      throw error;
+    }
+
+    return {
+      summary: null,
+      warning: message,
+    };
+  }
 }
 
 export function isCliEntrypoint(
@@ -643,13 +667,16 @@ export async function main(
   });
   const effectiveStreamOff = streamOff || agentConfig.stream === false;
 
-  const [workspaceSystemPrompt, scopedSkillInventory, agentWorldSummary] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory, agentWorldStartup] = await Promise.all([
     loadWorkspaceSystemPrompt(),
     loadSkillInventoryByScope(),
-    loadAgentWorldStartupSummary(),
+    loadAgentWorldStartupForCli(),
   ]);
   const chat = await loadRequestedChat({ newChat });
   const skillInventory = flattenSkillInventoryByPrecedence(scopedSkillInventory);
+  if (agentWorldStartup.warning) {
+    (io.stderr ?? process.stderr).write(`${agentWorldStartup.warning.trim()}\n`);
+  }
 
   if (options.startupDiagnostics) {
     (io.stderr ?? process.stderr).write(
@@ -657,7 +684,7 @@ export async function main(
         WORKSPACE_ROOT,
         resolveRuntimeSelection(process.env, agentConfig),
         scopedSkillInventory,
-        agentWorldSummary,
+        agentWorldStartup.summary,
       )}\n`,
     );
   }
