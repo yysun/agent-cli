@@ -10,6 +10,8 @@ Key features:
 - Includes the active-agent, streaming-card, tool-card, and status animations used by the source renderer.
 
 Recent changes:
+- 2026-05-31: Moved sidebar collapse and restore controls into the macOS titlebar drag zone.
+- 2026-05-31: Added reference-aligned left sidebar collapse and restore layout states.
 - 2026-05-24: Ported design-system tokens and screen layout from the legacy Electron renderer.
 - 2026-05-24: Added initial renderer styles.
 */
@@ -125,6 +127,18 @@ button:disabled {
   background: var(--sidebar);
   color: var(--sidebar-foreground);
   padding: 8px 16px 16px;
+  opacity: 1;
+  transition: width 200ms ease, min-width 200ms ease, padding 200ms ease, opacity 200ms ease, border-color 200ms ease;
+}
+
+.aw-app-shell.is-sidebar-collapsed .aw-sidebar {
+  width: 0;
+  min-width: 0;
+  border-right-width: 0;
+  border-right-color: transparent;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .aw-window-strip {
@@ -134,6 +148,7 @@ button:disabled {
   align-items: flex-start;
   justify-content: flex-end;
   margin-bottom: 12px;
+  -webkit-app-region: drag;
 }
 
 .aw-sidebar-section {
@@ -206,6 +221,7 @@ button:disabled {
   background: transparent;
   color: var(--muted-foreground);
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  -webkit-app-region: no-drag;
 }
 
 .aw-icon-button {
@@ -213,6 +229,28 @@ button:disabled {
   height: 28px;
   border-radius: 6px;
   font-size: 15px;
+}
+
+.aw-icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.aw-sidebar-toggle {
+  flex-shrink: 0;
+}
+
+.aw-sidebar-restore {
+  align-self: flex-start;
+}
+
+.aw-sidebar-restore[hidden] {
+  display: none;
 }
 
 .aw-icon-button:hover,
@@ -387,9 +425,26 @@ button:disabled {
   gap: 14px;
   border-bottom: 1px solid var(--border);
   padding: 8px 20px 12px;
+  transition: padding 200ms ease;
+  -webkit-app-region: drag;
 }
 
 .aw-header-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.aw-app-shell.is-sidebar-collapsed .aw-header {
+  padding-left: 96px;
+}
+
+.aw-app-shell.is-sidebar-collapsed .aw-header-context {
+  align-self: flex-start;
+}
+
+.aw-header-title-block {
   min-width: 0;
 }
 
@@ -411,6 +466,7 @@ button:disabled {
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-app-region: no-drag;
 }
 
 .aw-agent-strip {
@@ -419,6 +475,7 @@ button:disabled {
   border-radius: 8px;
   background: color-mix(in srgb, var(--card) 70%, transparent);
   padding: 4px 8px;
+  -webkit-app-region: no-drag;
 }
 
 .aw-agent-badge,
@@ -474,6 +531,7 @@ button:disabled {
 .aw-header-actions {
   justify-content: flex-end;
   gap: 4px;
+  -webkit-app-region: no-drag;
 }
 
 .aw-view-button {
@@ -845,7 +903,7 @@ button:disabled {
   padding: 10px;
 }
 
-.aw-log-entry + .aw-log-entry {
+.aw-log-entry+.aw-log-entry {
   margin-top: 8px;
 }
 
@@ -863,6 +921,7 @@ button:disabled {
 }
 
 @keyframes header-agent-shake {
+
   0%,
   100% {
     transform: translateY(0) scale(1);
@@ -886,6 +945,7 @@ button:disabled {
 }
 
 @keyframes header-agent-float {
+
   0%,
   100% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 0%, transparent);
@@ -897,6 +957,7 @@ button:disabled {
 }
 
 @keyframes agent-streaming-card-glow {
+
   0%,
   100% {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 14%, transparent);
@@ -918,6 +979,7 @@ button:disabled {
 }
 
 @keyframes agent-tool-card-glow {
+
   0%,
   100% {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, #f59e0b 26%, transparent);
@@ -951,6 +1013,7 @@ button:disabled {
 }
 
 @keyframes aw-status-pulse {
+
   0%,
   100% {
     transform: scale(0.88);

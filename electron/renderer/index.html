@@ -10,189 +10,214 @@ Key features:
 - Uses local design-system tokens and static renderer assets without the shared web app.
 
 Recent changes:
+- 2026-05-31: Added reference-aligned left sidebar collapse and restore controls.
 - 2026-05-26: Connected the static shell to Electron IPC-backed workspace and chat flows.
 - 2026-05-24: Ported the legacy Agent World desktop layout into the standalone renderer.
 - 2026-05-24: Added the initial Electron-owned renderer document.
 -->
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent World</title>
-    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css" />
-  </head>
-  <body>
-    <main class="aw-app-shell">
-      <aside class="aw-sidebar" aria-label="Workspace and chat navigation">
-        <div class="aw-window-strip">
-          <button class="aw-icon-button" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
-            <span aria-hidden="true">‹</span>
-          </button>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent World</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <main id="app-shell" class="aw-app-shell">
+    <aside class="aw-sidebar" aria-label="Workspace and chat navigation">
+      <div class="aw-window-strip">
+        <button id="sidebar-collapse-button" class="aw-icon-button aw-sidebar-toggle" type="button"
+          aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+            <path d="M9 4v16"></path>
+            <polyline points="15 9 12 12 15 15"></polyline>
+          </svg>
+        </button>
+      </div>
+
+      <section class="aw-sidebar-section" aria-labelledby="workspace-title">
+        <div class="aw-section-header">
+          <h1 id="workspace-title">Workspace</h1>
+          <div class="aw-section-actions" aria-label="Workspace actions">
+            <button id="open-workspace-button" class="aw-icon-button" type="button" aria-label="Open workspace folder"
+              title="Open workspace folder">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4.086a2.5 2.5 0 0 1 1.768.732L12.621 7H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z">
+                </path>
+                <path d="M3 9.5h18"></path>
+              </svg>
+            </button>
+          </div>
         </div>
 
-        <section class="aw-sidebar-section" aria-labelledby="workspace-title">
-          <div class="aw-section-header">
-            <h1 id="workspace-title">Workspace</h1>
-            <div class="aw-section-actions" aria-label="Workspace actions">
-              <button id="refresh-button" class="aw-icon-button" type="button" aria-label="Refresh" title="Refresh">↻</button>
+        <article class="aw-world-card">
+          <div class="aw-world-card-header">
+            <div>
+              <h2>Agent CLI</h2>
+              <p id="workspace-path">No workspace loaded</p>
             </div>
+            <span id="runtime-status" class="aw-state-pill aw-state-running">Loading</span>
           </div>
-
-          <button id="workspace-button" class="aw-select-button" type="button" aria-label="Select workspace">
-            <span id="workspace-label">Select workspace</span>
-            <span aria-hidden="true">⌄</span>
-          </button>
-
-          <article class="aw-world-card">
-            <div class="aw-world-card-header">
-              <div>
-                <h2>Agent CLI</h2>
-                <p id="workspace-path">No workspace loaded</p>
-              </div>
-              <span id="runtime-status" class="aw-state-pill aw-state-running">Loading</span>
+          <dl class="aw-world-stats">
+            <div>
+              <dt>Messages</dt>
+              <dd id="message-count">0</dd>
             </div>
-            <dl class="aw-world-stats">
-              <div>
-                <dt>Messages</dt>
-                <dd id="message-count">0</dd>
-              </div>
-              <div>
-                <dt>Chats</dt>
-                <dd id="chat-count">0</dd>
-              </div>
-              <div>
-                <dt>Skills</dt>
-                <dd>local</dd>
-              </div>
-            </dl>
-          </article>
-        </section>
-
-        <section class="aw-sidebar-section aw-sessions-section" aria-labelledby="chats-title">
-          <div class="aw-section-header">
-            <h2 id="chats-title">Chats</h2>
-            <button id="new-chat-button" class="aw-icon-button" type="button" aria-label="New chat" title="New chat">+</button>
-          </div>
-
-          <label class="aw-search">
-            <span class="aw-sr-only">Search chats</span>
-            <span aria-hidden="true">⌕</span>
-            <input id="chat-filter" placeholder="filter chats" aria-label="Search chats" />
-          </label>
-
-          <div id="chat-list" class="aw-session-list" role="list">
-            <div class="aw-empty-state">No chats yet</div>
-          </div>
-        </section>
-      </aside>
-
-      <section class="aw-workspace" aria-labelledby="chat-title">
-        <header class="aw-header">
-          <div class="aw-header-context">
-            <h2 id="chat-title">Agent CLI</h2>
-            <button id="active-chat-button" class="aw-session-copy" type="button" aria-label="Active chat id">No active chat</button>
-          </div>
-
-          <div class="aw-agent-strip" aria-label="Runtime status">
-            <button class="aw-agent-badge aw-main-agent" type="button" title="Agent CLI runtime">
-              CLI
-              <span>MAIN</span>
-            </button>
-            <button class="aw-agent-badge aw-agent-active" type="button" title="Runtime ready">RT</button>
-          </div>
-
-          <div class="aw-header-actions" aria-label="Workspace view controls">
-            <button class="aw-view-button is-active" type="button" aria-label="Chat view" title="Chat view">☰</button>
-            <button class="aw-view-button is-panel-active" type="button" aria-label="Settings" title="Settings">⚙</button>
-          </div>
-        </header>
-
-        <div class="aw-main-content">
-          <section class="aw-chat-column" aria-label="Chat transcript">
-            <div id="message-list" class="aw-message-list">
-              <div class="aw-empty-state">Select a chat or send a message to begin.</div>
+            <div>
+              <dt>Chats</dt>
+              <dd id="chat-count">0</dd>
             </div>
-
-            <div class="aw-queue-panel">
-              <div>
-                <strong id="edit-mode-label">Ready</strong>
-                <span id="active-chat-label">No active chat</span>
-              </div>
-              <button id="cancel-edit-button" type="button" hidden>Cancel edit</button>
+            <div>
+              <dt>Skills</dt>
+              <dd>local</dd>
             </div>
+          </dl>
+        </article>
+      </section>
 
-            <form id="message-form" class="aw-composer" aria-label="Message composer">
-              <textarea id="message-input" rows="2" aria-label="Message input" placeholder="Ask the agent..."></textarea>
-              <div class="aw-composer-toolbar">
-                <div class="aw-composer-actions">
-                  <select id="tool-permission-select" aria-label="Tool permission">
-                    <option value="auto">Auto</option>
-                    <option value="ask">Ask</option>
-                    <option value="read">Read</option>
-                  </select>
-                  <select id="reasoning-effort-select" aria-label="Reasoning effort">
-                    <option value="">Default reasoning</option>
-                    <option value="none">None</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </div>
-                <button id="send-button" class="aw-send-button" type="submit" aria-label="Send message" title="Send message">↑</button>
-              </div>
-            </form>
+      <section class="aw-sidebar-section aw-sessions-section" aria-labelledby="chats-title">
+        <div class="aw-section-header">
+          <h2 id="chats-title">Chats</h2>
+          <button id="new-chat-button" class="aw-icon-button" type="button" aria-label="New chat"
+            title="New chat">+</button>
+        </div>
 
-            <div id="working-status" class="aw-working-status" role="status" hidden>
-              <span class="aw-pulse" aria-hidden="true"></span>
-              <span>Agent is working</span>
-            </div>
-          </section>
+        <label class="aw-search">
+          <span class="aw-sr-only">Search chats</span>
+          <span aria-hidden="true">⌕</span>
+          <input id="chat-filter" placeholder="filter chats" aria-label="Search chats" />
+        </label>
 
-          <aside class="aw-right-panel" aria-labelledby="panel-title">
-            <div class="aw-panel-header">
-              <h2 id="panel-title">System Settings</h2>
-              <button class="aw-icon-button" type="button" aria-label="Close panel" title="Close panel">×</button>
-            </div>
-
-            <section class="aw-panel-section">
-              <h3>Runtime</h3>
-              <label class="aw-field-row">
-                <span>Provider</span>
-                <input value="from .env or request" readonly />
-              </label>
-              <label class="aw-field-row">
-                <span>Model</span>
-                <input value="from .env or defaults" readonly />
-              </label>
-              <p class="aw-runtime-meta">
-                <span id="app-name">Agent World</span>
-                <span id="app-version">0.1.0</span>
-                <span id="app-platform">unknown</span>
-                <span id="renderer-mode">electron</span>
-              </p>
-            </section>
-
-            <section class="aw-panel-section">
-              <h3>Turn Defaults</h3>
-              <p class="aw-panel-copy">Tool permission and reasoning effort are sent with each new or edited turn.</p>
-            </section>
-
-            <section class="aw-panel-section aw-log-panel">
-              <h3>Logs</h3>
-              <div id="log-list">
-                <div class="aw-log-entry">
-                  <span>info</span>
-                  <p>Renderer loaded.</p>
-                </div>
-              </div>
-            </section>
-          </aside>
+        <div id="chat-list" class="aw-session-list" role="list">
+          <div class="aw-empty-state">No chats yet</div>
         </div>
       </section>
-    </main>
+    </aside>
 
-    <script src="./renderer.js"></script>
-  </body>
+    <section class="aw-workspace" aria-labelledby="chat-title">
+      <header class="aw-header">
+        <div class="aw-header-context">
+          <button id="sidebar-restore-button" class="aw-icon-button aw-sidebar-toggle aw-sidebar-restore" type="button"
+            aria-label="Show sidebar" title="Show sidebar" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+              <path d="M9 4v16"></path>
+              <polyline points="13 9 16 12 13 15"></polyline>
+            </svg>
+          </button>
+          <div class="aw-header-title-block">
+            <h2 id="chat-title">Agent CLI</h2>
+            <button id="active-chat-button" class="aw-session-copy" type="button" aria-label="Active chat id">No active
+              chat</button>
+          </div>
+        </div>
+
+        <div class="aw-agent-strip" aria-label="Runtime status">
+          <button class="aw-agent-badge aw-main-agent" type="button" title="Agent CLI runtime">
+            CLI
+            <span>MAIN</span>
+          </button>
+          <button class="aw-agent-badge aw-agent-active" type="button" title="Runtime ready">RT</button>
+        </div>
+
+        <div class="aw-header-actions" aria-label="Workspace view controls">
+          <button class="aw-view-button is-active" type="button" aria-label="Chat view" title="Chat view">☰</button>
+          <button class="aw-view-button is-panel-active" type="button" aria-label="Settings" title="Settings">⚙</button>
+        </div>
+      </header>
+
+      <div class="aw-main-content">
+        <section class="aw-chat-column" aria-label="Chat transcript">
+          <div id="message-list" class="aw-message-list">
+            <div class="aw-empty-state">Select a chat or send a message to begin.</div>
+          </div>
+
+          <div class="aw-queue-panel">
+            <div>
+              <strong id="edit-mode-label">Ready</strong>
+              <span id="active-chat-label">No active chat</span>
+            </div>
+            <button id="cancel-edit-button" type="button" hidden>Cancel edit</button>
+          </div>
+
+          <form id="message-form" class="aw-composer" aria-label="Message composer">
+            <textarea id="message-input" rows="2" aria-label="Message input" placeholder="Ask the agent..."></textarea>
+            <div class="aw-composer-toolbar">
+              <div class="aw-composer-actions">
+                <select id="tool-permission-select" aria-label="Tool permission">
+                  <option value="auto">Auto</option>
+                  <option value="ask">Ask</option>
+                  <option value="read">Read</option>
+                </select>
+                <select id="reasoning-effort-select" aria-label="Reasoning effort">
+                  <option value="">Default reasoning</option>
+                  <option value="none">None</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+              <button id="send-button" class="aw-send-button" type="submit" aria-label="Send message"
+                title="Send message">↑</button>
+            </div>
+          </form>
+
+          <div id="working-status" class="aw-working-status" role="status" hidden>
+            <span class="aw-pulse" aria-hidden="true"></span>
+            <span>Agent is working</span>
+          </div>
+        </section>
+
+        <aside class="aw-right-panel" aria-labelledby="panel-title">
+          <div class="aw-panel-header">
+            <h2 id="panel-title">System Settings</h2>
+            <button class="aw-icon-button" type="button" aria-label="Close panel" title="Close panel">×</button>
+          </div>
+
+          <section class="aw-panel-section">
+            <h3>Runtime</h3>
+            <label class="aw-field-row">
+              <span>Provider</span>
+              <input value="from .env or request" readonly />
+            </label>
+            <label class="aw-field-row">
+              <span>Model</span>
+              <input value="from .env or defaults" readonly />
+            </label>
+            <p class="aw-runtime-meta">
+              <span id="app-name">Agent World</span>
+              <span id="app-version">0.1.0</span>
+              <span id="app-platform">unknown</span>
+              <span id="renderer-mode">electron</span>
+            </p>
+          </section>
+
+          <section class="aw-panel-section">
+            <h3>Turn Defaults</h3>
+            <p class="aw-panel-copy">Tool permission and reasoning effort are sent with each new or edited turn.</p>
+          </section>
+
+          <section class="aw-panel-section aw-log-panel">
+            <h3>Logs</h3>
+            <div id="log-list">
+              <div class="aw-log-entry">
+                <span>info</span>
+                <p>Renderer loaded.</p>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script src="./renderer.js"></script>
+</body>
+
 </html>

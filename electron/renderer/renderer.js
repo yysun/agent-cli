@@ -11,6 +11,7 @@ Key features:
 - Sends tool permission and reasoning effort with every runtime turn.
 
 Recent changes:
+- 2026-05-31: Added reference-aligned left sidebar collapse and restore behavior that works before IPC hydration.
 - 2026-05-26: Added workspace/chat/message IPC-backed renderer behavior.
 - 2026-05-24: Preserved metadata hydration for the ported desktop layout.
 - 2026-05-24: Added initial renderer metadata hydration.
@@ -23,10 +24,12 @@ Recent changes:
     currentChatId: '',
     messages: [],
     editingIndex: null,
+    sidebarCollapsed: false,
     busy: false,
   };
 
   const elements = {
+    appShell: document.getElementById('app-shell'),
     status: document.getElementById('runtime-status'),
     appName: document.getElementById('app-name'),
     appVersion: document.getElementById('app-version'),
@@ -40,7 +43,9 @@ Recent changes:
     chatList: document.getElementById('chat-list'),
     chatFilter: document.getElementById('chat-filter'),
     newChatButton: document.getElementById('new-chat-button'),
-    refreshButton: document.getElementById('refresh-button'),
+    openWorkspaceButton: document.getElementById('open-workspace-button'),
+    sidebarCollapseButton: document.getElementById('sidebar-collapse-button'),
+    sidebarRestoreButton: document.getElementById('sidebar-restore-button'),
     activeChatButton: document.getElementById('active-chat-button'),
     activeChatLabel: document.getElementById('active-chat-label'),
     messageList: document.getElementById('message-list'),
@@ -127,13 +132,26 @@ Recent changes:
   }
 
   function updateWorkspaceView() {
-    const label = state.workspaceRoot ? state.workspaceRoot.split('/').filter(Boolean).at(-1) : 'Select workspace';
-    setText(elements.workspaceLabel, label || state.workspaceRoot || 'Select workspace');
+    const label = state.workspaceRoot ? state.workspaceRoot.split('/').filter(Boolean).at(-1) : 'Open workspace folder';
+    setText(elements.workspaceLabel, label || state.workspaceRoot || 'Open workspace folder');
     setText(elements.workspacePath, state.workspaceRoot || 'No workspace loaded');
     setText(elements.chatCount, String(state.chats.length));
     setText(elements.messageCount, String(state.messages.length));
     setText(elements.activeChatButton, state.currentChatId ? shortId(state.currentChatId) : 'No active chat');
     setText(elements.activeChatLabel, state.currentChatId ? state.currentChatId : 'No active chat');
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    state.sidebarCollapsed = collapsed;
+    elements.appShell?.classList.toggle('is-sidebar-collapsed', collapsed);
+    if (elements.sidebarCollapseButton) {
+      elements.sidebarCollapseButton.hidden = collapsed;
+      elements.sidebarCollapseButton.setAttribute('aria-expanded', String(!collapsed));
+    }
+    if (elements.sidebarRestoreButton) {
+      elements.sidebarRestoreButton.hidden = !collapsed;
+      elements.sidebarRestoreButton.setAttribute('aria-expanded', String(!collapsed));
+    }
   }
 
   function renderChats() {
@@ -454,9 +472,11 @@ Recent changes:
     elements.newChatButton?.addEventListener('click', () => {
       void createChat().catch((error) => log('error', error instanceof Error ? error.message : String(error)));
     });
-    elements.refreshButton?.addEventListener('click', () => {
-      void refreshChats().catch((error) => log('error', error instanceof Error ? error.message : String(error)));
+    elements.openWorkspaceButton?.addEventListener('click', () => {
+      void selectWorkspace().catch((error) => log('error', error instanceof Error ? error.message : String(error)));
     });
+    elements.sidebarCollapseButton?.addEventListener('click', () => setSidebarCollapsed(true));
+    elements.sidebarRestoreButton?.addEventListener('click', () => setSidebarCollapsed(false));
     elements.chatFilter?.addEventListener('input', renderChats);
     elements.cancelEditButton?.addEventListener('click', clearEdit);
     elements.messageForm?.addEventListener('submit', (event) => {
@@ -465,12 +485,13 @@ Recent changes:
   }
 
   async function boot() {
+    bindEvents();
+    setSidebarCollapsed(state.sidebarCollapsed);
+
     if (!desktopApi) {
       setText(elements.status, 'Bridge unavailable');
       return;
     }
-
-    bindEvents();
 
     try {
       await hydrateMetadata();

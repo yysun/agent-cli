@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-05-31: Matched the reference Electron app's hidden-inset macOS titlebar for sidebar controls.
  * - 2026-05-26: Added persisted workspace/chat IPC flows for the Electron renderer.
  * - 2026-05-26: Added IPC-backed Agent CLI runtime execution using core/agent-runtime.ts.
  * - 2026-05-24: Renamed the Electron-facing app identity to Agent World.
@@ -279,7 +280,7 @@ async function selectWorkspace(request: WorkspaceSelectRequest = {}) {
   if (!workspaceRoot) {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
-      title: 'Select Agent CLI Workspace',
+      title: 'Open Workspace Folder',
     });
 
     if (result.canceled || !result.filePaths[0]) {
@@ -477,6 +478,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
     minWidth: 960,
     minHeight: 640,
     title: 'Agent World',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     show: false,
     webPreferences: {
       preload: getPreloadPath(),
