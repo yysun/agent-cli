@@ -10,6 +10,11 @@ Key features:
 - Includes the active-agent, streaming-card, tool-card, and status animations used by the source renderer.
 
 Recent changes:
+- 2026-05-31: Added spacing for provider/model facts in the workspace summary card.
+- 2026-05-31: Pinned header regions so action buttons stay right-aligned and world agents stay centered.
+- 2026-05-31: Added compact header badge handling for agents loaded from world.json.
+- 2026-05-31: Added explicit world workflow and agent-count fact styling.
+- 2026-05-31: Added compact world.json summary styling for the workspace sidebar card.
 - 2026-05-31: Restored as the visual and font-size baseline for the layered React renderer migration.
 - 2026-05-31: Added right-panel collapse, dark/system theme tokens, tool-message filters, and UI-only skills styling.
 - 2026-05-31: Added internal vertical scrolling for long right-panel content.
@@ -409,6 +414,83 @@ button:disabled {
   font-weight: 750;
 }
 
+.aw-world-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border-top: 1px solid var(--sidebar-border);
+  padding-top: 10px;
+}
+
+.aw-world-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: color-mix(in srgb, var(--sidebar-foreground) 58%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.aw-world-summary.is-warning .aw-world-summary-header span:last-child {
+  color: var(--status-warning);
+}
+
+.aw-world-summary-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.aw-runtime-summary {
+  margin-top: 12px;
+}
+
+.aw-world-summary-facts div {
+  min-width: 0;
+  border: 1px solid var(--sidebar-border);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 7px 8px;
+}
+
+.aw-world-summary-facts span {
+  display: block;
+  color: color-mix(in srgb, var(--sidebar-foreground) 58%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.aw-world-summary-facts strong {
+  display: block;
+  min-width: 0;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  color: var(--sidebar-foreground);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.aw-world-agent-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aw-world-agent-list span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--sidebar-border);
+  border-radius: 999px;
+  background: var(--background);
+  padding: 3px 7px;
+  color: var(--sidebar-foreground);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .aw-search {
   display: flex;
   min-height: 36px;
@@ -503,10 +585,12 @@ button:disabled {
 }
 
 .aw-header-context {
+  grid-column: 1;
   display: flex;
   align-items: center;
   gap: 12px;
   min-width: 0;
+  justify-self: start;
 }
 
 .aw-app-shell.is-sidebar-collapsed .aw-header {
@@ -543,6 +627,8 @@ button:disabled {
 }
 
 .aw-agent-strip {
+  grid-column: 2;
+  justify-self: center;
   justify-content: center;
   gap: 8px;
   border-radius: 8px;
@@ -597,11 +683,19 @@ button:disabled {
   animation: header-agent-shake 1.1s infinite ease-in-out, header-agent-float 2.2s infinite ease-in-out;
 }
 
+.aw-world-agent-badge {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .aw-agent-add {
   font-size: 17px;
 }
 
 .aw-header-actions {
+  grid-column: 3;
+  justify-self: end;
   justify-content: flex-end;
   gap: 4px;
   -webkit-app-region: no-drag;

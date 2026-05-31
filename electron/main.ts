@@ -12,6 +12,9 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-05-31: Returned active runtime provider and model in Electron workspace metadata.
+ * - 2026-05-31: Loaded Electron workspace current chat from `.agent-world/chats/current.json` before returning startup state.
+ * - 2026-05-31: Restored the last Electron workspace before loading env/runtime inputs and returned world summary metadata.
  * - 2026-05-31: Added Vite React renderer loading for dev-server and built renderer modes.
  * - 2026-05-31: Matched the reference Electron app's hidden-inset macOS titlebar for sidebar controls.
  * - 2026-05-26: Added persisted workspace/chat IPC flows for the Electron renderer.
@@ -22,15 +25,20 @@
  * - 2026-05-24: Added the initial minimal Electron shell entry point.
  */
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadPersistedRuntimeConfig, normalizeAgentConfig } from '../core/agent-config.js';
+import {
+  loadAgentWorldStartupSummary,
+  type AgentWorldStartupSummary,
+} from '../core/agent-world-config.js';
 import {
   getBuiltInSystemPrompt,
   loadSkillInventory,
   loadWorkspaceSystemPrompt,
 } from '../core/agent-files.js';
-import { runChatTurn } from '../core/agent-runtime.js';
+import { resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
 import { WORKSPACE_ROOT } from '../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../core/workspace-environment.js';
 import { ensureWorkspaceWorld } from '../core/workspace-store.js';
@@ -57,6 +65,7 @@ const CHAT_GET_MESSAGES_CHANNEL = 'chat:getMessages';
 const CHAT_SEND_MESSAGE_CHANNEL = 'chat:sendMessage';
 const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
 const RENDERER_URL_ENV = 'AGENT_CLI_ELECTRON_RENDERER_URL';
+const ELECTRON_WORKSPACE_STATE_FILE = 'workspace-state.json';
 
 type AgentTurnMessage = {
   role?: string;
@@ -85,6 +94,15 @@ type ChatIdRequest = {
   chatId?: string;
 };
 
+type WorkspaceMetadata = {
+  worldSummary: AgentWorldStartupSummary | null;
+  worldSummaryWarning?: string;
+  runtimeSummary: {
+    provider: string;
+    model: string;
+  };
+};
+
 type SendMessageRequest = AgentTurnRequest & {
   content?: string;
 };
@@ -110,6 +128,10 @@ function getPreloadPath(): string {
 
 function getRendererIndexPath(): string {
   return path.join(getProjectRoot(), 'electron', 'renderer', 'dist', 'index.html');
+}
+
+function getWorkspaceStatePath(): string {
+  return path.join(app.getPath('userData'), ELECTRON_WORKSPACE_STATE_FILE);
 }
 
 function getRendererDevUrl(): string | null {
@@ -167,10 +189,109 @@ function normalizeRequestAgentConfig(agentConfig: unknown): Record<string, unkno
   return agentConfig as Record<string, unknown>;
 }
 
+function normalizeWorkspacePath(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+async function isDirectory(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function loadPersistedWorkspaceRoot(): Promise<string | undefined> {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(await fs.readFile(getWorkspaceStatePath(), 'utf8'));
+  } catch {
+    return undefined;
+  }
+
+  const workspaceRoot = normalizeWorkspacePath(
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).workspaceRoot
+      : undefined,
+  );
+
+  if (!workspaceRoot || !(await isDirectory(workspaceRoot))) {
+    return undefined;
+  }
+
+  return workspaceRoot;
+}
+
+async function persistWorkspaceRoot(workspaceRoot: string): Promise<void> {
+  const resolvedWorkspaceRoot = normalizeWorkspacePath(workspaceRoot);
+  if (!resolvedWorkspaceRoot) {
+    return;
+  }
+
+  const statePath = getWorkspaceStatePath();
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.writeFile(
+    statePath,
+    `${JSON.stringify({ workspaceRoot: resolvedWorkspaceRoot }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+async function resolveElectronWorkspaceRoot(workspaceRoot?: string): Promise<string | undefined> {
+  const requestedWorkspaceRoot = normalizeWorkspacePath(workspaceRoot);
+  return requestedWorkspaceRoot || await loadPersistedWorkspaceRoot();
+}
+
 async function prepareElectronWorkspace(workspaceRoot?: string): Promise<string> {
-  const resolvedWorkspaceRoot = prepareWorkspaceEnvironment(workspaceRoot);
+  const resolvedWorkspaceRoot = prepareWorkspaceEnvironment(await resolveElectronWorkspaceRoot(workspaceRoot));
   await ensureWorkspaceWorld();
+  await persistWorkspaceRoot(resolvedWorkspaceRoot);
   return resolvedWorkspaceRoot;
+}
+
+async function loadWorkspaceMetadata(): Promise<WorkspaceMetadata> {
+  const runtimeSummary = resolveRuntimeSelection(process.env, loadPersistedRuntimeConfig());
+
+  try {
+    return {
+      runtimeSummary,
+      worldSummary: await loadAgentWorldStartupSummary(),
+    };
+  } catch (error) {
+    return {
+      runtimeSummary,
+      worldSummary: null,
+      worldSummaryWarning: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function buildWorkspaceResponse(params: {
+  workspaceRoot: string;
+  chats: Awaited<ReturnType<typeof listPersistedChats>>;
+  currentChatId: string | null;
+  canceled?: boolean;
+}) {
+  const workspaceMetadata = await loadWorkspaceMetadata();
+
+  return {
+    ...(typeof params.canceled === 'boolean' ? { canceled: params.canceled } : {}),
+    workspaceRoot: params.workspaceRoot,
+    chats: params.chats,
+    currentChatId: params.currentChatId,
+    ...workspaceMetadata,
+  };
+}
+
+async function loadWorkspaceChatState() {
+  const currentChat = await loadRequestedChat({ newChat: false });
+  const chats = await listPersistedChats();
+
+  return {
+    chats,
+    currentChatId: currentChat.id,
+  };
 }
 
 async function loadRuntimeInputs(request: {
@@ -272,13 +393,9 @@ async function runAgentTurn(rawRequest: AgentTurnRequest = {}) {
 
 async function getWorkspace() {
   const workspaceRoot = await prepareElectronWorkspace();
-  const chats = await listPersistedChats();
+  const { chats, currentChatId } = await loadWorkspaceChatState();
 
-  return {
-    workspaceRoot,
-    chats,
-    currentChatId: chats.find((chat) => chat.isCurrent)?.id ?? null,
-  };
+  return buildWorkspaceResponse({ workspaceRoot, chats, currentChatId });
 }
 
 async function selectWorkspace(request: WorkspaceSelectRequest = {}) {
@@ -292,8 +409,8 @@ async function selectWorkspace(request: WorkspaceSelectRequest = {}) {
 
     if (result.canceled || !result.filePaths[0]) {
       return {
-        canceled: true,
         ...(await getWorkspace()),
+        canceled: true,
       };
     }
 
@@ -301,25 +418,21 @@ async function selectWorkspace(request: WorkspaceSelectRequest = {}) {
   }
 
   const resolvedWorkspaceRoot = await prepareElectronWorkspace(workspaceRoot);
-  const chats = await listPersistedChats();
+  const { chats, currentChatId } = await loadWorkspaceChatState();
 
-  return {
+  return buildWorkspaceResponse({
     canceled: false,
     workspaceRoot: resolvedWorkspaceRoot,
     chats,
-    currentChatId: chats.find((chat) => chat.isCurrent)?.id ?? null,
-  };
+    currentChatId,
+  });
 }
 
 async function listChats(request: WorkspaceSelectRequest = {}) {
   const workspaceRoot = await prepareElectronWorkspace(request.workspaceRoot);
-  const chats = await listPersistedChats();
+  const { chats, currentChatId } = await loadWorkspaceChatState();
 
-  return {
-    workspaceRoot,
-    chats,
-    currentChatId: chats.find((chat) => chat.isCurrent)?.id ?? null,
-  };
+  return buildWorkspaceResponse({ workspaceRoot, chats, currentChatId });
 }
 
 async function createChat(request: WorkspaceSelectRequest = {}) {

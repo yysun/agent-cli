@@ -5,6 +5,8 @@
  * - Type the preload-exposed Electron bridge consumed by the React renderer.
  *
  * Recent changes:
+ * - 2026-05-31: Added runtime provider/model metadata to workspace responses.
+ * - 2026-05-31: Added optional workspace world summary metadata to workspace responses.
  * - 2026-05-31: Added renderer-local desktop API types for IPC-backed features.
  */
 export type AgentCliDesktopAppInfo = {
@@ -61,11 +63,25 @@ export type AgentCliDesktopChat = {
   messages: AgentCliDesktopRuntimeMessage[];
 };
 
+export type AgentCliDesktopWorldSummary = {
+  filePath: string;
+  workflow: string;
+  agents: string[];
+};
+
+export type AgentCliDesktopRuntimeSummary = {
+  provider: string;
+  model: string;
+};
+
 export type AgentCliDesktopWorkspaceResponse = {
   canceled?: boolean;
   workspaceRoot: string;
   chats: AgentCliDesktopChatSummary[];
   currentChatId: string | null;
+  runtimeSummary: AgentCliDesktopRuntimeSummary;
+  worldSummary: AgentCliDesktopWorldSummary | null;
+  worldSummaryWarning?: string;
 };
 
 export type AgentCliDesktopApi = {

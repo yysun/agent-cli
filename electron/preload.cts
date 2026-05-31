@@ -11,6 +11,8 @@
  * - Avoids exposing Node.js or Electron primitives directly to web code.
  *
  * Recent changes:
+ * - 2026-05-31: Added runtime provider/model metadata to workspace IPC responses.
+ * - 2026-05-31: Added optional workspace world summary metadata to workspace IPC responses.
  * - 2026-05-26: Added workspace, chat selection, send, and edit/resend bridge methods.
  * - 2026-05-26: Added `runAgentTurn` IPC bridge for main-process Agent CLI runtime execution.
  * - 2026-05-24: Switched preload output to CommonJS for stable Electron loading.
@@ -80,11 +82,25 @@ export type AgentCliDesktopChat = {
   messages: AgentCliDesktopRuntimeMessage[];
 };
 
+export type AgentCliDesktopWorldSummary = {
+  filePath: string;
+  workflow: string;
+  agents: string[];
+};
+
+export type AgentCliDesktopRuntimeSummary = {
+  provider: string;
+  model: string;
+};
+
 export type AgentCliDesktopWorkspaceResponse = {
   canceled?: boolean;
   workspaceRoot: string;
   chats: AgentCliDesktopChatSummary[];
   currentChatId: string | null;
+  runtimeSummary: AgentCliDesktopRuntimeSummary;
+  worldSummary: AgentCliDesktopWorldSummary | null;
+  worldSummaryWarning?: string;
 };
 
 export type AgentCliDesktopApi = {

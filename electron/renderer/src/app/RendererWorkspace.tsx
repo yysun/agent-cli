@@ -10,6 +10,9 @@
  * - Uses design-system patterns for the outer app frame.
  *
  * Recent changes:
+ * - 2026-05-31: Used the workspace folder name as the main header title and hid header agents without `world.json` agents.
+ * - 2026-05-31: Rendered `world.json` agent labels in the header agent strip.
+ * - 2026-05-31: Passed optional workspace world summary metadata into the sidebar.
  * - 2026-05-31: Preserved the existing header agent list markup and chat-view glyph.
  * - 2026-05-31: Added layered React workspace shell for the Electron renderer.
  */
@@ -20,13 +23,30 @@ import ChatTranscript from '../features/chat/ChatTranscript';
 import SettingsPanel from '../features/settings/SettingsPanel';
 import WorkspaceSidebar from '../features/workspace/WorkspaceSidebar';
 import { useDesktopWorkspace } from '../hooks/useDesktopWorkspace';
-import { shortId } from '../utils/format';
+import { shortId, workspaceFolderName } from '../utils/format';
+
+function formatAgentBadgeLabel(agent: string): string {
+  const normalizedAgent = agent.trim();
+  if (!normalizedAgent) {
+    return '?';
+  }
+
+  const parts = normalizedAgent.split(/[\s_-]+/).filter(Boolean);
+  if (parts.length > 1) {
+    return parts.slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+  }
+
+  return normalizedAgent.slice(0, 2).toUpperCase();
+}
 
 export default function RendererWorkspace() {
   const workspace = useDesktopWorkspace();
   const editingContent = workspace.editingIndex === null
     ? ''
     : String(workspace.messages[workspace.editingIndex]?.content || '');
+  const worldAgents = workspace.worldSummary?.agents ?? [];
+  const visibleWorldAgents = worldAgents.slice(0, 5);
+  const workspaceTitle = workspaceFolderName(workspace.workspaceRoot);
 
   return (
     <AppFrameLayout
@@ -37,7 +57,10 @@ export default function RendererWorkspace() {
           chats={workspace.chats}
           currentChatId={workspace.currentChatId}
           messageCount={workspace.messages.length}
+          runtimeSummary={workspace.runtimeSummary}
           status={workspace.status}
+          worldSummary={workspace.worldSummary}
+          worldSummaryWarning={workspace.worldSummaryWarning}
           workspaceRoot={workspace.workspaceRoot}
           onCreateChat={() => void workspace.actions.createChat()}
           onSelectChat={(chatId) => void workspace.actions.selectChat(chatId)}
@@ -59,17 +82,33 @@ export default function RendererWorkspace() {
                 <Icon name="sidebar-right" />
               </IconButton>
               <div className="aw-header-title-block">
-                <h2 id="chat-title">Agent CLI</h2>
+                <h2 id="chat-title">{workspaceTitle}</h2>
                 <button id="active-chat-button" className="aw-session-copy" type="button" aria-label="Active chat id">
                   {workspace.currentChatId ? shortId(workspace.currentChatId) : 'No active chat'}
                 </button>
               </div>
             </div>
 
-            <div className="aw-agent-strip" aria-label="Runtime status">
-              <button className="aw-agent-badge aw-main-agent" type="button" title="Agent CLI runtime">CLI<span>MAIN</span></button>
-              <button className="aw-agent-badge aw-agent-active" type="button" title={workspace.bridgeAvailable ? 'Runtime ready' : 'Bridge unavailable'}>RT</button>
-            </div>
+            {worldAgents.length ? (
+              <div className="aw-agent-strip" aria-label="World agents">
+                {visibleWorldAgents.map((agent, index) => (
+                  <button
+                    className={`aw-agent-badge aw-world-agent-badge${index === 0 ? ' aw-main-agent' : ''}`}
+                    type="button"
+                    title={agent}
+                    key={`${agent}-${index}`}
+                  >
+                    {formatAgentBadgeLabel(agent)}
+                    {index === 0 ? <span>WORLD</span> : null}
+                  </button>
+                ))}
+                {worldAgents.length > visibleWorldAgents.length ? (
+                  <button className="aw-agent-badge" type="button" title={`${worldAgents.length - visibleWorldAgents.length} more world agents`}>
+                    +{worldAgents.length - visibleWorldAgents.length}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="aw-header-actions" aria-label="Workspace view controls">
               <button className="aw-view-button is-active" type="button" aria-label="Chat view" title="Chat view">☰</button>

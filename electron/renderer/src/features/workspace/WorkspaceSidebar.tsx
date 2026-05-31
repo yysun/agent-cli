@@ -5,19 +5,32 @@
  * - Render workspace status and persisted chat navigation.
  *
  * Recent changes:
+ * - 2026-05-31: Added runtime provider and model to the workspace summary card.
+ * - 2026-05-31: Replaced the Skills/UI summary stat with the `world.json` workflow type.
+ * - 2026-05-31: Showed the workspace folder name as the summary card title.
+ * - 2026-05-31: Hid the ready status chip unless workspace `world.json` exists.
+ * - 2026-05-31: Showed world workflow type and agent count explicitly in the sidebar summary.
+ * - 2026-05-31: Displayed optional `.agent-world/world.json` summary metadata in the workspace card.
  * - 2026-05-31: Removed added visible sidebar content so the React renderer matches the original static shell.
  * - 2026-05-31: Added React sidebar feature around the existing chat IPC model.
  */
 import { useMemo, useState } from 'react';
 import { Icon, IconButton, Input } from '../../design-system';
-import type { AgentCliDesktopChatSummary } from '../../types/desktop-api';
-import { formatTime, shortId } from '../../utils/format';
+import type {
+  AgentCliDesktopChatSummary,
+  AgentCliDesktopRuntimeSummary,
+  AgentCliDesktopWorldSummary,
+} from '../../types/desktop-api';
+import { formatTime, shortId, workspaceFolderName } from '../../utils/format';
 
 export interface WorkspaceSidebarProps {
   chats: AgentCliDesktopChatSummary[];
   currentChatId: string;
   messageCount: number;
+  runtimeSummary: AgentCliDesktopRuntimeSummary;
   status: string;
+  worldSummary: AgentCliDesktopWorldSummary | null;
+  worldSummaryWarning: string;
   workspaceRoot: string;
   onCreateChat: () => void;
   onSelectChat: (chatId: string) => void;
@@ -29,7 +42,10 @@ export default function WorkspaceSidebar({
   chats,
   currentChatId,
   messageCount,
+  runtimeSummary,
   status,
+  worldSummary,
+  worldSummaryWarning,
   workspaceRoot,
   onCreateChat,
   onSelectChat,
@@ -44,6 +60,13 @@ export default function WorkspaceSidebar({
     }
     return chats.filter((chat) => chat.id.toLowerCase().includes(normalizedFilter));
   }, [chats, filterText]);
+  const hasWorldConfig = Boolean(worldSummary || worldSummaryWarning);
+  const workspaceTitle = workspaceFolderName(workspaceRoot);
+  const workflowType = worldSummary?.workflow || 'Not set';
+  const workflowStat = worldSummaryWarning ? 'Check JSON' : hasWorldConfig ? workflowType : 'No world';
+  const worldAgentCount = worldSummary?.agents.length ?? 0;
+  const runtimeProvider = runtimeSummary.provider || 'Not set';
+  const runtimeModel = runtimeSummary.model || 'Not set';
 
   return (
     <aside className="aw-sidebar" aria-label="Workspace and chat navigation">
@@ -66,10 +89,10 @@ export default function WorkspaceSidebar({
         <article className="aw-world-card">
           <div className="aw-world-card-header">
             <div>
-              <h2>Agent CLI</h2>
+              <h2>{workspaceTitle}</h2>
               <p id="workspace-path">{workspaceRoot || 'No workspace loaded'}</p>
             </div>
-            <span id="runtime-status" className="aw-state-pill aw-state-running">{status}</span>
+            {hasWorldConfig ? <span id="runtime-status" className="aw-state-pill aw-state-running">{status}</span> : null}
           </div>
           <dl className="aw-world-stats">
             <div>
@@ -81,10 +104,52 @@ export default function WorkspaceSidebar({
               <dd id="chat-count">{chats.length}</dd>
             </div>
             <div>
-              <dt>Skills</dt>
-              <dd id="skills-count">UI</dd>
+              <dt>Workflow</dt>
+              <dd id="workflow-type">{workflowStat}</dd>
             </div>
           </dl>
+          <div className="aw-runtime-summary aw-world-summary-facts" aria-label="Runtime provider and model">
+            <div>
+              <span>Provider</span>
+              <strong>{runtimeProvider}</strong>
+            </div>
+            <div>
+              <span>Model</span>
+              <strong>{runtimeModel}</strong>
+            </div>
+          </div>
+          {hasWorldConfig ? (
+            <div id="world-summary" className={`aw-world-summary${worldSummaryWarning ? ' is-warning' : ''}`}>
+              <div className="aw-world-summary-header">
+                <span>World</span>
+                <span>{worldSummaryWarning ? 'Check JSON' : 'Detected'}</span>
+              </div>
+              {worldSummaryWarning ? (
+                <p>{worldSummaryWarning}</p>
+              ) : (
+                <>
+                  <div className="aw-world-summary-facts">
+                    <div>
+                      <span>Workflow</span>
+                      <strong>{workflowType}</strong>
+                    </div>
+                    <div>
+                      <span>Agents</span>
+                      <strong>{worldAgentCount}</strong>
+                    </div>
+                  </div>
+                  {worldSummary?.agents.length ? (
+                    <div className="aw-world-agent-list" aria-label="World agents">
+                      {worldSummary.agents.slice(0, 4).map((agent) => (
+                        <span key={agent}>{agent}</span>
+                      ))}
+                      {worldSummary.agents.length > 4 ? <span>+{worldSummary.agents.length - 4}</span> : null}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
         </article>
       </section>
 

@@ -10,6 +10,8 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-05-31: Hydrated active runtime provider/model metadata from Electron IPC.
+ * - 2026-05-31: Hydrated optional workspace world summary metadata from Electron IPC.
  * - 2026-05-31: Ported the static renderer behavior into a typed React hook.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -17,7 +19,10 @@ import { THEME_STORAGE_KEY } from '../constants/storage';
 import type {
   AgentCliDesktopApi,
   AgentCliDesktopChatSummary,
+  AgentCliDesktopRuntimeSummary,
   AgentCliDesktopRuntimeMessage,
+  AgentCliDesktopWorkspaceResponse,
+  AgentCliDesktopWorldSummary,
 } from '../types/desktop-api';
 import type { RendererAppInfo, RendererLogEntry, ThemePreference } from '../types/ui';
 
@@ -40,6 +45,12 @@ function safeErrorMessage(error: unknown): string {
 export function useDesktopWorkspace() {
   const desktopApi: AgentCliDesktopApi | undefined = window.agentCliDesktop;
   const [workspaceRoot, setWorkspaceRoot] = useState('');
+  const [runtimeSummary, setRuntimeSummary] = useState<AgentCliDesktopRuntimeSummary>({
+    provider: '',
+    model: '',
+  });
+  const [worldSummary, setWorldSummary] = useState<AgentCliDesktopWorldSummary | null>(null);
+  const [worldSummaryWarning, setWorldSummaryWarning] = useState('');
   const [chats, setChats] = useState<AgentCliDesktopChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState('');
   const [messages, setMessages] = useState<AgentCliDesktopRuntimeMessage[]>([]);
@@ -87,6 +98,15 @@ export function useDesktopWorkspace() {
     setEditingIndex(null);
   }, []);
 
+  const applyWorkspaceMetadata = useCallback((response: Pick<AgentCliDesktopWorkspaceResponse, 'runtimeSummary' | 'worldSummary' | 'worldSummaryWarning'>) => {
+    setRuntimeSummary({
+      provider: response.runtimeSummary?.provider || '',
+      model: response.runtimeSummary?.model || '',
+    });
+    setWorldSummary(response.worldSummary ?? null);
+    setWorldSummaryWarning(response.worldSummaryWarning || '');
+  }, []);
+
   const refreshChats = useCallback(async () => {
     if (!desktopApi) {
       return;
@@ -95,10 +115,11 @@ export function useDesktopWorkspace() {
     const response = await desktopApi.listChats();
     setWorkspaceRoot(response.workspaceRoot || '');
     setChats(response.chats || []);
+    applyWorkspaceMetadata(response);
     if (response.currentChatId) {
       setCurrentChatId(response.currentChatId);
     }
-  }, [desktopApi]);
+  }, [applyWorkspaceMetadata, desktopApi]);
 
   const loadMessages = useCallback(async (chatId: string) => {
     if (!desktopApi) {
@@ -130,13 +151,14 @@ export function useDesktopWorkspace() {
     const response = await desktopApi.getWorkspace();
     setWorkspaceRoot(response.workspaceRoot || '');
     setChats(response.chats || []);
+    applyWorkspaceMetadata(response);
     setCurrentChatId(response.currentChatId || '');
     setStatus('Ready');
     if (response.currentChatId) {
       await loadMessages(response.currentChatId);
     }
     log('info', 'Workspace loaded.');
-  }, [desktopApi, loadMessages, log]);
+  }, [applyWorkspaceMetadata, desktopApi, loadMessages, log]);
 
   const selectWorkspace = useCallback(async () => {
     if (!desktopApi) {
@@ -148,6 +170,7 @@ export function useDesktopWorkspace() {
       const response = await desktopApi.selectWorkspace();
       setWorkspaceRoot(response.workspaceRoot || workspaceRoot);
       setChats(response.chats || []);
+      applyWorkspaceMetadata(response);
       setCurrentChatId(response.currentChatId || '');
       setMessages([]);
       if (response.currentChatId) {
@@ -155,7 +178,7 @@ export function useDesktopWorkspace() {
       }
       log('info', response.canceled ? 'Workspace selection canceled.' : `Workspace selected: ${response.workspaceRoot}`);
     });
-  }, [desktopApi, loadMessages, log, withBusy, workspaceRoot]);
+  }, [applyWorkspaceMetadata, desktopApi, loadMessages, log, withBusy, workspaceRoot]);
 
   const createChat = useCallback(async () => {
     if (!desktopApi) {
@@ -274,11 +297,14 @@ export function useDesktopWorkspace() {
     panelOpen,
     projectSkillsEnabled,
     reasoningEffort,
+    runtimeSummary,
     showToolMessages,
     sidebarCollapsed,
     status,
     themePreference,
     toolPermission,
+    worldSummary,
+    worldSummaryWarning,
     workspaceRoot,
     actions: {
       clearEdit,
@@ -312,6 +338,7 @@ export function useDesktopWorkspace() {
     panelOpen,
     projectSkillsEnabled,
     reasoningEffort,
+    runtimeSummary,
     selectChat,
     selectWorkspace,
     showToolMessages,
@@ -322,6 +349,8 @@ export function useDesktopWorkspace() {
     submitMessage,
     themePreference,
     toolPermission,
+    worldSummary,
+    worldSummaryWarning,
     workspaceRoot,
   ]);
 }
