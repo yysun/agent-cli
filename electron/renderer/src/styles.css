@@ -10,6 +10,9 @@ Key features:
 - Includes the active-agent, streaming-card, tool-card, and status animations used by the source renderer.
 
 Recent changes:
+- 2026-05-31: Restored as the visual and font-size baseline for the layered React renderer migration.
+- 2026-05-31: Added right-panel collapse, dark/system theme tokens, tool-message filters, and UI-only skills styling.
+- 2026-05-31: Added internal vertical scrolling for long right-panel content.
 - 2026-05-31: Added right-panel collapse, dark/system theme tokens, tool-message filters, and UI-only skills styling.
 - 2026-05-31: Moved sidebar collapse and restore controls into the macOS titlebar drag zone.
 - 2026-05-31: Added reference-aligned left sidebar collapse and restore layout states.
@@ -166,6 +169,10 @@ button:disabled {
   cursor: default;
 }
 
+.accent-primary {
+  accent-color: var(--primary);
+}
+
 .aw-sr-only {
   position: absolute;
   width: 1px;
@@ -234,7 +241,6 @@ button:disabled {
 
 .aw-section-header,
 .aw-world-card-header,
-.aw-panel-header,
 .aw-composer-toolbar,
 .aw-header-actions,
 .aw-agent-strip,
@@ -245,8 +251,7 @@ button:disabled {
   align-items: center;
 }
 
-.aw-section-header,
-.aw-panel-header {
+.aw-section-header {
   justify-content: space-between;
   gap: 12px;
 }
@@ -257,7 +262,6 @@ button:disabled {
 
 .aw-section-header h1,
 .aw-section-header h2,
-.aw-panel-header h2,
 .aw-panel-section h3,
 .aw-world-card h2,
 .aw-header h2,
@@ -936,7 +940,8 @@ button:disabled {
   min-width: 320px;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-left: 1px solid var(--sidebar-border);
   background: var(--sidebar);
   color: var(--sidebar-foreground);
@@ -948,6 +953,7 @@ button:disabled {
 .aw-app-shell.is-right-panel-collapsed .aw-right-panel {
   width: 0;
   min-width: 0;
+  overflow: hidden;
   border-left-width: 0;
   border-left-color: transparent;
   padding: 0;
@@ -966,31 +972,6 @@ button:disabled {
   font-size: 13px;
 }
 
-.aw-runtime-meta,
-.aw-panel-copy {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.aw-runtime-meta {
-  display: grid;
-  gap: 4px;
-}
-
-.aw-panel-header {
-  margin-bottom: 16px;
-}
-
-.aw-panel-header h2 {
-  color: color-mix(in srgb, var(--sidebar-foreground) 70%, transparent);
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .aw-panel-section {
   border-top: 1px solid var(--sidebar-border);
   padding: 14px 0;
@@ -1000,6 +981,31 @@ button:disabled {
   margin-bottom: 12px;
   font-size: 13px;
   font-weight: 750;
+}
+
+.aw-theme-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.aw-theme-section h3 {
+  margin-bottom: 0;
+}
+
+.aw-tools-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+}
+
+.aw-tools-section h3,
+.aw-tools-section .aw-switch-row {
+  margin-bottom: 0;
 }
 
 .aw-segmented {
@@ -1067,16 +1073,80 @@ button:disabled {
 
 .aw-switch-row {
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
 }
 
 .aw-switch-control {
   cursor: pointer;
 }
 
-.aw-switch-row input {
-  width: 34px;
-  height: 18px;
+.aw-switch {
+  display: inline-flex;
+  margin: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.aw-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.aw-switch-track {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sidebar-foreground) 24%, transparent);
+  transition: background-color 140ms ease;
+}
+
+.aw-switch.is-checked .aw-switch-track {
+  background: color-mix(in srgb, var(--sidebar-primary) 62%, transparent);
+}
+
+.aw-switch-thumb {
+  display: inline-block;
+  transform: translateX(4px);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  transition: transform 140ms ease;
+}
+
+.aw-switch-md .aw-switch-track {
+  width: 36px;
+  height: 20px;
+}
+
+.aw-switch-md .aw-switch-thumb {
+  width: 16px;
+  height: 16px;
+}
+
+.aw-switch-md.is-checked .aw-switch-thumb {
+  transform: translateX(16px);
+}
+
+.aw-switch-sm .aw-switch-track {
+  width: 32px;
+  height: 16px;
+}
+
+.aw-switch-sm .aw-switch-thumb {
+  width: 14px;
+  height: 14px;
+  transform: translateX(2px);
+}
+
+.aw-switch-sm.is-checked .aw-switch-thumb {
+  transform: translateX(16px);
 }
 
 .aw-switch-list {
@@ -1123,11 +1193,6 @@ button:disabled {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.aw-skill-row input {
-  width: 18px;
-  height: 18px;
 }
 
 .aw-panel-link {

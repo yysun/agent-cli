@@ -7,7 +7,7 @@
   },
   "files": [
     "electron/dist/**/*",
-    "electron/renderer/**/*",
+    "electron/renderer/dist/**/*",
     "package.json"
   ],
   "extraMetadata": {

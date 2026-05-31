@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-05-31: Added Vite React renderer loading for dev-server and built renderer modes.
  * - 2026-05-31: Matched the reference Electron app's hidden-inset macOS titlebar for sidebar controls.
  * - 2026-05-26: Added persisted workspace/chat IPC flows for the Electron renderer.
  * - 2026-05-26: Added IPC-backed Agent CLI runtime execution using core/agent-runtime.ts.
@@ -55,6 +56,7 @@ const CHAT_SELECT_CHANNEL = 'chat:select';
 const CHAT_GET_MESSAGES_CHANNEL = 'chat:getMessages';
 const CHAT_SEND_MESSAGE_CHANNEL = 'chat:sendMessage';
 const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
+const RENDERER_URL_ENV = 'AGENT_CLI_ELECTRON_RENDERER_URL';
 
 type AgentTurnMessage = {
   role?: string;
@@ -107,7 +109,12 @@ function getPreloadPath(): string {
 }
 
 function getRendererIndexPath(): string {
-  return path.join(getProjectRoot(), 'electron', 'renderer', 'index.html');
+  return path.join(getProjectRoot(), 'electron', 'renderer', 'dist', 'index.html');
+}
+
+function getRendererDevUrl(): string | null {
+  const rendererUrl = String(process.env[RENDERER_URL_ENV] ?? '').trim();
+  return rendererUrl ? rendererUrl : null;
 }
 
 function shouldOpenExternally(rawUrl: string): boolean {
@@ -468,6 +475,12 @@ function registerIpcHandlers(): void {
 
 async function loadRenderer(window: BrowserWindow): Promise<void> {
   rendererMode = 'electron';
+  const rendererDevUrl = getRendererDevUrl();
+  if (rendererDevUrl) {
+    await window.loadURL(rendererDevUrl);
+    return;
+  }
+
   await window.loadFile(getRendererIndexPath());
 }
 

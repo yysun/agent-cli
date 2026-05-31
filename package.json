@@ -15,8 +15,13 @@
     "test:unit": "npm run build && vitest run tests/unit",
     "test:e2e": "npm run build && vitest run tests/e2e/agent-cli.e2e.test.js",
     "agent-cli": "npm run build && node ./bin/agent-cli.js",
-    "electron:build": "tsc --project ./electron/tsconfig.json && esbuild ./electron/main.ts --bundle --packages=external --platform=node --format=esm --target=node20 --outfile=./electron/dist/main.js",
-    "electron:dev": "npm run electron:build && electron ./electron",
+    "electron:main:build": "tsc --project ./electron/tsconfig.json && esbuild ./electron/main.ts --bundle --packages=external --platform=node --format=esm --target=node20 --outfile=./electron/dist/main.js",
+    "electron:renderer:check": "tsc --noEmit --project ./electron/renderer/tsconfig.json",
+    "electron:renderer:build": "vite build --config ./electron/vite.config.js",
+    "electron:build": "npm run electron:main:build && npm run electron:renderer:check && npm run electron:renderer:build",
+    "electron:dev:renderer": "vite --config ./electron/vite.config.js",
+    "electron:dev:electron": "npm run electron:main:build && wait-on http://127.0.0.1:5182 && cross-env AGENT_CLI_ELECTRON_RENDERER_URL=http://127.0.0.1:5182 electron ./electron",
+    "electron:dev": "npm-run-all --parallel electron:dev:renderer electron:dev:electron",
     "electron:start": "npm run electron:build && electron ./electron",
     "electron:dist:dir": "npm run electron:build && electron-builder --dir --config electron-builder.json"
   },
@@ -30,15 +35,24 @@
   "type": "module",
   "dependencies": {
     "dotenv": "^17.3.1",
-    "llm-runtime": "0.6.6"
+    "llm-runtime": "0.6.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "cross-env": "^7.0.3",
     "electron": "^42.2.0",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.28.0",
+    "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.2"
+    "vite": "^7.2.4",
+    "vitest": "^4.1.2",
+    "wait-on": "^9.0.10"
   },
   "bugs": {
     "url": "https://github.com/yysun/agent-cli/issues"
