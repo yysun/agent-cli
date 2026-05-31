@@ -1673,7 +1673,6 @@ describe('agent-cli entrypoint', () => {
     await writeFile(
       path.join(rootPath, '.agent-world', 'world.json'),
       JSON.stringify({
-        $schema: 'https://agent-world.local/world.schema.json',
         world: {
           id: 'demo',
           name: 'Demo World',
@@ -1739,7 +1738,7 @@ describe('agent-cli entrypoint', () => {
     process.exitCode = originalExitCode;
   });
 
-  it('warns and continues when workspace world json does not match the bundled schema', async () => {
+  it('loads workspace world json without schema validation', async () => {
     applyMinimalRuntimeEnvironment();
 
     const rootPath = await createTestRoot();
@@ -1753,6 +1752,9 @@ describe('agent-cli entrypoint', () => {
           type: 'broadcast',
         },
         agents: [],
+        extra: {
+          arbitraryMetadata: true,
+        },
       }, null, 2),
       'utf8',
     );
@@ -1773,9 +1775,9 @@ describe('agent-cli entrypoint', () => {
     await runCli(['hello'], io);
 
     expect(io.getStdout()).toBe('');
-    expect(io.getStderr()).toContain('Invalid Agent World config:');
-    expect(io.getStderr()).toContain('$.world is required');
-    expect(io.getStderr()).toContain('$.agents must be object');
+    expect(io.getStderr()).toContain('Agent world:');
+    expect(io.getStderr()).toContain('  workflow: broadcast');
+    expect(io.getStderr()).toContain('  agents: (none)');
     expect(runChatTurn).toHaveBeenCalledOnce();
     expect(process.exitCode).toBeUndefined();
 

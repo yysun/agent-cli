@@ -141,7 +141,7 @@ Durable workspace state is flat:
 
 Workspace skills in `.agent-world/skills` always load. Global skills are opt-in: set `AGENT_CLI_GLOBAL_SKILLS=true` to also load `~/.agent-world/skills` and `~/.agents/skills`. Workspace skills win when skill ids collide.
 
-If `.agent-world/world.json` exists, CLI startup diagnostics validate it with `core/world.schema.json`, then print the configured workflow plus agent list. This file is metadata for display; it does not restore persisted worlds or agent selection.
+If `.agent-world/world.json` exists, CLI startup diagnostics parse it as best-effort metadata, then print the configured workflow plus agent list when present. This file is metadata for display; it does not restore persisted worlds or agent selection.
 
 No `.chats` compatibility path is current. No `.agent-world/worlds`, registry, `agents`, or `agent.json` layout is current.
 
