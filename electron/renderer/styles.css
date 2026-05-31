@@ -10,6 +10,7 @@ Key features:
 - Includes the active-agent, streaming-card, tool-card, and status animations used by the source renderer.
 
 Recent changes:
+- 2026-05-31: Added right-panel collapse, dark/system theme tokens, tool-message filters, and UI-only skills styling.
 - 2026-05-31: Moved sidebar collapse and restore controls into the macOS titlebar drag zone.
 - 2026-05-31: Added reference-aligned left sidebar collapse and restore layout states.
 - 2026-05-24: Ported design-system tokens and screen layout from the legacy Electron renderer.
@@ -48,6 +49,74 @@ Recent changes:
   --status-warning-bg: #fef3c7;
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --background: #171717;
+  --foreground: #fafafa;
+  --card: #262626;
+  --card-foreground: #fafafa;
+  --primary: #e5e5e5;
+  --primary-foreground: #171717;
+  --secondary: #404040;
+  --secondary-foreground: #fafafa;
+  --muted: #2f2f2f;
+  --muted-foreground: #a3a3a3;
+  --accent: #404040;
+  --accent-foreground: #fafafa;
+  --destructive: #f87171;
+  --border: rgba(255, 255, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.16);
+  --ring: #737373;
+  --sidebar: #262626;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #a3a3a3;
+  --sidebar-primary-foreground: #171717;
+  --sidebar-accent: #333333;
+  --sidebar-session-selected: #3a3a3a;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: rgba(255, 255, 255, 0.12);
+  --sidebar-ring: #737373;
+  --status-running: #86efac;
+  --status-running-bg: rgba(22, 101, 52, 0.34);
+  --status-warning: #fbbf24;
+  --status-warning-bg: rgba(120, 53, 15, 0.38);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --background: #171717;
+    --foreground: #fafafa;
+    --card: #262626;
+    --card-foreground: #fafafa;
+    --primary: #e5e5e5;
+    --primary-foreground: #171717;
+    --secondary: #404040;
+    --secondary-foreground: #fafafa;
+    --muted: #2f2f2f;
+    --muted-foreground: #a3a3a3;
+    --accent: #404040;
+    --accent-foreground: #fafafa;
+    --destructive: #f87171;
+    --border: rgba(255, 255, 255, 0.12);
+    --input: rgba(255, 255, 255, 0.16);
+    --ring: #737373;
+    --sidebar: #262626;
+    --sidebar-foreground: #fafafa;
+    --sidebar-primary: #a3a3a3;
+    --sidebar-primary-foreground: #171717;
+    --sidebar-accent: #333333;
+    --sidebar-session-selected: #3a3a3a;
+    --sidebar-accent-foreground: #fafafa;
+    --sidebar-border: rgba(255, 255, 255, 0.12);
+    --sidebar-ring: #737373;
+    --status-running: #86efac;
+    --status-running-bg: rgba(22, 101, 52, 0.34);
+    --status-warning: #fbbf24;
+    --status-warning-bg: rgba(120, 53, 15, 0.38);
+    color-scheme: dark;
+  }
 }
 
 * {
@@ -540,6 +609,16 @@ button:disabled {
   border-radius: 5px;
 }
 
+.aw-view-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
 .aw-view-button.is-active {
   background: var(--primary);
   color: var(--primary-foreground);
@@ -621,6 +700,18 @@ button:disabled {
   background: #eff6ff;
 }
 
+:root[data-theme="dark"] .aw-message-user .aw-message-card {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(30, 64, 175, 0.28);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .aw-message-user .aw-message-card {
+    border-color: rgba(96, 165, 250, 0.42);
+    background: rgba(30, 64, 175, 0.28);
+  }
+}
+
 .aw-message-meta {
   display: flex;
   align-items: center;
@@ -639,7 +730,7 @@ button:disabled {
 .aw-message-card p,
 .aw-tool-card p {
   margin: 0;
-  color: #333333;
+  color: var(--card-foreground);
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -666,7 +757,14 @@ button:disabled {
   display: grid;
   grid-template-columns: 9px minmax(0, 1fr);
   gap: 11px;
+  border-color: color-mix(in srgb, #f59e0b 34%, var(--border));
+  background: color-mix(in srgb, #fef3c7 34%, var(--card));
   color: var(--muted-foreground);
+}
+
+.aw-tool-card-error {
+  border-color: color-mix(in srgb, var(--destructive) 42%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
 }
 
 .aw-tool-dot {
@@ -677,10 +775,41 @@ button:disabled {
   background: #f59e0b;
 }
 
+.aw-tool-card-completed .aw-tool-dot {
+  background: var(--status-running);
+}
+
+.aw-tool-card-error .aw-tool-dot {
+  background: var(--destructive);
+}
+
+.aw-tool-body {
+  min-width: 0;
+}
+
+.aw-tool-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
 .aw-tool-title {
   color: var(--foreground);
   font-size: 11px;
   font-weight: 750;
+  text-transform: lowercase;
+}
+
+.aw-tool-status {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
   text-transform: lowercase;
 }
 
@@ -805,11 +934,25 @@ button:disabled {
   display: flex;
   width: 320px;
   min-width: 320px;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   border-left: 1px solid var(--sidebar-border);
   background: var(--sidebar);
   color: var(--sidebar-foreground);
   padding: 16px;
+  opacity: 1;
+  transition: width 240ms ease, min-width 240ms ease, padding 240ms ease, opacity 180ms ease, border-color 240ms ease;
+}
+
+.aw-app-shell.is-right-panel-collapsed .aw-right-panel {
+  width: 0;
+  min-width: 0;
+  border-left-width: 0;
+  border-left-color: transparent;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .aw-empty-state {
@@ -859,6 +1002,49 @@ button:disabled {
   font-weight: 750;
 }
 
+.aw-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: 7px;
+  background: var(--sidebar-accent);
+  padding: 2px;
+}
+
+.aw-theme-button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--sidebar-foreground) 70%, transparent);
+}
+
+.aw-theme-button svg,
+.aw-skill-edit svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.aw-theme-button:hover {
+  background: color-mix(in srgb, var(--sidebar-foreground) 10%, transparent);
+  color: var(--sidebar-foreground);
+}
+
+.aw-theme-button.is-active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
 .aw-field-row,
 .aw-switch-row {
   display: grid;
@@ -884,9 +1070,74 @@ button:disabled {
   align-items: center;
 }
 
+.aw-switch-control {
+  cursor: pointer;
+}
+
 .aw-switch-row input {
   width: 34px;
   height: 18px;
+}
+
+.aw-switch-list {
+  display: grid;
+  gap: 8px;
+}
+
+.aw-skill-list {
+  display: grid;
+  gap: 5px;
+  margin: -2px 0 8px 4px;
+}
+
+.aw-skill-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 4px 2px;
+}
+
+.aw-skill-edit {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: color-mix(in srgb, var(--sidebar-foreground) 40%, transparent);
+}
+
+.aw-skill-edit:disabled,
+.aw-panel-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.aw-skill-name {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--sidebar-foreground) 78%, transparent);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-skill-row input {
+  width: 18px;
+  height: 18px;
+}
+
+.aw-panel-link {
+  justify-self: end;
+  border: 0;
+  background: transparent;
+  color: var(--sidebar-primary);
+  padding: 3px 2px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .aw-log-panel {

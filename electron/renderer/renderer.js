@@ -11,6 +11,7 @@ Key features:
 - Sends tool permission and reasoning effort with every runtime turn.
 
 Recent changes:
+- 2026-05-31: Added local right-panel, theme, tool-message, and UI-only skills settings behavior.
 - 2026-05-31: Added reference-aligned left sidebar collapse and restore behavior that works before IPC hydration.
 - 2026-05-26: Added workspace/chat/message IPC-backed renderer behavior.
 - 2026-05-24: Preserved metadata hydration for the ported desktop layout.
@@ -18,6 +19,13 @@ Recent changes:
 */
 (() => {
   const desktopApi = window.agentCliDesktop;
+  const THEME_STORAGE_KEY = 'agent-world-theme-preference';
+
+  function getStoredThemePreference() {
+    const stored = window.localStorage?.getItem(THEME_STORAGE_KEY);
+    return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+  }
+
   const state = {
     workspaceRoot: '',
     chats: [],
@@ -25,6 +33,11 @@ Recent changes:
     messages: [],
     editingIndex: null,
     sidebarCollapsed: false,
+    panelOpen: true,
+    themePreference: getStoredThemePreference(),
+    showToolMessages: true,
+    globalSkillsEnabled: true,
+    projectSkillsEnabled: true,
     busy: false,
   };
 
@@ -46,6 +59,13 @@ Recent changes:
     openWorkspaceButton: document.getElementById('open-workspace-button'),
     sidebarCollapseButton: document.getElementById('sidebar-collapse-button'),
     sidebarRestoreButton: document.getElementById('sidebar-restore-button'),
+    settingsPanelButton: document.getElementById('settings-panel-button'),
+    rightPanel: document.getElementById('right-panel'),
+    rightPanelCloseButton: document.getElementById('right-panel-close-button'),
+    themeButtons: Array.from(document.querySelectorAll('[data-theme-choice]')),
+    showToolMessagesToggle: document.getElementById('show-tool-messages-toggle'),
+    enableGlobalSkillsToggle: document.getElementById('enable-global-skills-toggle'),
+    enableProjectSkillsToggle: document.getElementById('enable-project-skills-toggle'),
     activeChatButton: document.getElementById('active-chat-button'),
     activeChatLabel: document.getElementById('active-chat-label'),
     messageList: document.getElementById('message-list'),
@@ -59,6 +79,20 @@ Recent changes:
     reasoningEffort: document.getElementById('reasoning-effort-select'),
     logList: document.getElementById('log-list'),
   };
+
+  function normalizeThemePreference(preference) {
+    return preference === 'light' || preference === 'dark' || preference === 'system' ? preference : 'system';
+  }
+
+  function applyThemePreference(preference) {
+    const normalizedPreference = normalizeThemePreference(preference);
+    if (normalizedPreference === 'system') {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', normalizedPreference);
+    }
+    window.localStorage?.setItem(THEME_STORAGE_KEY, normalizedPreference);
+  }
 
   function setText(element, text) {
     if (element) {
@@ -141,6 +175,43 @@ Recent changes:
     setText(elements.activeChatLabel, state.currentChatId ? state.currentChatId : 'No active chat');
   }
 
+  function renderSettings() {
+    elements.appShell?.classList.toggle('is-right-panel-collapsed', !state.panelOpen);
+    if (elements.rightPanel) {
+      elements.rightPanel.setAttribute('aria-hidden', String(!state.panelOpen));
+      elements.rightPanel.inert = !state.panelOpen;
+    }
+    if (elements.settingsPanelButton) {
+      elements.settingsPanelButton.classList.toggle('is-panel-active', state.panelOpen);
+      elements.settingsPanelButton.setAttribute('aria-expanded', String(state.panelOpen));
+    }
+    for (const button of elements.themeButtons) {
+      const isActive = button.dataset.themeChoice === state.themePreference;
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+    }
+    if (elements.showToolMessagesToggle) {
+      elements.showToolMessagesToggle.checked = state.showToolMessages;
+    }
+    if (elements.enableGlobalSkillsToggle) {
+      elements.enableGlobalSkillsToggle.checked = state.globalSkillsEnabled;
+    }
+    if (elements.enableProjectSkillsToggle) {
+      elements.enableProjectSkillsToggle.checked = state.projectSkillsEnabled;
+    }
+  }
+
+  function setRightPanelOpen(open) {
+    state.panelOpen = open;
+    renderSettings();
+  }
+
+  function setThemePreference(preference) {
+    state.themePreference = normalizeThemePreference(preference);
+    applyThemePreference(state.themePreference);
+    renderSettings();
+  }
+
   function setSidebarCollapsed(collapsed) {
     state.sidebarCollapsed = collapsed;
     elements.appShell?.classList.toggle('is-sidebar-collapsed', collapsed);
@@ -207,6 +278,76 @@ Recent changes:
     return 'Agent';
   }
 
+  function isToolRelatedMessage(message) {
+    if (message.role === 'tool') {
+      return true;
+    }
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      return true;
+    }
+    if (message.tool_call_id || message.toolCallId) {
+      return true;
+    }
+    return /^calling tool\s*:/i.test(String(message.content || '').trim());
+  }
+
+  function formatToolName(toolName) {
+    return String(toolName || 'tool')
+      .replace(/_/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+      .trim() || 'Tool';
+  }
+
+  function resolveToolName(message) {
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const firstToolCall = toolCalls.find(Boolean);
+    const functionName = firstToolCall?.function?.name || firstToolCall?.name || firstToolCall?.toolName;
+    if (functionName) {
+      return formatToolName(functionName);
+    }
+
+    const contentMatch = String(message.content || '').match(/calling tool\s*:\s*([^\n]+)/i);
+    if (contentMatch?.[1]) {
+      return formatToolName(contentMatch[1]);
+    }
+
+    return message.role === 'tool' ? 'Tool Result' : 'Tool Request';
+  }
+
+  function resolveToolStatus(message) {
+    if (message.role === 'tool') {
+      return /error|failed|exception/i.test(String(message.content || '')) ? 'error' : 'completed';
+    }
+    return 'requested';
+  }
+
+  function renderToolMessage(message) {
+    const article = document.createElement('article');
+    const status = resolveToolStatus(message);
+    article.className = `aw-message aw-tool-card aw-tool-card-${status}`;
+
+    const dot = document.createElement('div');
+    dot.className = 'aw-tool-dot';
+    const body = document.createElement('div');
+    body.className = 'aw-tool-body';
+    const heading = document.createElement('div');
+    heading.className = 'aw-tool-heading';
+    const title = document.createElement('span');
+    title.className = 'aw-tool-title';
+    title.textContent = resolveToolName(message);
+    const statusPill = document.createElement('span');
+    statusPill.className = 'aw-tool-status';
+    statusPill.textContent = status;
+    heading.append(title, statusPill);
+
+    const content = document.createElement('p');
+    content.textContent = String(message.content || '').trim() || (status === 'requested' ? 'Waiting for tool result.' : 'No tool output.');
+    body.append(heading, content);
+    article.append(dot, body);
+    return article;
+  }
+
   function renderMessages() {
     if (!elements.messageList) {
       return;
@@ -214,35 +355,29 @@ Recent changes:
 
     elements.messageList.replaceChildren();
 
-    if (state.messages.length === 0) {
+    const visibleMessages = state.messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => state.showToolMessages || !isToolRelatedMessage(message));
+
+    if (visibleMessages.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'aw-empty-state';
-      empty.textContent = 'No messages yet.';
+      empty.textContent = state.messages.length === 0 ? 'No messages yet.' : 'Tool messages hidden.';
       elements.messageList.append(empty);
       updateWorkspaceView();
       return;
     }
 
-    state.messages.forEach((message, index) => {
+    visibleMessages.forEach(({ message, index }) => {
       const article = document.createElement('article');
       const isUser = message.role === 'user';
-      const isTool = message.role === 'tool';
+      const isTool = isToolRelatedMessage(message);
       article.className = isTool
         ? 'aw-message aw-tool-card'
         : `aw-message ${isUser ? 'aw-message-user' : 'aw-message-agent'}`;
 
       if (isTool) {
-        const dot = document.createElement('div');
-        dot.className = 'aw-tool-dot';
-        const body = document.createElement('div');
-        const title = document.createElement('div');
-        title.className = 'aw-tool-title';
-        title.textContent = 'tool result';
-        const content = document.createElement('p');
-        content.textContent = String(message.content || '');
-        body.append(title, content);
-        article.append(dot, body);
-        elements.messageList.append(article);
+        elements.messageList.append(renderToolMessage(message));
         return;
       }
 
@@ -477,6 +612,27 @@ Recent changes:
     });
     elements.sidebarCollapseButton?.addEventListener('click', () => setSidebarCollapsed(true));
     elements.sidebarRestoreButton?.addEventListener('click', () => setSidebarCollapsed(false));
+    elements.settingsPanelButton?.addEventListener('click', () => setRightPanelOpen(!state.panelOpen));
+    elements.rightPanelCloseButton?.addEventListener('click', () => setRightPanelOpen(false));
+    for (const button of elements.themeButtons) {
+      button.addEventListener('click', () => setThemePreference(button.dataset.themeChoice));
+    }
+    elements.showToolMessagesToggle?.addEventListener('change', (event) => {
+      state.showToolMessages = event.target.checked;
+      renderSettings();
+      renderMessages();
+      log('info', state.showToolMessages ? 'Tool messages shown.' : 'Tool messages hidden.');
+    });
+    elements.enableGlobalSkillsToggle?.addEventListener('change', (event) => {
+      state.globalSkillsEnabled = event.target.checked;
+      renderSettings();
+      log('info', 'Global skills UI setting changed.');
+    });
+    elements.enableProjectSkillsToggle?.addEventListener('change', (event) => {
+      state.projectSkillsEnabled = event.target.checked;
+      renderSettings();
+      log('info', 'Project skills UI setting changed.');
+    });
     elements.chatFilter?.addEventListener('input', renderChats);
     elements.cancelEditButton?.addEventListener('click', clearEdit);
     elements.messageForm?.addEventListener('submit', (event) => {
@@ -486,7 +642,9 @@ Recent changes:
 
   async function boot() {
     bindEvents();
+    applyThemePreference(state.themePreference);
     setSidebarCollapsed(state.sidebarCollapsed);
+    renderSettings();
 
     if (!desktopApi) {
       setText(elements.status, 'Bridge unavailable');

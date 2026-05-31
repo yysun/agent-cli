@@ -10,6 +10,7 @@ Key features:
 - Uses local design-system tokens and static renderer assets without the shared web app.
 
 Recent changes:
+- 2026-05-31: Added reference-aligned right panel, theme, tool-message, and UI-only skills controls.
 - 2026-05-31: Added reference-aligned left sidebar collapse and restore controls.
 - 2026-05-26: Connected the static shell to Electron IPC-backed workspace and chat flows.
 - 2026-05-24: Ported the legacy Agent World desktop layout into the standalone renderer.
@@ -75,7 +76,7 @@ Recent changes:
             </div>
             <div>
               <dt>Skills</dt>
-              <dd>local</dd>
+              <dd id="skills-count">UI</dd>
             </div>
           </dl>
         </article>
@@ -128,7 +129,15 @@ Recent changes:
 
         <div class="aw-header-actions" aria-label="Workspace view controls">
           <button class="aw-view-button is-active" type="button" aria-label="Chat view" title="Chat view">☰</button>
-          <button class="aw-view-button is-panel-active" type="button" aria-label="Settings" title="Settings">⚙</button>
+          <button id="settings-panel-button" class="aw-view-button is-panel-active" type="button" aria-label="Settings"
+            aria-controls="right-panel" aria-expanded="true" title="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z">
+              </path>
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -174,11 +183,59 @@ Recent changes:
           </div>
         </section>
 
-        <aside class="aw-right-panel" aria-labelledby="panel-title">
+        <aside id="right-panel" class="aw-right-panel" aria-labelledby="panel-title">
           <div class="aw-panel-header">
             <h2 id="panel-title">System Settings</h2>
-            <button class="aw-icon-button" type="button" aria-label="Close panel" title="Close panel">×</button>
+            <button id="right-panel-close-button" class="aw-icon-button" type="button" aria-label="Close panel"
+              title="Close panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 6 6 18"></path>
+                <path d="m6 6 12 12"></path>
+              </svg>
+            </button>
           </div>
+
+          <section class="aw-panel-section">
+            <h3>Theme</h3>
+            <div class="aw-segmented" role="group" aria-label="Theme preference">
+              <button class="aw-theme-button" type="button" data-theme-choice="system" aria-label="System theme"
+                title="System theme">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                  <path d="M8 21h8"></path>
+                  <path d="M12 17v4"></path>
+                </svg>
+              </button>
+              <button class="aw-theme-button" type="button" data-theme-choice="light" aria-label="Light theme"
+                title="Light theme">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v2"></path>
+                  <path d="M12 20v2"></path>
+                  <path d="m4.93 4.93 1.41 1.41"></path>
+                  <path d="m17.66 17.66 1.41 1.41"></path>
+                  <path d="M2 12h2"></path>
+                  <path d="M20 12h2"></path>
+                  <path d="m6.34 17.66-1.41 1.41"></path>
+                  <path d="m19.07 4.93-1.41 1.41"></path>
+                </svg>
+              </button>
+              <button class="aw-theme-button" type="button" data-theme-choice="dark" aria-label="Dark theme"
+                title="Dark theme">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+              </button>
+            </div>
+          </section>
+
+          <section class="aw-panel-section">
+            <h3>Tools</h3>
+            <label class="aw-switch-row aw-switch-control">
+              <span>Show tool messages</span>
+              <input id="show-tool-messages-toggle" type="checkbox" checked />
+            </label>
+          </section>
 
           <section class="aw-panel-section">
             <h3>Runtime</h3>
@@ -201,6 +258,48 @@ Recent changes:
           <section class="aw-panel-section">
             <h3>Turn Defaults</h3>
             <p class="aw-panel-copy">Tool permission and reasoning effort are sent with each new or edited turn.</p>
+          </section>
+
+          <section class="aw-panel-section aw-skills-panel">
+            <h3>Skills</h3>
+            <div class="aw-switch-list">
+              <label class="aw-switch-row aw-switch-control">
+                <span>Enable Global Skills</span>
+                <input id="enable-global-skills-toggle" type="checkbox" checked />
+              </label>
+              <div class="aw-skill-list" aria-label="Global skills">
+                <div class="aw-skill-row">
+                  <button class="aw-skill-edit" type="button" aria-label="Edit skill load-skill" title="UI only"
+                    disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 20h9"></path>
+                      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+                    </svg>
+                  </button>
+                  <span class="aw-skill-name">load-skill</span>
+                  <input type="checkbox" checked aria-label="Enable load-skill" />
+                </div>
+              </div>
+
+              <label class="aw-switch-row aw-switch-control">
+                <span>Enable Project Skills</span>
+                <input id="enable-project-skills-toggle" type="checkbox" checked />
+              </label>
+              <div class="aw-skill-list" aria-label="Project skills">
+                <div class="aw-skill-row">
+                  <button class="aw-skill-edit" type="button" aria-label="Edit skill workspace-context" title="UI only"
+                    disabled>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 20h9"></path>
+                      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+                    </svg>
+                  </button>
+                  <span class="aw-skill-name">workspace-context</span>
+                  <input type="checkbox" checked aria-label="Enable workspace-context" />
+                </div>
+                <button class="aw-panel-link" type="button" disabled>Install Skill ...</button>
+              </div>
+            </div>
           </section>
 
           <section class="aw-panel-section aw-log-panel">
