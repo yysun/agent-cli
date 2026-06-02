@@ -17,7 +17,7 @@
  * - 2026-05-26: Removed world, agent selection, and persisted `agent.json` runtime config.
  * - 2026-05-26: Removed remote relay hosting and kept `agent-cli` as the sole CLI surface.
  * - 2026-05-23: Uses shared core workspace environment preparation across CLI surfaces.
- * - 2026-05-23: Added --workspace and AGENT_CLI_WORKSPACE as canonical root selectors while preserving project aliases.
+ * - 2026-06-02: Removed legacy workspace root selectors.
  * - 2026-05-23: Passed interactive prompts into local turns for ask_user_input handling.
  * - 2026-05-20: Added startup root output.
  */
@@ -40,7 +40,6 @@ import {
 } from '../../core/agent-files.js';
 import {
   WORKSPACE_ROOT,
-  WORKSPACE_ROOT_ENV_KEY,
 } from '../../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../../core/workspace-environment.js';
 import { ensureWorkspaceWorld } from '../../core/workspace-store.js';
@@ -58,14 +57,11 @@ import {
   resolveEffectiveAgentConfig,
 } from './turn-executor.js';
 
-export const WORKSPACE_ENV_KEY = WORKSPACE_ROOT_ENV_KEY;
-
 export interface ParsedArguments {
   help: boolean;
   newChat: boolean;
   runtimeOverrides: Record<string, unknown>;
   workspaceRoot?: string;
-  projectRoot?: string;
   streamOff: boolean;
   verbose: boolean;
   message: string;
@@ -301,7 +297,6 @@ export function parseArguments(argv: string[]): ParsedArguments {
   let help = false;
   let verbose = false;
   let workspaceRoot: string | undefined;
-  let projectRoot: string | undefined;
   const messageParts: string[] = [];
   const runtimeOverrides: Record<string, unknown> = {};
 
@@ -413,12 +408,9 @@ export function parseArguments(argv: string[]): ParsedArguments {
         continue;
       }
 
-      if (flagName === 'workspace' || flagName === 'project') {
+      if (flagName === 'workspace') {
         const result = readFlagValue(argv, index, inlineValue, flagName);
         workspaceRoot = String(result.value);
-        if (flagName === 'project') {
-          projectRoot = String(result.value);
-        }
         index = result.nextIndex;
         continue;
       }
@@ -499,7 +491,6 @@ export function parseArguments(argv: string[]): ParsedArguments {
     help,
     newChat,
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
-    ...(projectRoot !== undefined ? { projectRoot } : {}),
     runtimeOverrides: normalizeAgentConfig(runtimeOverrides),
     streamOff,
     verbose,
@@ -644,13 +635,12 @@ export async function main(
     help,
     newChat,
     workspaceRoot,
-    projectRoot,
     runtimeOverrides,
     streamOff,
     verbose,
     message,
   } = parseArguments(argv);
-  prepareWorkspaceEnvironment(workspaceRoot ?? projectRoot);
+  prepareWorkspaceEnvironment(workspaceRoot);
   await ensureWorkspaceWorld();
 
   if (help) {
@@ -736,7 +726,7 @@ export async function runCli(
 ): Promise<void> {
   try {
     const parsed = parseArguments(argv);
-    prepareWorkspaceEnvironment(parsed.workspaceRoot ?? parsed.projectRoot);
+    prepareWorkspaceEnvironment(parsed.workspaceRoot);
     await ensureWorkspaceWorld();
 
     await main(argv, io, { startupDiagnostics: !parsed.help });

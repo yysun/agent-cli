@@ -5,7 +5,7 @@
  * - Resolve the Agent CLI workspace root and load the allowed workspace-local `.env` keys.
  *
  * Key features:
- * - Preserves root precedence across explicit flags, `AGENT_CLI_WORKSPACE`, and cwd.
+ * - Preserves root precedence across an explicit workspace flag and cwd.
  * - Resolves `.env` from the selected workspace root for runtime defaults and credentials.
  * - Creates a workspace `.env.example` template when no workspace `.env` exists and no template is present.
  * - Limits `.env` imports to provider credentials and Agent CLI runtime defaults.

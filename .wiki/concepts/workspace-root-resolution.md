@@ -10,7 +10,7 @@ source_paths:
   - "core/paths.ts"
   - "core/workspace-environment.ts"
   - "core/workspace-store.ts"
-updated_at: "2026-05-26"
+updated_at: "2026-06-02"
 ---
 
 # Workspace Root Resolution
@@ -22,25 +22,20 @@ The workspace root decides where Agent CLI reads `AGENTS.md`, stores `.agent-wor
 The current order is:
 
 1. `--workspace <path>`
-2. legacy `--project <path>`
-3. `AGENT_CLI_WORKSPACE`
-4. `AGENT_CLI_WORKSPACE` loaded from the invocation cwd `.env`
-5. current working directory
-
-After resolution, the absolute root is published back to `AGENT_CLI_WORKSPACE`.
+2. current working directory
 
 ## `.env` Location
 
-`.env` is read from the invocation cwd, not from the selected workspace. This lets a launch directory choose a workspace and provide credentials or runtime defaults without requiring the selected workspace to contain secrets.
+`.env` is read from the selected workspace root. It provides credentials and runtime defaults only; it does not choose the workspace.
 
 Only allowlisted keys are copied into `process.env`; see [[configuration-and-runtime-precedence]].
 
 ## Storage Guarantee
 
-`.agent-world` must be created under the resolved workspace root. `core/workspace-store.ts` re-syncs from `AGENT_CLI_WORKSPACE` before creating directories, which protects against modules imported before the env var is set.
+`.agent-world` must be created under the resolved workspace root.
 
-This is a fragile contract because a cwd/workspace mix-up silently writes chats to the wrong place. Tests cover both `--workspace` and `.env` workspace selection paths.
+This is a fragile contract because a cwd/workspace mix-up silently writes chats to the wrong place. Tests cover both explicit `--workspace` selection and cwd fallback.
 
 ## Compatibility
 
-`--project` and `configureProjectRoot(...)` remain compatibility names. New code should use workspace terminology.
+No legacy root selector aliases are supported. New code should use workspace terminology.

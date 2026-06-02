@@ -16,7 +16,6 @@ import os from 'node:os';
 const originalCwd = process.cwd();
 
 afterEach(() => {
-  delete process.env.AGENT_CLI_WORKSPACE;
   vi.resetModules();
   process.chdir(originalCwd);
 });
@@ -44,28 +43,16 @@ describe('paths', () => {
     expect(paths.CURRENT_CHAT_PATH).toBe(path.join(cwdRoot, '.agent-world', 'chats', 'current.json'));
   });
 
-  it('publishes cwd to AGENT_CLI_WORKSPACE when explicitly configured without an override', async () => {
-    const cwdRoot = path.join(originalCwd, 'tests');
-    process.chdir(cwdRoot);
-
-    const paths = await import('../../core/paths.js');
-    paths.configureWorkspaceRoot();
-
-    expect(paths.WORKSPACE_ROOT).toBe(cwdRoot);
-    expect(process.env.AGENT_CLI_WORKSPACE).toBe(cwdRoot);
-  });
-
-  it('prefers AGENT_CLI_WORKSPACE over the current working directory', async () => {
+  it('prefers an explicit workspace root over the current working directory', async () => {
     const overrideRoot = path.join(originalCwd, 'agent');
     const cwdRoot = path.join(originalCwd, 'tests');
 
-    process.env.AGENT_CLI_WORKSPACE = overrideRoot;
     process.chdir(cwdRoot);
 
     const paths = await import('../../core/paths.js');
+    paths.configureWorkspaceRoot(overrideRoot);
 
     expect(paths.WORKSPACE_ROOT).toBe(overrideRoot);
-    expect(process.env.AGENT_CLI_WORKSPACE).toBe(overrideRoot);
     expect(paths.REPO_ROOT).toBe(overrideRoot);
     expect(paths.SYSTEM_PROMPT_PATH).toBe(path.join(overrideRoot, 'AGENTS.md'));
     expect(paths.USER_SKILLS_ROOT).toBe(path.join(os.homedir(), '.agent-world', 'skills'));
@@ -74,17 +61,15 @@ describe('paths', () => {
     expect(paths.AGENT_WORLD_CHATS_ROOT).toBe(path.join(overrideRoot, '.agent-world', 'chats'));
   });
 
-  it('uses cwd when AGENT_CLI_WORKSPACE is empty', async () => {
+  it('uses cwd when an explicit workspace root is empty', async () => {
     const cwdRoot = path.join(originalCwd, 'tests');
 
-    process.env.AGENT_CLI_WORKSPACE = '';
     process.chdir(cwdRoot);
 
     const paths = await import('../../core/paths.js');
-    paths.configureWorkspaceRoot();
+    paths.configureWorkspaceRoot('');
 
     expect(paths.WORKSPACE_ROOT).toBe(cwdRoot);
     expect(paths.REPO_ROOT).toBe(cwdRoot);
-    expect(process.env.AGENT_CLI_WORKSPACE).toBe(cwdRoot);
   });
 });

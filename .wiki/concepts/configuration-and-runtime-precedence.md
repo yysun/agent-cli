@@ -22,12 +22,9 @@ This page explains where the app gets settings and which source wins. The import
 The workspace root is selected first:
 
 1. `--workspace <path>`
-2. legacy `--project <path>`
-3. `AGENT_CLI_WORKSPACE`
-4. `AGENT_CLI_WORKSPACE` from the invocation cwd `.env`
-5. current working directory
+2. current working directory
 
-The resolved absolute path is published back to `AGENT_CLI_WORKSPACE`. [[workspace-root-resolution]] covers why this matters for storage and prompt loading.
+[[workspace-root-resolution]] covers why this matters for storage and prompt loading.
 
 ## Runtime Layers
 

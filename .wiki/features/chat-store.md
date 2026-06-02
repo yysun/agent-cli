@@ -30,7 +30,7 @@ updated_at: "2026-05-26"
 
 Chat operations call `ensureWorkspaceWorld()` before touching files. That creates the storage roots under the resolved workspace. `loadRequestedChat({ newChat: true })` also initializes storage, which prevents a new transient chat from skipping `.agent-world` setup.
 
-`core/workspace-store.ts` re-resolves `AGENT_CLI_WORKSPACE` before creating folders. That protects app-style flows where modules were imported before the workspace env var was set.
+`core/workspace-store.ts` uses the configured workspace paths from `core/paths.ts` when creating folders.
 
 ## Persistence Style
 

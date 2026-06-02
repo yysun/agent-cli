@@ -7,9 +7,8 @@
 ## Acceptance Criteria
 
 - `--workspace <path>` and `--workspace=<path>` select the workspace root.
-- Legacy `--project <path>` and `--project=<path>` remain valid compatibility aliases.
-- When no workspace flag is supplied, `AGENT_CLI_WORKSPACE` wins over `AGENT_CLI_ROOT`, and both win over `cwd`.
-- When neither workspace environment variable is set, the current directory's `.env` may provide `AGENT_CLI_WORKSPACE` or `AGENT_CLI_ROOT`.
+- When no workspace flag is supplied, `cwd` selects the workspace root.
+- Workspace `.env` provides runtime defaults and credentials only; it does not select the workspace root.
 - After the workspace root is resolved, allowed provider and relay credential keys from that workspace's `.env` are loaded without overwriting non-empty process environment values.
 - `agent-world-cli` help must not imply that `--workspace` only applies to the `world` command.
 

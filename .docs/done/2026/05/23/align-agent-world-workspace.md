@@ -3,9 +3,9 @@
 ## Summary
 
 - Extracted shared workspace preparation into core so `agent-cli` and `agent-world-cli` use the same root and `.env` loading path.
-- Updated `agent-world-cli` to accept `--workspace=<path>`, `--project <path>`, and `--project=<path>`.
+- Updated `agent-world-cli` to accept `--workspace=<path>`.
 - Changed `agent-world-cli` help so workspace selection is shown as a global option, not a `world`-only option.
-- Added unit coverage for explicit workspace flags, legacy project aliases, cwd `.env` workspace fallback, and workspace-local provider/relay env loading.
+- Added unit coverage for explicit workspace flags, cwd fallback, and workspace-local provider/relay env loading.
 
 ## Verification
 

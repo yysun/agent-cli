@@ -35,7 +35,7 @@ This page explains where Agent CLI keeps saved state on disk. The current layout
 
 ## Workspace Root Matters
 
-The root is selected before storage is created. A `--workspace` flag or `AGENT_CLI_WORKSPACE` value must put `.agent-world` under that workspace, not under the shell's invocation directory. `ensureWorkspaceStorage()` re-checks the environment before creating folders to avoid stale import-time path state.
+The root is selected before storage is created. A `--workspace` flag must put `.agent-world` under that workspace, not under the shell's invocation directory. Without the flag, storage belongs to the current working directory.
 
 That invariant is covered by `tests/unit/chat-store.test.js` and `tests/unit/agent-cli.test.js`.
 

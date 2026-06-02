@@ -6,11 +6,11 @@
  * - Validate flat `.agent-world/chats` persistence.
  *
  * Recent changes:
- * - 2026-05-26: Covered post-import `AGENT_CLI_WORKSPACE` changes before storage creation.
+ * - 2026-06-02: Removed environment-based workspace root setup.
  * - 2026-05-26: Removed world and agent metadata expectations.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { createTestRoot, readJson, removeTestRoot } from '../helpers/test-root.js';
@@ -21,14 +21,12 @@ const originalCwd = process.cwd();
 
 async function loadChatStore(rootPath) {
   process.chdir(rootPath);
-  process.env.AGENT_CLI_WORKSPACE = rootPath;
   vi.resetModules();
   return await import('../../core/chat-store.js');
 }
 
 afterEach(async () => {
   process.chdir(originalCwd);
-  delete process.env.AGENT_CLI_WORKSPACE;
   vi.resetModules();
 
   while (rootsToClean.length > 0) {
@@ -41,25 +39,6 @@ afterEach(async () => {
 });
 
 describe('chat-store', () => {
-  it('creates .agent-world under AGENT_CLI_WORKSPACE even when the env var changes after import', async () => {
-    const cwdRoot = await createTestRoot();
-    const workspaceRoot = await createTestRoot();
-    rootsToClean.push(cwdRoot, workspaceRoot);
-    process.chdir(cwdRoot);
-    delete process.env.AGENT_CLI_WORKSPACE;
-    vi.resetModules();
-
-    const { loadRequestedChat } = await import('../../core/chat-store.js');
-    process.env.AGENT_CLI_WORKSPACE = workspaceRoot;
-
-    await loadRequestedChat({ newChat: true });
-
-    expect(await readdir(path.join(workspaceRoot, '.agent-world'))).toEqual(
-      expect.arrayContaining(['chats', 'skills']),
-    );
-    await expect(readdir(path.join(cwdRoot, '.agent-world'))).rejects.toThrow();
-  });
-
   it('persists chats under .agent-world/chats and tracks the current chat there', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);

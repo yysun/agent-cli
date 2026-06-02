@@ -73,7 +73,7 @@ There is no supported `.chats`, `.agent-world/worlds`, registry, `world.json`, `
 
 ## What should I avoid breaking?
 
-Do not create `.agent-world` under the invocation cwd when `--workspace` or `AGENT_CLI_WORKSPACE` points elsewhere. Do not reintroduce `.chats`, worlds, persisted agents, queues, relay/web artifacts, or `agent-world-cli`. Do not make global skills load by default. Do not let generated bundles drift from TypeScript sources. Do not treat `.env` as an unrestricted config import; only allowlisted keys should flow into `process.env`.
+Do not create `.agent-world` under the invocation cwd when `--workspace` points elsewhere. Do not reintroduce `.chats`, worlds, persisted agents, queues, relay/web artifacts, or `agent-world-cli`. Do not make global skills load by default. Do not let generated bundles drift from TypeScript sources. Do not treat `.env` as an unrestricted config import; only allowlisted keys should flow into `process.env`.
 
 The fragile contracts are summarized in [[storage-layout]], [[workspace-root-resolution]], [[configuration-and-runtime-precedence]], [[prompt-and-skill-loading]], and [[build-layout]].
 

@@ -6,7 +6,7 @@
  * - Centralize workspace-local filesystem paths used by the CLI and store.
  *
  * Key features:
- * - Resolves workspace-local resources from `AGENT_CLI_WORKSPACE` when set, otherwise cwd.
+ * - Resolves workspace-local resources from an explicit workspace root, otherwise cwd.
  * - Keeps durable storage directly under `.agent-world` with no world-id folder layer.
  * - Resolves optional `.agent-world/world.json` startup metadata.
  * - Uses `.agent-world/chats` for chat state and `.agent-world/skills` for workspace skills.
@@ -20,15 +20,8 @@
 import path from 'node:path';
 import os from 'node:os';
 
-export const WORKSPACE_ROOT_ENV_KEY = 'AGENT_CLI_WORKSPACE';
-
 function resolveWorkspaceRoot(workspaceRoot?: string): string {
-  const configuredRoot = [
-    workspaceRoot,
-    process.env[WORKSPACE_ROOT_ENV_KEY],
-  ]
-    .map((value) => String(value ?? '').trim())
-    .find((value) => value.length > 0) ?? '';
+  const configuredRoot = String(workspaceRoot ?? '').trim();
 
   return configuredRoot
     ? path.resolve(configuredRoot)
@@ -47,14 +40,8 @@ export let AGENT_WORLD_CONFIG_PATH = '';
 export let AGENT_WORLD_CHATS_ROOT = '';
 export let CURRENT_CHAT_PATH = '';
 
-export function configureWorkspaceRoot(
-  workspaceRoot?: string,
-  options: { publishEnvironment?: boolean } = {},
-): string {
+export function configureWorkspaceRoot(workspaceRoot?: string): string {
   WORKSPACE_ROOT = resolveWorkspaceRoot(workspaceRoot);
-  if (options.publishEnvironment ?? true) {
-    process.env[WORKSPACE_ROOT_ENV_KEY] = WORKSPACE_ROOT;
-  }
 
   REPO_ROOT = WORKSPACE_ROOT;
   SYSTEM_PROMPT_PATH = path.join(WORKSPACE_ROOT, 'AGENTS.md');
@@ -70,11 +57,7 @@ export function configureWorkspaceRoot(
   return WORKSPACE_ROOT;
 }
 
-export function configureProjectRoot(projectRoot?: string): string {
-  return configureWorkspaceRoot(projectRoot);
-}
-
-configureWorkspaceRoot(undefined, { publishEnvironment: false });
+configureWorkspaceRoot();
 
 /** @param {string} chatId */
 export function buildWorldChatDirectoryPath(chatId) {

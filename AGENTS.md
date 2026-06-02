@@ -2,7 +2,7 @@
 
 Rules for AI agents working in this repo:
 
-- Workspace root: use `AGENT_CLI_WORKSPACE` when set, otherwise use `cwd` and publish that resolved path back to `AGENT_CLI_WORKSPACE`. Resolve `AGENTS.md`, workspace `.agent-world/skills`, `.agent-world`, and `.env` from that root. Resolve user skills from `~/.agent-world/skills`.
+- Workspace root: use `--workspace <path>` when provided, otherwise use `cwd`. Resolve `AGENTS.md`, workspace `.agent-world/skills`, `.agent-world`, and `.env` from that root. Resolve user skills from `~/.agent-world/skills`.
 - Storage: use `.agent-world` only. `.agent-world/world.json` is optional best-effort startup metadata with no schema validation. No `.chats` compatibility paths, no `.agent-world/worlds`, no registry, no `agents`, and no `agent.json`.
 - Layout: chats in `.agent-world/chats`; workspace skills in `.agent-world/skills`.
 - Runtime precedence: CLI flags > `.env` `AGENT_CLI_*` runtime defaults.

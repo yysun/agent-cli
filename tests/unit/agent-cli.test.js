@@ -35,7 +35,6 @@ const tempPathsToClean = [];
 const rootsToClean = [];
 const originalCwd = process.cwd();
 const CLI_ENVIRONMENT_KEYS = [
-  'AGENT_CLI_WORKSPACE',
   'AGENT_CLI_PROVIDER',
   'AGENT_CLI_MODEL',
   'AGENT_CLI_TEMPERATURE',
@@ -1352,7 +1351,6 @@ describe('agent-cli entrypoint', () => {
     const cwdRoot = await createTestRoot();
     rootsToClean.push(rootPath, cwdRoot);
     await writeSystemPrompt(rootPath, 'Prompt');
-    process.env.AGENT_CLI_WORKSPACE = cwdRoot;
     process.env.OPENAI_API_KEY = 'test-openai-key';
 
     const runChatTurn = vi.fn().mockResolvedValue({
@@ -1819,7 +1817,6 @@ describe('agent-cli entrypoint', () => {
       'utf8',
     );
 
-    delete process.env.AGENT_CLI_WORKSPACE;
     delete process.env.AGENT_CLI_PROVIDER;
     delete process.env.AGENT_CLI_MODEL;
     delete process.env.AGENT_CLI_TEMPERATURE;
@@ -1848,7 +1845,6 @@ describe('agent-cli entrypoint', () => {
     expect(process.env.AGENT_CLI_STREAM_TRACE).toBe('true');
     expect(process.env.AGENT_CLI_WEB_SEARCH).toBe('medium');
     expect(process.env.AGENT_CLI_GLOBAL_SKILLS).toBe('true');
-    expect(process.env.AGENT_CLI_WORKSPACE).toBe(rootPath);
     expect(startupText()).toBe(`Agent CLI starting in ${rootPath}`);
     expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
       expect.arrayContaining(['chats', 'skills']),
@@ -1861,39 +1857,6 @@ describe('agent-cli entrypoint', () => {
     const checkedInExample = await readFile(path.join(originalCwd, '.env.example'), 'utf8');
     expect(example).toBe(checkedInExample);
     await expect(readFile(path.join(cwdRoot, '.env.example'), 'utf8')).rejects.toThrow();
-  });
-
-  it('does not use AGENT_CLI_WORKSPACE from workspace .env as a root selector', async () => {
-    const rootPath = await createTestRoot();
-    const redirectedRoot = await createTestRoot();
-    rootsToClean.push(rootPath, redirectedRoot);
-    await writeFile(
-      path.join(rootPath, '.env'),
-      [
-        `AGENT_CLI_WORKSPACE=${redirectedRoot}`,
-        'AGENT_CLI_PROVIDER=google',
-        'AGENT_CLI_MODEL=gemini-2.5-pro',
-        'GOOGLE_API_KEY=dotenv-google-key',
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-
-    delete process.env.AGENT_CLI_WORKSPACE;
-    delete process.env.AGENT_CLI_PROVIDER;
-    delete process.env.AGENT_CLI_MODEL;
-    delete process.env.GOOGLE_API_KEY;
-
-    const { main, startupText } = await loadCliModule(rootPath);
-    const resolvedRootPath = process.cwd();
-    await main(['--help'], createIoCapture());
-
-    expect(process.env.AGENT_CLI_WORKSPACE).toBe(resolvedRootPath);
-    expect(startupText()).toBe(`Agent CLI starting in ${resolvedRootPath}`);
-    expect(await readdir(path.join(rootPath, '.agent-world'))).toEqual(
-      expect.arrayContaining(['chats', 'skills']),
-    );
-    await expect(readdir(path.join(redirectedRoot, '.agent-world'))).rejects.toThrow();
   });
 
   it('treats a symlinked bin path as the CLI entrypoint', async () => {

@@ -117,11 +117,7 @@ Agent CLI always uses its built-in system prompt. If the workspace has `AGENTS.m
 Workspace root resolution:
 
 1. `--workspace <path>`
-2. legacy `--project <path>`
-3. `AGENT_CLI_WORKSPACE`
-4. current working directory
-
-The resolved absolute root is published back to `AGENT_CLI_WORKSPACE`.
+2. current working directory
 
 Durable workspace state is flat:
 

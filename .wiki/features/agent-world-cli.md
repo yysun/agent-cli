@@ -38,7 +38,7 @@ The output is JSON-first for scripts, while interactive mode reuses the same dis
 
 ## Workspace Setup
 
-The CLI accepts `--workspace` as the canonical root flag and keeps `--project` as a compatibility alias. It uses `core/workspace-environment.ts`, the same preparation path as `agent-cli`, so prompt files, runtime files, `.env`, and `.agent-world` resolve from one workspace. [[workspace-root-resolution]] covers the shared root contract.
+The CLI accepts `--workspace` as the root flag. It uses `core/workspace-environment.ts`, the same preparation path as `agent-cli`, so prompt files, runtime files, `.env`, and `.agent-world` resolve from one workspace. [[workspace-root-resolution]] covers the shared root contract.
 
 ## Queue Boundary
 

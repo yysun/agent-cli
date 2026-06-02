@@ -12,7 +12,7 @@ When a user runs `agent-cli` with no message and without `--remote`, the CLI sho
 - Existing `--help` behavior is unchanged and does not start the prompt.
 - Interactive mode keeps conversation state across turns in the same process using the existing persisted chat model.
 - Interactive mode supports at least `/exit` or `/quit` to leave, `/clear` to start a new empty chat, `/new` to create a new empty chat, `/chats` to list persisted chats, and `/use <chatId>` to switch chats.
-- Runtime flags such as `--workspace`, legacy `--project`, `--provider`, `--model`, `--verbose`, `--stream-off`, and `--past-messages` still apply to interactive turns.
+- Runtime flags such as `--workspace`, `--provider`, `--model`, `--verbose`, `--stream-off`, and `--past-messages` still apply to interactive turns.
 - Failures in a single interactive turn are reported to stderr without terminating the prompt loop.
 - The implementation is covered by targeted automated tests and the README describes the new default behavior.
 

@@ -26,7 +26,7 @@ Move the shared workspace preparation behavior out of the `agent-cli` shell and 
 
 - Add a core helper for workspace preparation and allowed `.env` key loading.
 - Replace `agent-cli`'s private helper with the core helper to avoid divergent behavior.
-- Update `agent-world-cli` to parse `--workspace=value`, `--project`, and `--project=value`.
+- Update `agent-world-cli` to parse `--workspace=value`.
 - Add focused unit tests proving `agent-world-cli` stores state under the selected workspace and loads workspace `.env` credentials.
 - No E2E spec: this is a deterministic CLI parser/root-resolution contract.
 

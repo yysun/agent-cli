@@ -58,4 +58,4 @@ The product needs a clear split: workspace is the local project/container; world
 - Do not make workspace own chats, agents, memory, queues, or current chat.
 - Do not introduce a new storage backend.
 - Do not include migration or backwards compatibility for the old singleton `.agent-world` layout.
-- Do not break existing workspace-root selection through `--workspace`, `AGENT_CLI_WORKSPACE`, or legacy `AGENT_CLI_ROOT`.
+- Do not break existing workspace-root selection through `--workspace` or cwd fallback.

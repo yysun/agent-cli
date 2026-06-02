@@ -10,21 +10,17 @@ Keeping the old wording makes the API and CLI harder to reason about because it 
 
 1. User-facing CLI help, startup diagnostics, README text, and current repository docs must call the loaded Agent CLI root a `workspace`, not a `project`.
 2. The preferred CLI flag must be `--workspace <path>`.
-3. Existing `--project <path>` invocations must continue to work as a backward-compatible alias.
-4. The preferred environment variable must be `AGENT_CLI_WORKSPACE`.
-5. Existing `AGENT_CLI_ROOT` usage must continue to work as a backward-compatible fallback.
-6. Internal names that represent the loaded Agent CLI root should move from `projectRoot`/`configureProjectRoot` style naming to `workspaceRoot`/`configureWorkspaceRoot` style naming where practical.
-7. Prompt-loading terminology should use workspace wording for `AGENTS.md` content where the code is describing the loaded root, while preserving behavior.
-8. Remote host lock messages must refer to the workspace root.
-9. Runtime behavior, storage paths, chat/session behavior, agent selection, and remote relay behavior must remain unchanged apart from naming.
-10. Generated JavaScript outputs may be updated by the build, but source of truth remains TypeScript.
+3. Workspace selection must not depend on legacy aliases or root selector environment variables.
+4. Internal names that represent the loaded Agent CLI root should move to `workspaceRoot`/`configureWorkspaceRoot` style naming where practical.
+5. Prompt-loading terminology should use workspace wording for `AGENTS.md` content where the code is describing the loaded root, while preserving behavior.
+6. Remote host lock messages must refer to the workspace root.
+7. Runtime behavior, storage paths, chat/session behavior, agent selection, and remote relay behavior must remain unchanged apart from naming.
+8. Generated JavaScript outputs may be updated by the build, but source of truth remains TypeScript.
 
 ## Acceptance Criteria
 
 1. `agent-cli --workspace <root> --help` resolves and loads the workspace root.
-2. `agent-cli --project <root> --help` still resolves and loads the same root.
-3. `AGENT_CLI_WORKSPACE=<root> agent-cli --help` works when no flag is provided.
-4. `AGENT_CLI_ROOT=<root> agent-cli --help` still works when `AGENT_CLI_WORKSPACE` is not set.
-5. Startup/help output uses workspace wording.
-6. README and current RPD docs for this story use workspace wording.
-7. Existing tests are updated or extended to cover the preferred flag/env plus compatibility aliases.
+2. Running from a workspace directory without a flag uses that directory as the root.
+3. Startup/help output uses workspace wording.
+4. README and current RPD docs for this story use workspace wording.
+5. Existing tests are updated or extended to cover the preferred flag and cwd fallback.
