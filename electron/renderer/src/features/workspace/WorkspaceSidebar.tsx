@@ -26,7 +26,6 @@ import { formatTime, shortId, workspaceFolderName } from '../../utils/format';
 export interface WorkspaceSidebarProps {
   chats: AgentCliDesktopChatSummary[];
   currentChatId: string;
-  messageCount: number;
   runtimeSummary: AgentCliDesktopRuntimeSummary;
   status: string;
   worldSummary: AgentCliDesktopWorldSummary | null;
@@ -41,7 +40,6 @@ export interface WorkspaceSidebarProps {
 export default function WorkspaceSidebar({
   chats,
   currentChatId,
-  messageCount,
   runtimeSummary,
   status,
   worldSummary,
@@ -95,14 +93,6 @@ export default function WorkspaceSidebar({
             {hasWorldConfig ? <span id="runtime-status" className="aw-state-pill aw-state-running">{status}</span> : null}
           </div>
           <dl className="aw-world-stats">
-            <div>
-              <dt>Messages</dt>
-              <dd id="message-count">{messageCount}</dd>
-            </div>
-            <div>
-              <dt>Chats</dt>
-              <dd id="chat-count">{chats.length}</dd>
-            </div>
             <div>
               <dt>Workflow</dt>
               <dd id="workflow-type">{workflowStat}</dd>

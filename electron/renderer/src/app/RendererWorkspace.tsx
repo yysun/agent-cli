@@ -56,7 +56,6 @@ export default function RendererWorkspace() {
         <WorkspaceSidebar
           chats={workspace.chats}
           currentChatId={workspace.currentChatId}
-          messageCount={workspace.messages.length}
           runtimeSummary={workspace.runtimeSummary}
           status={workspace.status}
           worldSummary={workspace.worldSummary}
@@ -134,7 +133,6 @@ export default function RendererWorkspace() {
               />
               <ChatComposer
                 busy={workspace.busy}
-                currentChatId={workspace.currentChatId}
                 editingContent={editingContent}
                 editingIndex={workspace.editingIndex}
                 reasoningEffort={workspace.reasoningEffort}

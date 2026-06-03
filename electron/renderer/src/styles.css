@@ -250,7 +250,7 @@ button:disabled {
 .aw-header-actions,
 .aw-agent-strip,
 .aw-composer-actions,
-.aw-queue-panel,
+.aw-composer-submit,
 .aw-working-status {
   display: flex;
   align-items: center;
@@ -392,7 +392,7 @@ button:disabled {
 
 .aw-world-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 12px 0 0;
 }
@@ -911,35 +911,6 @@ button:disabled {
   text-transform: lowercase;
 }
 
-.aw-queue-panel {
-  width: min(calc(100% - 32px), 860px);
-  min-height: 44px;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 auto -8px;
-  border: 1px solid color-mix(in srgb, var(--status-warning) 32%, transparent);
-  border-radius: 8px;
-  background: var(--status-warning-bg);
-  padding: 9px 12px;
-  color: var(--status-warning);
-  font-size: 12px;
-}
-
-.aw-queue-panel div {
-  display: flex;
-  gap: 8px;
-}
-
-.aw-queue-panel button {
-  border: 1px solid color-mix(in srgb, var(--status-warning) 34%, transparent);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--status-warning);
-  padding: 4px 9px;
-  font-size: 11px;
-  font-weight: 700;
-}
-
 .aw-composer {
   width: min(calc(100% - 32px), 860px);
   margin: 16px auto 0;
@@ -970,6 +941,11 @@ button:disabled {
 .aw-composer-actions {
   min-width: 0;
   gap: 6px;
+}
+
+.aw-composer-submit {
+  flex-shrink: 0;
+  gap: 8px;
 }
 
 .aw-composer-actions button,
@@ -1005,6 +981,13 @@ button:disabled {
   background: var(--foreground);
   color: var(--background);
   font-size: 18px;
+}
+
+.aw-cancel-edit-button {
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .aw-send-button:disabled {

@@ -14,7 +14,6 @@ import { Button, Select, Textarea } from '../../design-system';
 
 export interface ChatComposerProps {
   busy: boolean;
-  currentChatId: string;
   editingContent: string;
   editingIndex: number | null;
   reasoningEffort: string;
@@ -27,7 +26,6 @@ export interface ChatComposerProps {
 
 export default function ChatComposer({
   busy,
-  currentChatId,
   editingContent,
   editingIndex,
   reasoningEffort,
@@ -56,29 +54,22 @@ export default function ChatComposer({
   }
 
   return (
-    <>
-      <div className="aw-queue-panel">
-        <div>
-          <strong id="edit-mode-label">{editingIndex === null ? 'Ready' : `Editing message ${editingIndex + 1}`}</strong>
-          <span id="active-chat-label">{currentChatId || 'No active chat'}</span>
+    <form id="message-form" className="aw-composer" aria-label="Message composer" onSubmit={submit}>
+      <Textarea id="message-input" rows={2} aria-label="Message input" placeholder="Ask the agent..." value={content} onChange={(event) => setContent(event.target.value)} />
+      <div className="aw-composer-toolbar">
+        <div className="aw-composer-actions">
+          <Select id="tool-permission-select" aria-label="Tool permission" value={toolPermission} onChange={(event) => onToolPermissionChange(event.target.value)}>
+            {TOOL_PERMISSION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </Select>
+          <Select id="reasoning-effort-select" aria-label="Reasoning effort" value={reasoningEffort} onChange={(event) => onReasoningEffortChange(event.target.value)}>
+            {REASONING_EFFORT_OPTIONS.map((option) => <option key={option.value || 'default'} value={option.value}>{option.label}</option>)}
+          </Select>
         </div>
-        {editingIndex !== null ? <Button id="cancel-edit-button" variant="ghost" size="sm" onClick={() => { onCancelEdit(); setContent(''); }}>Cancel edit</Button> : null}
-      </div>
-
-      <form id="message-form" className="aw-composer" aria-label="Message composer" onSubmit={submit}>
-        <Textarea id="message-input" rows={2} aria-label="Message input" placeholder="Ask the agent..." value={content} onChange={(event) => setContent(event.target.value)} />
-        <div className="aw-composer-toolbar">
-          <div className="aw-composer-actions">
-            <Select id="tool-permission-select" aria-label="Tool permission" value={toolPermission} onChange={(event) => onToolPermissionChange(event.target.value)}>
-              {TOOL_PERMISSION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </Select>
-            <Select id="reasoning-effort-select" aria-label="Reasoning effort" value={reasoningEffort} onChange={(event) => onReasoningEffortChange(event.target.value)}>
-              {REASONING_EFFORT_OPTIONS.map((option) => <option key={option.value || 'default'} value={option.value}>{option.label}</option>)}
-            </Select>
-          </div>
+        <div className="aw-composer-submit">
+          {editingIndex !== null ? <Button id="cancel-edit-button" className="aw-cancel-edit-button" variant="ghost" size="sm" onClick={() => { onCancelEdit(); setContent(''); }}>Cancel edit</Button> : null}
           <Button id="send-button" className="aw-send-button" type="submit" aria-label="Send message" title="Send message" disabled={busy}>{editingIndex === null ? '↑' : '↻'}</Button>
         </div>
-      </form>
-    </>
+      </div>
+    </form>
   );
 }
