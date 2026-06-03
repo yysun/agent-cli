@@ -21,6 +21,9 @@ import type {
   AgentCliDesktopChatSummary,
   AgentCliDesktopRuntimeSummary,
   AgentCliDesktopRuntimeMessage,
+  AgentCliDesktopSkillInventory,
+  AgentCliDesktopSkillSelection,
+  AgentCliDesktopSkillSummary,
   AgentCliDesktopWorkspaceResponse,
   AgentCliDesktopWorldSummary,
 } from '../types/desktop-api';
@@ -42,6 +45,24 @@ function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function emptySkillInventory(): AgentCliDesktopSkillInventory {
+  return {
+    user: [],
+    project: [],
+  };
+}
+
+function buildSkillSelectionKey(skill: AgentCliDesktopSkillSummary): string {
+  return `${skill.sourceScope || 'skill'}:${skill.skillId}:${skill.sourcePath || ''}`;
+}
+
+function collectSkillSelectionKeys(skillInventory: AgentCliDesktopSkillInventory): Set<string> {
+  return new Set([
+    ...skillInventory.user.map(buildSkillSelectionKey),
+    ...skillInventory.project.map(buildSkillSelectionKey),
+  ]);
+}
+
 export function useDesktopWorkspace() {
   const desktopApi: AgentCliDesktopApi | undefined = window.agentCliDesktop;
   const [workspaceRoot, setWorkspaceRoot] = useState('');
@@ -51,6 +72,8 @@ export function useDesktopWorkspace() {
   });
   const [worldSummary, setWorldSummary] = useState<AgentCliDesktopWorldSummary | null>(null);
   const [worldSummaryWarning, setWorldSummaryWarning] = useState('');
+  const [skillInventory, setSkillInventory] = useState<AgentCliDesktopSkillInventory>(() => emptySkillInventory());
+  const [disabledSkillKeys, setDisabledSkillKeys] = useState<string[]>([]);
   const [chats, setChats] = useState<AgentCliDesktopChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState('');
   const [messages, setMessages] = useState<AgentCliDesktopRuntimeMessage[]>([]);
@@ -98,13 +121,49 @@ export function useDesktopWorkspace() {
     setEditingIndex(null);
   }, []);
 
-  const applyWorkspaceMetadata = useCallback((response: Pick<AgentCliDesktopWorkspaceResponse, 'runtimeSummary' | 'worldSummary' | 'worldSummaryWarning'>) => {
+  const applyWorkspaceMetadata = useCallback((response: Pick<AgentCliDesktopWorkspaceResponse, 'runtimeSummary' | 'skillInventory' | 'globalSkillsEnabled' | 'projectSkillsEnabled' | 'worldSummary' | 'worldSummaryWarning'>, options: { resetSkillSelection?: boolean } = {}) => {
+    const nextSkillInventory = {
+      user: response.skillInventory?.user || [],
+      project: response.skillInventory?.project || [],
+    };
+    const nextSkillKeys = collectSkillSelectionKeys(nextSkillInventory);
+
     setRuntimeSummary({
       provider: response.runtimeSummary?.provider || '',
       model: response.runtimeSummary?.model || '',
     });
+    setSkillInventory(nextSkillInventory);
+    setDisabledSkillKeys((currentKeys) => (
+      options.resetSkillSelection ? [] : currentKeys.filter((key) => nextSkillKeys.has(key))
+    ));
+    setGlobalSkillsEnabled((currentEnabled) => (
+      options.resetSkillSelection ? response.globalSkillsEnabled === true : response.globalSkillsEnabled === true && currentEnabled
+    ));
+    setProjectSkillsEnabled((currentEnabled) => (
+      options.resetSkillSelection ? response.projectSkillsEnabled !== false : response.projectSkillsEnabled !== false && currentEnabled
+    ));
     setWorldSummary(response.worldSummary ?? null);
     setWorldSummaryWarning(response.worldSummaryWarning || '');
+  }, []);
+
+  const createSkillSelection = useCallback((): AgentCliDesktopSkillSelection => ({
+    globalEnabled: globalSkillsEnabled,
+    projectEnabled: projectSkillsEnabled,
+    disabledSkillKeys,
+  }), [disabledSkillKeys, globalSkillsEnabled, projectSkillsEnabled]);
+
+  const setSkillEnabled = useCallback((skill: AgentCliDesktopSkillSummary, enabled: boolean) => {
+    const skillKey = buildSkillSelectionKey(skill);
+    setDisabledSkillKeys((currentKeys) => {
+      const nextKeys = new Set(currentKeys);
+      if (enabled) {
+        nextKeys.delete(skillKey);
+      } else {
+        nextKeys.add(skillKey);
+      }
+
+      return [...nextKeys];
+    });
   }, []);
 
   const refreshChats = useCallback(async () => {
@@ -151,7 +210,7 @@ export function useDesktopWorkspace() {
     const response = await desktopApi.getWorkspace();
     setWorkspaceRoot(response.workspaceRoot || '');
     setChats(response.chats || []);
-    applyWorkspaceMetadata(response);
+    applyWorkspaceMetadata(response, { resetSkillSelection: true });
     setCurrentChatId(response.currentChatId || '');
     setStatus('Ready');
     if (response.currentChatId) {
@@ -170,7 +229,7 @@ export function useDesktopWorkspace() {
       const response = await desktopApi.selectWorkspace();
       setWorkspaceRoot(response.workspaceRoot || workspaceRoot);
       setChats(response.chats || []);
-      applyWorkspaceMetadata(response);
+      applyWorkspaceMetadata(response, { resetSkillSelection: true });
       setCurrentChatId(response.currentChatId || '');
       setMessages([]);
       if (response.currentChatId) {
@@ -239,6 +298,7 @@ export function useDesktopWorkspace() {
         chatId: currentChatId || undefined,
         content: trimmedContent,
         agentConfig,
+        skillSelection: createSkillSelection(),
         stream: false,
       };
       const wasEditing = editingIndex !== null;
@@ -256,7 +316,7 @@ export function useDesktopWorkspace() {
       await refreshChats();
       log('info', wasEditing ? 'Edited message resent.' : 'Message sent.');
     });
-  }, [busy, clearEdit, currentChatId, desktopApi, editingIndex, log, reasoningEffort, refreshChats, toolPermission, withBusy]);
+  }, [busy, clearEdit, createSkillSelection, currentChatId, desktopApi, editingIndex, log, reasoningEffort, refreshChats, toolPermission, withBusy]);
 
   const setThemePreference = useCallback((preference: ThemePreference) => {
     setThemePreferenceState(normalizeThemePreference(preference));
@@ -290,6 +350,7 @@ export function useDesktopWorkspace() {
     busyLabel,
     chats,
     currentChatId,
+    disabledSkillKeys,
     editingIndex,
     globalSkillsEnabled,
     logs,
@@ -300,6 +361,7 @@ export function useDesktopWorkspace() {
     runtimeSummary,
     showToolMessages,
     sidebarCollapsed,
+    skillInventory,
     status,
     themePreference,
     toolPermission,
@@ -312,6 +374,7 @@ export function useDesktopWorkspace() {
       selectChat,
       selectWorkspace,
       setGlobalSkillsEnabled,
+      setSkillEnabled,
       setPanelOpen,
       setProjectSkillsEnabled,
       setReasoningEffort,
@@ -331,6 +394,7 @@ export function useDesktopWorkspace() {
     clearEdit,
     createChat,
     currentChatId,
+    disabledSkillKeys,
     editingIndex,
     globalSkillsEnabled,
     logs,
@@ -341,8 +405,10 @@ export function useDesktopWorkspace() {
     runtimeSummary,
     selectChat,
     selectWorkspace,
+    setSkillEnabled,
     showToolMessages,
     sidebarCollapsed,
+    skillInventory,
     setThemePreference,
     startEdit,
     status,

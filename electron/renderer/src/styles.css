@@ -1272,6 +1272,12 @@ button:disabled {
   white-space: nowrap;
 }
 
+.aw-skill-empty {
+  padding: 4px 2px 6px 26px;
+  color: color-mix(in srgb, var(--sidebar-foreground) 48%, transparent);
+  font-size: 12px;
+}
+
 .aw-panel-link {
   justify-self: end;
   border: 0;

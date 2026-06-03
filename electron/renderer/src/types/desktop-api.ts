@@ -34,6 +34,7 @@ export type AgentCliDesktopRunTurnRequest = {
   messages?: AgentCliDesktopRuntimeMessage[];
   workspaceRoot?: string;
   agentConfig?: Record<string, unknown>;
+  skillSelection?: AgentCliDesktopSkillSelection;
   stream?: boolean;
   historyMessageLimit?: number;
 };
@@ -74,12 +75,33 @@ export type AgentCliDesktopRuntimeSummary = {
   model: string;
 };
 
+export type AgentCliDesktopSkillSummary = {
+  skillId: string;
+  description?: string;
+  sourcePath?: string;
+  sourceScope?: 'user' | 'project';
+};
+
+export type AgentCliDesktopSkillInventory = {
+  user: AgentCliDesktopSkillSummary[];
+  project: AgentCliDesktopSkillSummary[];
+};
+
+export type AgentCliDesktopSkillSelection = {
+  globalEnabled: boolean;
+  projectEnabled: boolean;
+  disabledSkillKeys: string[];
+};
+
 export type AgentCliDesktopWorkspaceResponse = {
   canceled?: boolean;
   workspaceRoot: string;
   chats: AgentCliDesktopChatSummary[];
   currentChatId: string | null;
   runtimeSummary: AgentCliDesktopRuntimeSummary;
+  skillInventory: AgentCliDesktopSkillInventory;
+  globalSkillsEnabled: boolean;
+  projectSkillsEnabled: boolean;
   worldSummary: AgentCliDesktopWorldSummary | null;
   worldSummaryWarning?: string;
 };

@@ -34,8 +34,10 @@ import {
   type AgentWorldStartupSummary,
 } from '../core/agent-world-config.js';
 import {
+  flattenSkillInventoryByPrecedence,
   getBuiltInSystemPrompt,
-  loadSkillInventory,
+  isGlobalSkillLoadingEnabled,
+  loadSkillInventoryByScope,
   loadWorkspaceSystemPrompt,
 } from '../core/agent-files.js';
 import { resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
@@ -75,6 +77,12 @@ type AgentTurnMessage = {
   tool_call_id?: string;
 };
 
+type SkillSelectionRequest = {
+  globalEnabled?: boolean;
+  projectEnabled?: boolean;
+  disabledSkillKeys?: string[];
+};
+
 type AgentTurnRequest = {
   chatId?: string;
   message?: string;
@@ -82,6 +90,7 @@ type AgentTurnRequest = {
   messages?: AgentTurnMessage[];
   workspaceRoot?: string;
   agentConfig?: Record<string, unknown>;
+  skillSelection?: SkillSelectionRequest;
   stream?: boolean;
   historyMessageLimit?: number;
 };
@@ -101,6 +110,9 @@ type WorkspaceMetadata = {
     provider: string;
     model: string;
   };
+  skillInventory: Awaited<ReturnType<typeof loadSkillInventoryByScope>>;
+  globalSkillsEnabled: boolean;
+  projectSkillsEnabled: boolean;
 };
 
 type SendMessageRequest = AgentTurnRequest & {
@@ -114,6 +126,7 @@ type EditAndResendRequest = {
   content?: string;
   message?: string;
   agentConfig?: Record<string, unknown>;
+  skillSelection?: SkillSelectionRequest;
   stream?: boolean;
   historyMessageLimit?: number;
 };
@@ -189,6 +202,25 @@ function normalizeRequestAgentConfig(agentConfig: unknown): Record<string, unkno
   return agentConfig as Record<string, unknown>;
 }
 
+function normalizeSkillSelection(skillSelection: unknown): SkillSelectionRequest {
+  if (!skillSelection || typeof skillSelection !== 'object' || Array.isArray(skillSelection)) {
+    return {};
+  }
+
+  const source = skillSelection as Record<string, unknown>;
+  return {
+    globalEnabled: typeof source.globalEnabled === 'boolean' ? source.globalEnabled : undefined,
+    projectEnabled: typeof source.projectEnabled === 'boolean' ? source.projectEnabled : undefined,
+    disabledSkillKeys: Array.isArray(source.disabledSkillKeys)
+      ? source.disabledSkillKeys.map((key) => String(key)).filter(Boolean)
+      : [],
+  };
+}
+
+function buildSkillSelectionKey(skill: { skillId: string; sourcePath: string; sourceScope: 'user' | 'project' }): string {
+  return `${skill.sourceScope}:${skill.skillId}:${skill.sourcePath}`;
+}
+
 function normalizeWorkspacePath(value: unknown): string {
   return String(value ?? '').trim();
 }
@@ -255,15 +287,22 @@ async function prepareElectronWorkspace(workspaceRoot?: string): Promise<string>
 
 async function loadWorkspaceMetadata(): Promise<WorkspaceMetadata> {
   const runtimeSummary = resolveRuntimeSelection(process.env, loadPersistedRuntimeConfig());
+  const skillInventory = await loadSkillInventoryByScope();
 
   try {
     return {
       runtimeSummary,
+      skillInventory,
+      globalSkillsEnabled: isGlobalSkillLoadingEnabled(),
+      projectSkillsEnabled: true,
       worldSummary: await loadAgentWorldStartupSummary(),
     };
   } catch (error) {
     return {
       runtimeSummary,
+      skillInventory,
+      globalSkillsEnabled: isGlobalSkillLoadingEnabled(),
+      projectSkillsEnabled: true,
       worldSummary: null,
       worldSummaryWarning: error instanceof Error ? error.message : String(error),
     };
@@ -299,15 +338,26 @@ async function loadWorkspaceChatState() {
 
 async function loadRuntimeInputs(request: {
   agentConfig?: Record<string, unknown>;
+  skillSelection?: SkillSelectionRequest;
 }) {
   const agentConfig = {
     ...loadPersistedRuntimeConfig(),
     ...normalizeAgentConfig(normalizeRequestAgentConfig(request.agentConfig)),
   };
-  const [workspaceSystemPrompt, skillInventory] = await Promise.all([
+  const [workspaceSystemPrompt, scopedSkillInventory] = await Promise.all([
     loadWorkspaceSystemPrompt(),
-    loadSkillInventory(),
+    loadSkillInventoryByScope(),
   ]);
+  const skillSelection = normalizeSkillSelection(request.skillSelection);
+  const disabledSkillKeys = new Set(skillSelection.disabledSkillKeys ?? []);
+  const skillInventory = flattenSkillInventoryByPrecedence({
+    user: skillSelection.globalEnabled === false
+      ? []
+      : scopedSkillInventory.user.filter((skill) => !disabledSkillKeys.has(buildSkillSelectionKey(skill))),
+    project: skillSelection.projectEnabled === false
+      ? []
+      : scopedSkillInventory.project.filter((skill) => !disabledSkillKeys.has(buildSkillSelectionKey(skill))),
+  });
 
   return {
     agentConfig,
@@ -329,7 +379,7 @@ function resolveHistoryMessageLimit(request: {
 async function executeRuntimeTurn(params: {
   chat: { id: string; messages: AgentTurnMessage[]; createdAt?: string; updatedAt?: string };
   userMessage: string;
-  request: Pick<AgentTurnRequest, 'agentConfig' | 'stream' | 'historyMessageLimit'>;
+  request: Pick<AgentTurnRequest, 'agentConfig' | 'skillSelection' | 'stream' | 'historyMessageLimit'>;
 }) {
   const { agentConfig, workspaceSystemPrompt, skillInventory } = await loadRuntimeInputs(params.request);
   const streamChunks: Array<Record<string, unknown>> = [];

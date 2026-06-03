@@ -154,9 +154,12 @@ export default function RendererWorkspace() {
               open={workspace.panelOpen}
               projectSkillsEnabled={workspace.projectSkillsEnabled}
               showToolMessages={workspace.showToolMessages}
+              skillInventory={workspace.skillInventory}
+              disabledSkillKeys={workspace.disabledSkillKeys}
               themePreference={workspace.themePreference}
               onGlobalSkillsEnabledChange={workspace.actions.setGlobalSkillsEnabled}
               onProjectSkillsEnabledChange={workspace.actions.setProjectSkillsEnabled}
+              onSkillEnabledChange={workspace.actions.setSkillEnabled}
               onShowToolMessagesChange={workspace.actions.setShowToolMessages}
               onThemePreferenceChange={workspace.actions.setThemePreference}
             />
