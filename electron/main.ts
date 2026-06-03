@@ -244,7 +244,10 @@ async function resolveElectronWorkspaceRoot(workspaceRoot?: string): Promise<str
 }
 
 async function prepareElectronWorkspace(workspaceRoot?: string): Promise<string> {
-  const resolvedWorkspaceRoot = prepareWorkspaceEnvironment(await resolveElectronWorkspaceRoot(workspaceRoot));
+  const resolvedWorkspaceRoot = prepareWorkspaceEnvironment(
+    await resolveElectronWorkspaceRoot(workspaceRoot),
+    { refreshDotEnv: true },
+  );
   await ensureWorkspaceWorld();
   await persistWorkspaceRoot(resolvedWorkspaceRoot);
   return resolvedWorkspaceRoot;

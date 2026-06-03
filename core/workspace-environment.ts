@@ -7,6 +7,7 @@
  * Key features:
  * - Preserves root precedence across an explicit workspace flag and cwd.
  * - Resolves `.env` from the selected workspace root for runtime defaults and credentials.
+ * - Supports Electron workspace switching by replacing only values previously loaded from workspace `.env` files.
  * - Creates a workspace `.env.example` template when no workspace `.env` exists and no template is present.
  * - Limits `.env` imports to provider credentials and Agent CLI runtime defaults.
  *
@@ -92,6 +93,16 @@ AZURE_OPENAI_DEPLOYMENT_NAME=
 `;
 
 const loadedDotEnvPaths = new Set<string>();
+const workspaceDotEnvOriginalValues = new Map<string, string | undefined>();
+const workspaceDotEnvManagedKeys = new Set<string>();
+
+type DotEnvLoadOptions = {
+  refresh?: boolean;
+};
+
+type WorkspaceEnvironmentOptions = {
+  refreshDotEnv?: boolean;
+};
 
 function resolveWorkspaceDotEnvPath(workspaceRoot = WORKSPACE_ROOT): string {
   return path.join(workspaceRoot || process.cwd(), '.env');
@@ -118,10 +129,29 @@ function ensureDotEnvExampleFile(dotEnvPath: string): void {
   }
 }
 
-export function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT): void {
+function restoreManagedDotEnvKeys(parsedEnvironment: Record<string, string>): void {
+  for (const key of workspaceDotEnvManagedKeys) {
+    if (Object.hasOwn(parsedEnvironment, key)) {
+      continue;
+    }
+
+    const originalValue = workspaceDotEnvOriginalValues.get(key);
+    if (typeof originalValue === 'undefined') {
+      delete process.env[key];
+    } else {
+      process.env[key] = originalValue;
+    }
+    workspaceDotEnvManagedKeys.delete(key);
+  }
+}
+
+export function loadAllowedDotEnvEnvironment(
+  workspaceRoot = WORKSPACE_ROOT,
+  options: DotEnvLoadOptions = {},
+): void {
   const dotEnvPath = resolveWorkspaceDotEnvPath(workspaceRoot);
 
-  if (loadedDotEnvPaths.has(dotEnvPath)) {
+  if (!options.refresh && loadedDotEnvPaths.has(dotEnvPath)) {
     return;
   }
 
@@ -134,21 +164,37 @@ export function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT): vo
     quiet: true,
   }).parsed ?? {};
 
+  if (options.refresh) {
+    restoreManagedDotEnvKeys(parsed);
+  }
+
   for (const [key, value] of Object.entries(parsed)) {
     if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
       continue;
     }
 
-    if (typeof process.env[key] === 'string' && process.env[key].trim()) {
+    if (
+      !workspaceDotEnvManagedKeys.has(key)
+      && typeof process.env[key] === 'string'
+      && process.env[key].trim()
+    ) {
       continue;
     }
 
+    if (!workspaceDotEnvOriginalValues.has(key)) {
+      workspaceDotEnvOriginalValues.set(key, process.env[key]);
+    }
+
     process.env[key] = value;
+    workspaceDotEnvManagedKeys.add(key);
   }
 }
 
-export function prepareWorkspaceEnvironment(workspaceRoot?: string): string {
+export function prepareWorkspaceEnvironment(
+  workspaceRoot?: string,
+  options: WorkspaceEnvironmentOptions = {},
+): string {
   const resolvedRoot = configureWorkspaceRoot(workspaceRoot);
-  loadAllowedDotEnvEnvironment(resolvedRoot);
+  loadAllowedDotEnvEnvironment(resolvedRoot, { refresh: options.refreshDotEnv === true });
   return resolvedRoot;
 }
