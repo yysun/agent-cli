@@ -15,12 +15,14 @@ The Electron app must follow the relevant `../agent-world/electron` renderer beh
 - The settings panel exposes a `Show tool messages` switch.
 - Turning off `Show tool messages` hides tool-role messages and assistant tool-call request rows from the transcript; turning it back on restores them.
 - Tool messages render with a clearer compact tool-card treatment that can display tool names, status, and result text when available.
-- The settings panel includes skills UI only: global/project scope switches, placeholder skill rows, and install/edit affordances may appear but must not call any backend or change runtime behavior yet.
-- The implementation stays local to the static Electron renderer unless validation shows another file must change.
+- The settings panel includes global/project skill scope switches and per-skill enablement controls backed by the workspace skill inventory.
+- Sending or resending a chat message applies the settings panel's enabled skill choices to both the skill inventory shown to the model and the runtime `load_skill` registry.
+- Disabled skill scopes and disabled individual skills are not advertised in the chat prompt and are not available through `load_skill` for that turn.
+- Install/edit affordances may remain disabled until a separate skill-management requirement exists.
 
 ## Non-Goals
 
-- No skill discovery, install, edit, save, or runtime enablement implementation.
-- No backend settings persistence or IPC changes.
-- No chat store, workspace store, runtime, or provider behavior changes.
+- No skill install, edit, save, or marketplace implementation.
+- No backend settings persistence beyond carrying the current renderer settings into each send/resend request.
+- No chat store, workspace store, or provider behavior changes.
 - No broad redesign beyond the requested reference-aligned controls.

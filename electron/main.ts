@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-06-04: Applied settings-panel skill enablement to both chat prompt inventory and runtime `load_skill` roots.
  * - 2026-06-04: Streamed current-turn runtime events to the renderer as Electron verbose diagnostics.
  * - 2026-05-31: Returned active runtime provider and model in Electron workspace metadata.
  * - 2026-05-31: Loaded Electron workspace current chat from `.agent-world/chats/current.json` before returning startup state.
@@ -37,11 +38,12 @@ import {
   type AgentWorldStartupSummary,
 } from '../core/agent-world-config.js';
 import {
-  flattenSkillInventoryByPrecedence,
+  buildRuntimeSkillRootsFromInventory,
   getBuiltInSystemPrompt,
   isGlobalSkillLoadingEnabled,
   loadSkillInventoryByScope,
   loadWorkspaceSystemPrompt,
+  selectSkillInventoryBySettings,
 } from '../core/agent-files.js';
 import {
   parseHumanInputRequest,
@@ -243,10 +245,6 @@ function normalizeSkillSelection(skillSelection: unknown): SkillSelectionRequest
   };
 }
 
-function buildSkillSelectionKey(skill: { skillId: string; sourcePath: string; sourceScope: 'user' | 'project' }): string {
-  return `${skill.sourceScope}:${skill.skillId}:${skill.sourcePath}`;
-}
-
 function normalizeWorkspacePath(value: unknown): string {
   return String(value ?? '').trim();
 }
@@ -375,20 +373,13 @@ async function loadRuntimeInputs(request: {
     loadSkillInventoryByScope(),
   ]);
   const skillSelection = normalizeSkillSelection(request.skillSelection);
-  const disabledSkillKeys = new Set(skillSelection.disabledSkillKeys ?? []);
-  const skillInventory = flattenSkillInventoryByPrecedence({
-    user: skillSelection.globalEnabled === false
-      ? []
-      : scopedSkillInventory.user.filter((skill) => !disabledSkillKeys.has(buildSkillSelectionKey(skill))),
-    project: skillSelection.projectEnabled === false
-      ? []
-      : scopedSkillInventory.project.filter((skill) => !disabledSkillKeys.has(buildSkillSelectionKey(skill))),
-  });
+  const skillInventory = selectSkillInventoryBySettings(scopedSkillInventory, skillSelection);
 
   return {
     agentConfig,
     workspaceSystemPrompt,
     skillInventory,
+    runtimeSkillRoots: buildRuntimeSkillRootsFromInventory(skillInventory),
   };
 }
 
@@ -408,7 +399,7 @@ async function executeRuntimeTurn(params: {
   request: Pick<AgentTurnRequest, 'agentConfig' | 'skillSelection' | 'stream' | 'historyMessageLimit'>;
   rendererWebContents?: WebContents;
 }) {
-  const { agentConfig, workspaceSystemPrompt, skillInventory } = await loadRuntimeInputs(params.request);
+  const { agentConfig, workspaceSystemPrompt, skillInventory, runtimeSkillRoots } = await loadRuntimeInputs(params.request);
   const streamChunks: Array<Record<string, unknown>> = [];
   const toolCalls: Array<Record<string, unknown>> = [];
   const toolResults: Array<Record<string, unknown>> = [];
@@ -432,6 +423,7 @@ async function executeRuntimeTurn(params: {
     builtInSystemPrompt: getBuiltInSystemPrompt(),
     workspaceSystemPrompt,
     skillInventory,
+    runtimeSkillRoots,
     agentConfig,
     onStreamChunk: (chunk) => {
       streamChunks.push({ ...chunk });

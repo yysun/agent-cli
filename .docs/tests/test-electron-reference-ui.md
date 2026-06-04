@@ -2,7 +2,7 @@
 
 ## Scope
 
-Validate the Electron renderer right panel, theme controls, tool-message visibility, and UI-only skills controls.
+Validate the Electron renderer right panel, theme controls, tool-message visibility, and skills controls that affect chat-turn skill availability.
 
 ## Scenarios
 
@@ -31,11 +31,13 @@ Validate the Electron renderer right panel, theme controls, tool-message visibil
    - When `Show tool messages` is disabled
    - Then tool-related transcript rows are hidden while normal user and assistant messages remain visible
 
-4. Skills UI placeholders
+4. Skills settings drive chat skill availability
    - Given the settings panel is open
    - Then it shows global and project skill scope controls
-   - And it shows placeholder skill rows and install/edit affordances as UI-only controls
-   - And using these controls does not call backend APIs or change runtime behavior
+   - And it shows discovered global and project skill rows
+   - When a scope or individual skill is disabled
+   - Then the next send or resend request includes those current skill settings
+   - And Electron main filters both the model-visible skill inventory and runtime `load_skill` roots to the enabled skills only
 
 ## Validation Notes
 
@@ -44,5 +46,6 @@ Validate the Electron renderer right panel, theme controls, tool-message visibil
 - Confirmed dark, light, and system theme controls apply the expected `data-theme` state.
 - Confirmed two compact tool cards render with `requested` and `completed` statuses.
 - Confirmed disabling `Show tool messages` hides tool cards while user/assistant messages remain, and re-enabling restores the tool cards.
-- Confirmed skills UI placeholders are present and the install/edit buttons are disabled UI-only controls.
+- Confirmed unit coverage for settings-based skill filtering excludes disabled scopes and disabled individual skills from selected inventory and runtime roots.
+- Confirmed unit coverage for host-provided runtime skill roots proves Electron can pass a filtered runtime `load_skill` registry into the shared chat turn.
 - Browser console check reported 0 errors and 0 warnings after the smoke check.

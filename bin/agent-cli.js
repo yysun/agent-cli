@@ -456,6 +456,7 @@ function buildSkillInventoryMessage(skills) {
   return [
     "Available skills can be loaded through the `load_skill` tool.",
     "When a skill is relevant, call `load_skill` with the exact `skillId` before answering.",
+    "Skill IDs are not tool names; never call a skill ID directly as a tool.",
     "",
     ...lines
   ].join("\n");
@@ -729,6 +730,7 @@ async function runChatTurn({
   workspaceSystemPrompt,
   projectSystemPrompt,
   skillInventory,
+  runtimeSkillRoots,
   approvalGate,
   agentConfig,
   abortSignal
@@ -742,7 +744,7 @@ async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: buildRuntimeSkillRoots(),
+    skillRoots: runtimeSkillRoots ?? buildRuntimeSkillRoots(),
     ...Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}
   });
   const pendingUserMessage = {

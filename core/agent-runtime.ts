@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-06-04: Allowed hosts to pass filtered runtime skill roots so prompt inventory and `load_skill` stay aligned.
  * - 2026-05-27: Tightened JSDoc boundary types so editor check-js sees runtime options and callbacks correctly.
  * - 2026-05-28: Updated for `llm-runtime` 0.6.3 runtime-owned tool permissions and `answer_delta` events.
  * - 2026-05-27: Preserved plain-text final responses when the runtime rejects only the missing control-tool wrapper without persisting rejected retry drafts.
@@ -107,6 +108,7 @@ type RunChatTurnParams = {
   workspaceSystemPrompt?: string;
   projectSystemPrompt?: string;
   skillInventory: Array<{ skillId: string; description?: string }>;
+  runtimeSkillRoots?: string[];
   agentConfig?: RuntimeAgentConfig;
   approvalGate?: { requestApproval?: (request: Record<string, unknown>) => Promise<{ approved?: boolean; reason?: string }> };
   abortSignal?: AbortSignal;
@@ -545,6 +547,7 @@ export async function runChatTurn({
   workspaceSystemPrompt,
   projectSystemPrompt,
   skillInventory,
+  runtimeSkillRoots,
   approvalGate,
   agentConfig,
   abortSignal,
@@ -558,7 +561,7 @@ export async function runChatTurn({
   });
   const runtime = createRuntime({
     providers: runtimeSettings.providers,
-    skillRoots: buildRuntimeSkillRoots(),
+    skillRoots: runtimeSkillRoots ?? buildRuntimeSkillRoots(),
     ...(Object.keys(environmentDefaults).length > 0 ? { defaults: environmentDefaults } : {}),
   });
 

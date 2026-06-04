@@ -11,6 +11,7 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-06-04: Covered host-provided runtime skill roots for settings-filtered Electron turns.
  * - 2026-05-27: Added check-js annotations for mocked stream events and captured runtime callbacks.
  * - 2026-05-28: Covered omitted default built-ins and streamed `answer_delta` content for `llm-runtime` 0.6.3.
  * - 2026-05-27: Covered plain-text fallback when runtime rejects only the missing control-tool wrapper without persisting retry drafts.
@@ -289,6 +290,37 @@ describe('agent-runtime', () => {
     expect(result.assistantText).toBe('Hello world');
     expect(result.messages.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: 'Hello world' }));
     expect(runtimeDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses caller-provided runtime skill roots when a host filters available skills', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'answer_delta', delta: 'Done', iteration: 1 },
+      { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Done', messages: [] } },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const selectedSkillRoot = path.join(process.cwd(), 'selected-skills', 'agent-world-skill');
+
+    await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [
+        { skillId: 'agent-world-skill', description: 'Selected skill' },
+      ],
+      runtimeSkillRoots: [selectedSkillRoot],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+      },
+    });
+
+    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      skillRoots: [selectedSkillRoot],
+    }));
   });
 
   it('streams answer deltas as assistant content', async () => {

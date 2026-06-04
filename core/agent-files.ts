@@ -11,6 +11,7 @@
  * - Summarizes available skills so the model can choose `load_skill` targets.
  *
  * Recent changes:
+ * - 2026-06-04: Added shared settings-based skill filtering and runtime-root derivation for Electron chat turns.
  * - 2026-05-27: Made the runtime final-answer control-tool requirement explicit for `llm-runtime` completion.
  * - 2026-05-26: Gated global skill loading behind `AGENT_CLI_GLOBAL_SKILLS` and added `~/.agents/skills`.
  * - 2026-05-26: Removed selected-world skill discovery and switched workspace skills to `.agent-world/skills`.
@@ -27,6 +28,24 @@ import { GLOBAL_SKILLS_ROOTS, SKILLS_ROOT, SYSTEM_PROMPT_PATH } from './paths.js
 import { ensureWorkspaceWorld } from './workspace-store.js';
 
 export const GLOBAL_SKILLS_ENV_KEY = 'AGENT_CLI_GLOBAL_SKILLS';
+
+type SkillInventoryItem = {
+  skillId: string;
+  description?: string;
+  sourcePath?: string;
+  sourceScope?: 'user' | 'project';
+};
+
+type ScopedSkillInventory = {
+  user: SkillInventoryItem[];
+  project: SkillInventoryItem[];
+};
+
+type SkillSelectionSettings = {
+  globalEnabled?: boolean;
+  projectEnabled?: boolean;
+  disabledSkillKeys?: string[];
+};
 
 export const DEFAULT_SYSTEM_PROMPT = [
   'You are Agent CLI.',
@@ -263,6 +282,45 @@ export function flattenSkillInventoryByPrecedence(scopedInventory) {
   return [...skillsById.values()].sort((left, right) => left.skillId.localeCompare(right.skillId));
 }
 
+export function buildSkillSelectionKey(skill: {
+  skillId: string;
+  sourcePath?: string;
+  sourceScope?: string;
+}) {
+  return `${skill.sourceScope || 'skill'}:${skill.skillId}:${skill.sourcePath || ''}`;
+}
+
+export function selectSkillInventoryBySettings(
+  scopedInventory: ScopedSkillInventory,
+  selection: SkillSelectionSettings = {},
+) {
+  const disabledSkillKeys = new Set(selection.disabledSkillKeys ?? []);
+
+  return flattenSkillInventoryByPrecedence({
+    user: selection.globalEnabled === false
+      ? []
+      : scopedInventory.user.filter((skill) => !disabledSkillKeys.has(buildSkillSelectionKey(skill))),
+    project: selection.projectEnabled === false
+      ? []
+      : scopedInventory.project.filter((skill) => !disabledSkillKeys.has(buildSkillSelectionKey(skill))),
+  });
+}
+
+export function buildRuntimeSkillRootsFromInventory(skillInventory: SkillInventoryItem[]) {
+  const skillRoots = new Set<string>();
+
+  for (const skill of skillInventory) {
+    const sourcePath = String(skill.sourcePath ?? '').trim();
+    if (!sourcePath) {
+      continue;
+    }
+
+    skillRoots.add(path.dirname(sourcePath));
+  }
+
+  return [...skillRoots];
+}
+
 export async function loadSkillInventory() {
   return flattenSkillInventoryByPrecedence(await loadSkillInventoryByScope());
 }
@@ -283,6 +341,7 @@ export function buildSkillInventoryMessage(skills) {
   return [
     'Available skills can be loaded through the `load_skill` tool.',
     'When a skill is relevant, call `load_skill` with the exact `skillId` before answering.',
+    'Skill IDs are not tool names; never call a skill ID directly as a tool.',
     '',
     ...lines,
   ].join('\n');

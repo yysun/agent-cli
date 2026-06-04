@@ -6,6 +6,7 @@
  * - Validate AGENTS.md prompt loading and `SKILL.md` inventory behavior.
  *
  * Recent changes:
+ * - 2026-06-04: Covered settings-panel skill filtering and runtime root derivation.
  * - 2026-05-26: Added opt-in global skill loading coverage for both home skill roots.
  * - 2026-05-26: Removed selected-world skills and switched workspace skills to `.agent-world/skills`.
  */
@@ -251,7 +252,54 @@ describe('agent-files', () => {
       buildSkillInventoryMessage([
         { skillId: 'agent-cli-core', description: 'Core Agent CLI framing.' },
       ]),
+    ).toContain('Skill IDs are not tool names');
+    expect(
+      buildSkillInventoryMessage([
+        { skillId: 'agent-cli-core', description: 'Core Agent CLI framing.' },
+      ]),
     ).toContain('agent-cli-core');
+  });
+
+  it('selects runtime skill inventory and roots from settings-panel choices', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    const {
+      buildRuntimeSkillRootsFromInventory,
+      buildSkillSelectionKey,
+      selectSkillInventoryBySettings,
+    } = await loadAgentFiles(rootPath);
+    const userSkill = {
+      skillId: 'agent-world-skill',
+      description: 'User skill.',
+      sourcePath: path.join(rootPath, 'home-skills', 'agent-world-skill', 'SKILL.md'),
+      sourceScope: 'user',
+    };
+    const enabledProjectSkill = {
+      skillId: 'project-enabled',
+      description: 'Enabled project skill.',
+      sourcePath: path.join(rootPath, '.agent-world', 'skills', 'project-enabled', 'SKILL.md'),
+      sourceScope: 'project',
+    };
+    const disabledProjectSkill = {
+      skillId: 'project-disabled',
+      description: 'Disabled project skill.',
+      sourcePath: path.join(rootPath, '.agent-world', 'skills', 'project-disabled', 'SKILL.md'),
+      sourceScope: 'project',
+    };
+
+    const selectedSkills = selectSkillInventoryBySettings({
+      user: [userSkill],
+      project: [enabledProjectSkill, disabledProjectSkill],
+    }, {
+      globalEnabled: false,
+      projectEnabled: true,
+      disabledSkillKeys: [buildSkillSelectionKey(disabledProjectSkill)],
+    });
+
+    expect(selectedSkills.map((skill) => skill.skillId)).toEqual(['project-enabled']);
+    expect(buildRuntimeSkillRootsFromInventory(selectedSkills)).toEqual([
+      path.dirname(enabledProjectSkill.sourcePath),
+    ]);
   });
 
   it('returns an empty inventory when the skill root is missing or empty', async () => {
