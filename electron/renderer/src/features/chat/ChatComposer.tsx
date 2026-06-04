@@ -5,12 +5,14 @@
  * - Render message input and per-turn runtime options.
  *
  * Recent changes:
+ * - 2026-06-04: Added Enter key handling for single-line send and multi-line Cmd/Ctrl+Enter send.
  * - 2026-05-31: Preserved the existing composer send and resend button glyphs.
  * - 2026-05-31: Added React composer feature for send and edit/resend flows.
  */
-import { useEffect, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useEffect, useState } from 'react';
 import { REASONING_EFFORT_OPTIONS, TOOL_PERMISSION_OPTIONS } from '../../constants/runtime-options';
 import { Button, Select, Textarea } from '../../design-system';
+import { shouldSubmitComposerKey } from './composer-keybinding.js';
 
 export interface ChatComposerProps {
   busy: boolean;
@@ -43,8 +45,7 @@ export default function ChatComposer({
     }
   }, [editingContent, editingIndex]);
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitContent() {
     const submittedContent = content.trim();
     if (!submittedContent || busy) {
       return;
@@ -53,9 +54,32 @@ export default function ChatComposer({
     setContent('');
   }
 
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitContent();
+  }
+
+  async function handleMessageKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (!shouldSubmitComposerKey({
+      altKey: event.altKey,
+      busy,
+      content,
+      ctrlKey: event.ctrlKey,
+      isComposing: event.nativeEvent.isComposing,
+      key: event.key,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+    })) {
+      return;
+    }
+
+    event.preventDefault();
+    await submitContent();
+  }
+
   return (
     <form id="message-form" className="aw-composer" aria-label="Message composer" onSubmit={submit}>
-      <Textarea id="message-input" rows={2} aria-label="Message input" placeholder="Ask the agent..." value={content} onChange={(event) => setContent(event.target.value)} />
+      <Textarea id="message-input" rows={2} aria-label="Message input" placeholder="Ask the agent..." value={content} onChange={(event) => setContent(event.target.value)} onKeyDown={handleMessageKeyDown} />
       <div className="aw-composer-toolbar">
         <div className="aw-composer-actions">
           <Select id="tool-permission-select" aria-label="Tool permission" value={toolPermission} onChange={(event) => onToolPermissionChange(event.target.value)}>
