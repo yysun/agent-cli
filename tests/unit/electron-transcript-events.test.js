@@ -9,6 +9,7 @@
  * - Covers hidden tool-message mode, reasoning visibility, and compact runtime summaries.
  *
  * Recent changes:
+ * - 2026-06-04: Covered CLI-like tool title resolution for Electron transcript cards.
  * - 2026-06-03: Added coverage for Electron transcript event helpers.
  */
 import { describe, expect, it } from 'vitest';
@@ -17,9 +18,11 @@ import {
   summarizeModelResponse,
   summarizeToolCall,
   summarizeToolResult,
+  toolCallTitleFromRecord,
   toolNameFromRecord,
+  toolResultTitleFromRecord,
 } from '../../electron/renderer/src/features/chat/transcript-events.js';
-import { isToolRelatedMessage } from '../../electron/renderer/src/utils/message-utils.js';
+import { isToolRelatedMessage, resolveToolName, resolveToolTitle } from '../../electron/renderer/src/utils/message-utils.js';
 
 describe('transcript event helpers', () => {
   it('hides tool and model runtime events while preserving reasoning when tool messages are hidden', () => {
@@ -60,6 +63,7 @@ describe('transcript event helpers', () => {
 
   it('summarizes tool calls, tool results, model responses, and fallback names', () => {
     expect(toolNameFromRecord({ name: 'ask_user_input' }, 'tool')).toBe('ask_user_input');
+    expect(toolNameFromRecord({ function: { name: 'load_skill' } }, 'tool')).toBe('load_skill');
     expect(toolNameFromRecord(undefined, 'tool')).toBe('tool');
     expect(summarizeToolCall({ arguments: '{"question":"Choose"}' })).toBe('{"question":"Choose"}');
     expect(summarizeToolResult({ result: { ok: true, status: 'answered' } })).toBe('{"ok":true,"status":"answered"}');
@@ -68,5 +72,35 @@ describe('transcript event helpers', () => {
       providerStopReason: 'stop',
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
     })).toBe('stop=natural_stop, reason=stop, usage={"inputTokens":1,"outputTokens":2,"totalTokens":3}');
+  });
+
+  it('keeps persisted tool titles in the raw CLI-like form', () => {
+    expect(resolveToolName({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'tool-1', function: { name: 'ask_user_input' } }],
+    })).toBe('ask_user_input');
+    expect(resolveToolName({ role: 'assistant', content: 'Calling tool: load_skill\n{"id":"agent-world-skill"}' })).toBe('load_skill');
+    expect(resolveToolName(
+      { role: 'tool', tool_call_id: 'tool-1', content: '<skill_context id="agent-world-skill">' },
+      new Map([['tool-1', 'load_skill']]),
+    )).toBe('load_skill');
+  });
+
+  it('formats Electron tool titles from the CLI diagnostic row', () => {
+    expect(toolCallTitleFromRecord({
+      name: 'load_skill',
+      arguments: JSON.stringify({ skill_id: 'agent-world-skill' }),
+    })).toBe('load_skill {"skill_id":"agent-world-skill"}');
+    expect(toolResultTitleFromRecord({
+      name: 'load_skill',
+      durationMs: 5,
+      result: '<skill_context id="agent-world-skill">\nLoaded\n</skill_context>',
+    })).toBe('load_skill 5ms · 3 lines');
+    expect(resolveToolTitle({
+      role: 'tool',
+      tool_call_id: 'tool-1',
+      content: '<skill_context id="agent-world-skill">\nLoaded\n</skill_context>',
+    }, new Map([['tool-1', { name: 'load_skill', arguments: JSON.stringify({ skill_id: 'agent-world-skill' }) }]]))).toBe('load_skill 3 lines');
   });
 });

@@ -9,9 +9,12 @@
  * - Preserves reasoning visibility when tool-message cards are hidden.
  *
  * Recent changes:
+ * - 2026-06-04: Reused browser-safe CLI-style diagnostic formatting for Electron tool-card titles.
+ * - 2026-06-04: Accepted nested tool-call records when deriving CLI-like tool titles.
  * - 2026-06-03: Extracted runtime event filtering and summaries from `ChatTranscript`.
  */
 import type { AgentCliDesktopTurnEvent } from '../../types/desktop-api';
+import { formatToolCallTitle, formatToolResultTitle } from '../../utils/tool-title-format.js';
 
 export function compactJson(value: unknown): string {
   try {
@@ -27,8 +30,28 @@ export function truncate(value: string, maxLength = 260): string {
 }
 
 export function toolNameFromRecord(record: Record<string, unknown> | undefined, fallback: string): string {
-  const name = record?.name ?? record?.toolName;
+  const nestedFunction = record?.function && typeof record.function === 'object' ? record.function as Record<string, unknown> : undefined;
+  const name = record?.name ?? record?.toolName ?? nestedFunction?.name;
   return typeof name === 'string' && name.trim() ? name : fallback;
+}
+
+export function toolCallTitleFromRecord(toolCall: Record<string, unknown> | undefined): string {
+  if (!toolCall) {
+    return 'tool';
+  }
+
+  const name = toolNameFromRecord(toolCall, 'tool');
+  return formatToolCallTitle(name, typeof toolCall.arguments === 'string' ? toolCall.arguments : typeof toolCall.args === 'string' ? toolCall.args : undefined);
+}
+
+export function toolResultTitleFromRecord(toolResult: Record<string, unknown> | undefined): string {
+  if (!toolResult) {
+    return 'tool result';
+  }
+
+  const name = toolNameFromRecord(toolResult, 'tool result');
+  const durationMs = typeof toolResult.durationMs === 'number' ? toolResult.durationMs : undefined;
+  return formatToolResultTitle(name, 'result' in toolResult ? toolResult.result : toolResult, durationMs);
 }
 
 export function summarizeToolCall(toolCall: Record<string, unknown> | undefined): string {

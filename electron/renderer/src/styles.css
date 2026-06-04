@@ -10,6 +10,7 @@ Key features:
 - Includes the active-agent, streaming-card, tool-card, and status animations used by the source renderer.
 
 Recent changes:
+- 2026-06-04: Added right-aligned per-card collapse controls to Electron tool cards.
 - 2026-05-31: Added spacing for provider/model facts in the workspace summary card.
 - 2026-05-31: Pinned header regions so action buttons stay right-aligned and world agents stay centered.
 - 2026-05-31: Added compact header badge handling for agents loaded from world.json.
@@ -910,11 +911,23 @@ button:disabled {
   margin-bottom: 7px;
 }
 
+.aw-tool-card-collapsed .aw-tool-heading {
+  margin-bottom: 0;
+}
+
 .aw-tool-title {
+  min-width: 0;
   color: var(--foreground);
   font-size: 11px;
   font-weight: 750;
-  text-transform: lowercase;
+  overflow-wrap: anywhere;
+}
+
+.aw-tool-heading-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
 }
 
 .aw-tool-status {
@@ -926,6 +939,28 @@ button:disabled {
   font-size: 10px;
   font-weight: 700;
   text-transform: lowercase;
+}
+
+.aw-tool-collapse-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+  color: var(--muted-foreground);
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.aw-tool-collapse-button:hover,
+.aw-tool-collapse-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 48%, transparent);
+  outline-offset: 1px;
+  color: var(--foreground);
 }
 
 .aw-composer {
