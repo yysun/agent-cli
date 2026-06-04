@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-06-04: Streamed current-turn runtime events to the renderer as Electron verbose diagnostics.
  * - 2026-05-31: Returned active runtime provider and model in Electron workspace metadata.
  * - 2026-05-31: Loaded Electron workspace current chat from `.agent-world/chats/current.json` before returning startup state.
  * - 2026-05-31: Restored the last Electron workspace before loading env/runtime inputs and returned world summary metadata.
@@ -72,6 +73,7 @@ const CHAT_SELECT_CHANNEL = 'chat:select';
 const CHAT_GET_MESSAGES_CHANNEL = 'chat:getMessages';
 const CHAT_SEND_MESSAGE_CHANNEL = 'chat:sendMessage';
 const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
+const TURN_EVENT_CHANNEL = 'turn:event';
 const HUMAN_INPUT_REQUEST_CHANNEL = 'humanInput:request';
 const HUMAN_INPUT_ANSWER_CHANNEL = 'humanInput:answer';
 const RENDERER_URL_ENV = 'AGENT_CLI_ELECTRON_RENDERER_URL';
@@ -132,6 +134,8 @@ type TurnEvent = {
   modelResponse?: Record<string, unknown>;
   createdAt: string;
 };
+
+type TurnEventRecorder = (event: Omit<TurnEvent, 'createdAt'>) => void;
 
 type SendMessageRequest = AgentTurnRequest & {
   content?: string;
@@ -409,6 +413,16 @@ async function executeRuntimeTurn(params: {
   const toolCalls: Array<Record<string, unknown>> = [];
   const toolResults: Array<Record<string, unknown>> = [];
   const turnEvents: TurnEvent[] = [];
+  const recordTurnEvent: TurnEventRecorder = (event) => {
+    const turnEvent = {
+      ...event,
+      createdAt: new Date().toISOString(),
+    };
+    turnEvents.push(turnEvent);
+    if (params.rendererWebContents && !params.rendererWebContents.isDestroyed()) {
+      params.rendererWebContents.send(TURN_EVENT_CHANNEL, turnEvent);
+    }
+  };
 
   const result = await runChatTurn({
     chat: params.chat,
@@ -429,18 +443,16 @@ async function executeRuntimeTurn(params: {
       ].find((value) => typeof value === 'string' && value.length > 0);
 
       if (reasoningText) {
-        turnEvents.push({
+        recordTurnEvent({
           type: 'reasoning',
           text: reasoningText,
-          createdAt: new Date().toISOString(),
         });
       }
 
       for (const warning of chunk.warnings ?? []) {
-        turnEvents.push({
+        recordTurnEvent({
           type: 'warning',
           text: String(warning && typeof warning === 'object' && 'message' in warning ? warning.message : warning),
-          createdAt: new Date().toISOString(),
         });
       }
 
@@ -448,34 +460,30 @@ async function executeRuntimeTurn(params: {
         ...(Array.isArray(chunk.errors) ? chunk.errors : []),
         ...(chunk.error ? [chunk.error] : []),
       ]) {
-        turnEvents.push({
+        recordTurnEvent({
           type: 'error',
           text: String(streamError && typeof streamError === 'object' && 'message' in streamError ? streamError.message : streamError),
-          createdAt: new Date().toISOString(),
         });
       }
     },
     onModelResponse: (modelResponse) => {
-      turnEvents.push({
+      recordTurnEvent({
         type: 'model_response',
         modelResponse: { ...modelResponse },
-        createdAt: new Date().toISOString(),
       });
     },
     onToolCall: (toolCall) => {
       toolCalls.push({ ...toolCall });
-      turnEvents.push({
+      recordTurnEvent({
         type: 'tool_call',
         toolCall: { ...toolCall },
-        createdAt: new Date().toISOString(),
       });
     },
     onToolResult: (toolResult) => {
       toolResults.push({ ...toolResult });
-      turnEvents.push({
+      recordTurnEvent({
         type: 'tool_result',
         toolResult: { ...toolResult },
-        createdAt: new Date().toISOString(),
       });
     },
     handleToolCall: async ({ toolCall, toolName, arguments: toolArguments }) => {

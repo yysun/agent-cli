@@ -9,6 +9,7 @@
  * - Shows reasoning/thinking, tool calls, tool results, warnings, errors, and model-response summaries.
  *
  * Recent changes:
+ * - 2026-06-04: Updated hidden diagnostics empty state for Verbose mode.
  * - 2026-06-04: Added per-card collapse controls for tool-message transcript content.
  * - 2026-06-03: Reused deterministic runtime event helpers for labels, summaries, and filtering.
  * - 2026-06-03: Added Electron runtime activity cards for CLI-like reasoning and tool display.
@@ -192,7 +193,7 @@ export default function ChatTranscript({ messages, turnEvents, showToolMessages,
   return (
     <div id="message-list" className="aw-message-list">
       {empty ? (
-        <div className="aw-empty-state">{messages.length === 0 ? 'Select a chat or send a message to begin.' : 'Tool messages hidden.'}</div>
+        <div className="aw-empty-state">{messages.length === 0 ? 'Select a chat or send a message to begin.' : 'Verbose mode disabled.'}</div>
       ) : null}
       {visibleMessages.map(({ message, index }) => {
         if (isToolRelatedMessage(message)) {

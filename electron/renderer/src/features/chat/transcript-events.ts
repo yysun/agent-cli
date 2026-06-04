@@ -6,9 +6,11 @@
  *
  * Key features:
  * - Keeps tool/reasoning transcript behavior deterministic and testable.
- * - Preserves reasoning visibility when tool-message cards are hidden.
+ * - Gates reasoning and runtime diagnostics behind Electron verbose mode.
  *
  * Recent changes:
+ * - 2026-06-04: Preserved raw verbose tool call/result body text when expanded.
+ * - 2026-06-04: Hid reasoning with other runtime diagnostics when verbose mode is disabled.
  * - 2026-06-04: Reused browser-safe CLI-style diagnostic formatting for Electron tool-card titles.
  * - 2026-06-04: Accepted nested tool-call records when deriving CLI-like tool titles.
  * - 2026-06-03: Extracted runtime event filtering and summaries from `ChatTranscript`.
@@ -59,7 +61,7 @@ export function summarizeToolCall(toolCall: Record<string, unknown> | undefined)
     return 'Tool call requested.';
   }
 
-  return truncate(String(toolCall.arguments ?? toolCall.args ?? 'No arguments.'));
+  return String(toolCall.arguments ?? toolCall.args ?? 'No arguments.');
 }
 
 export function summarizeToolResult(toolResult: Record<string, unknown> | undefined): string {
@@ -67,7 +69,7 @@ export function summarizeToolResult(toolResult: Record<string, unknown> | undefi
     return 'No tool output.';
   }
 
-  return truncate(typeof toolResult.result === 'string' ? toolResult.result : compactJson(toolResult.result));
+  return typeof toolResult.result === 'string' ? toolResult.result : compactJson(toolResult.result);
 }
 
 export function summarizeModelResponse(modelResponse: Record<string, unknown> | undefined): string {
@@ -86,7 +88,8 @@ export function summarizeModelResponse(modelResponse: Record<string, unknown> | 
 
 export function isTurnEventVisible(event: AgentCliDesktopTurnEvent, showToolMessages: boolean): boolean {
   return showToolMessages || (
-    event.type !== 'tool_call'
+    event.type !== 'reasoning'
+    && event.type !== 'tool_call'
     && event.type !== 'tool_result'
     && event.type !== 'model_response'
   );

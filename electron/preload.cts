@@ -11,6 +11,7 @@
  * - Avoids exposing Node.js or Electron primitives directly to web code.
  *
  * Recent changes:
+ * - 2026-06-04: Exposed a current-turn runtime event subscription for Electron verbose mode.
  * - 2026-05-31: Added runtime provider/model metadata to workspace IPC responses.
  * - 2026-05-31: Added optional workspace world summary metadata to workspace IPC responses.
  * - 2026-05-26: Added workspace, chat selection, send, and edit/resend bridge methods.
@@ -30,6 +31,7 @@ const CHAT_SELECT_CHANNEL = 'chat:select';
 const CHAT_GET_MESSAGES_CHANNEL = 'chat:getMessages';
 const CHAT_SEND_MESSAGE_CHANNEL = 'chat:sendMessage';
 const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
+const TURN_EVENT_CHANNEL = 'turn:event';
 const HUMAN_INPUT_REQUEST_CHANNEL = 'humanInput:request';
 const HUMAN_INPUT_ANSWER_CHANNEL = 'humanInput:answer';
 
@@ -210,6 +212,7 @@ export type AgentCliDesktopApi = {
     stream?: boolean;
     historyMessageLimit?: number;
   }) => Promise<AgentCliDesktopRunTurnResponse>;
+  onTurnEvent: (callback: (event: AgentCliDesktopTurnEvent) => void) => () => void;
   onHumanInputRequest: (callback: (request: AgentCliDesktopHumanInputRequest) => void) => () => void;
   submitHumanInputAnswer: (answer: AgentCliDesktopHumanInputAnswer) => Promise<{ ok: boolean }>;
 };
@@ -243,6 +246,11 @@ const desktopApi: AgentCliDesktopApi = {
     CHAT_EDIT_AND_RESEND_CHANNEL,
     request,
   ) as Promise<AgentCliDesktopRunTurnResponse>,
+  onTurnEvent: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, turnEvent: AgentCliDesktopTurnEvent) => callback(turnEvent);
+    ipcRenderer.on(TURN_EVENT_CHANNEL, listener);
+    return () => ipcRenderer.removeListener(TURN_EVENT_CHANNEL, listener);
+  },
   onHumanInputRequest: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, request: AgentCliDesktopHumanInputRequest) => callback(request);
     ipcRenderer.on(HUMAN_INPUT_REQUEST_CHANNEL, listener);

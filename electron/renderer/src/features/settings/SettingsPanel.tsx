@@ -5,6 +5,7 @@
  * - Render local renderer settings.
  *
  * Recent changes:
+ * - 2026-06-04: Renamed the tool diagnostics toggle to Verbose mode.
  * - 2026-05-31: Replaced settings checkbox rendering with the Agent World-style switch primitive.
  * - 2026-05-31: Added React settings panel with theme, tools, skills, and logs sections.
  */
@@ -115,9 +116,9 @@ export default function SettingsPanel({
         </div>
       </PanelSection>
 
-      <PanelSection title="Show tool messages" className="aw-tools-section">
+      <PanelSection title="Verbose mode" className="aw-tools-section">
         <div className="aw-switch-row aw-switch-control">
-          <Switch id="show-tool-messages-toggle" aria-label="Show tool messages" checked={showToolMessages} onClick={() => onShowToolMessagesChange(!showToolMessages)} />
+          <Switch id="show-tool-messages-toggle" aria-label="Verbose mode" checked={showToolMessages} onClick={() => onShowToolMessagesChange(!showToolMessages)} />
         </div>
       </PanelSection>
 

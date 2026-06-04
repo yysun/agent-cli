@@ -6,9 +6,11 @@
  * - Validate renderer runtime-event filtering and summaries used by the Electron transcript.
  *
  * Key features:
- * - Covers hidden tool-message mode, reasoning visibility, and compact runtime summaries.
+ * - Covers verbose-mode filtering, ordinary message visibility, and compact runtime summaries.
  *
  * Recent changes:
+ * - 2026-06-04: Covered raw expanded verbose tool bodies.
+ * - 2026-06-04: Covered Electron verbose-mode gating for reasoning and runtime diagnostics.
  * - 2026-06-04: Covered CLI-like tool title resolution for Electron transcript cards.
  * - 2026-06-03: Added coverage for Electron transcript event helpers.
  */
@@ -25,7 +27,7 @@ import {
 import { isToolRelatedMessage, resolveToolName, resolveToolTitle } from '../../electron/renderer/src/utils/message-utils.js';
 
 describe('transcript event helpers', () => {
-  it('hides tool and model runtime events while preserving reasoning when tool messages are hidden', () => {
+  it('hides verbose runtime events while preserving warnings and errors when verbose mode is disabled', () => {
     const events = [
       { type: 'reasoning', text: 'thinking', createdAt: '2026-06-03T00:00:00.000Z' },
       { type: 'tool_call', toolCall: { name: 'ask_user_input' }, createdAt: '2026-06-03T00:00:01.000Z' },
@@ -35,11 +37,7 @@ describe('transcript event helpers', () => {
       { type: 'error', text: 'error', createdAt: '2026-06-03T00:00:05.000Z' },
     ];
 
-    expect(events.filter((event) => isTurnEventVisible(event, false)).map((event) => event.type)).toEqual([
-      'reasoning',
-      'warning',
-      'error',
-    ]);
+    expect(events.filter((event) => isTurnEventVisible(event, false)).map((event) => event.type)).toEqual(['warning', 'error']);
     expect(events.filter((event) => isTurnEventVisible(event, true)).map((event) => event.type)).toEqual([
       'reasoning',
       'tool_call',
@@ -72,6 +70,13 @@ describe('transcript event helpers', () => {
       providerStopReason: 'stop',
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
     })).toBe('stop=natural_stop, reason=stop, usage={"inputTokens":1,"outputTokens":2,"totalTokens":3}');
+  });
+
+  it('preserves expanded verbose tool call and result bodies without truncating whitespace', () => {
+    const longResult = `first line\n${'x'.repeat(320)}\nlast line`;
+
+    expect(summarizeToolCall({ arguments: '{\n  "path": "/tmp/example"\n}' })).toBe('{\n  "path": "/tmp/example"\n}');
+    expect(summarizeToolResult({ result: longResult })).toBe(longResult);
   });
 
   it('keeps persisted tool titles in the raw CLI-like form', () => {

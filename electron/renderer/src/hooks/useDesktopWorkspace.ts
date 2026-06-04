@@ -10,6 +10,7 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-06-04: Appended live Electron turn events and defaulted verbose diagnostics off.
  * - 2026-06-03: Added transient human-input prompt state for Electron runtime turns.
  * - 2026-06-03: Clear stale pending human-input prompts after completed send/edit responses.
  * - 2026-05-31: Hydrated active runtime provider/model metadata from Electron IPC.
@@ -96,7 +97,7 @@ export function useDesktopWorkspace() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [themePreference, setThemePreferenceState] = useState<ThemePreference>(() => getStoredThemePreference());
-  const [showToolMessages, setShowToolMessages] = useState(true);
+  const [showToolMessages, setShowToolMessages] = useState(false);
   const [globalSkillsEnabled, setGlobalSkillsEnabled] = useState(true);
   const [projectSkillsEnabled, setProjectSkillsEnabled] = useState(true);
   const [toolPermission, setToolPermission] = useState('auto');
@@ -298,6 +299,7 @@ export function useDesktopWorkspace() {
     }
 
     await withBusy(editingIndex === null ? 'Sending message' : 'Resending edited message', async () => {
+      setTurnEvents([]);
       const agentConfig: Record<string, unknown> = {};
       if (toolPermission) {
         agentConfig.toolPermission = toolPermission;
@@ -371,6 +373,16 @@ export function useDesktopWorkspace() {
       log('error', safeErrorMessage(error));
     });
   }, [loadWorkspace, log]);
+
+  useEffect(() => {
+    if (!desktopApi) {
+      return undefined;
+    }
+
+    return desktopApi.onTurnEvent((event) => {
+      setTurnEvents((currentEvents) => [...currentEvents, event]);
+    });
+  }, [desktopApi]);
 
   useEffect(() => {
     if (!desktopApi) {
