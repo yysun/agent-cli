@@ -9,6 +9,7 @@
  * - Covers verbose-mode filtering, ordinary message visibility, and compact runtime summaries.
  *
  * Recent changes:
+ * - 2026-06-04: Covered accumulated thinking chunks for one rendered reasoning block.
  * - 2026-06-04: Covered raw expanded verbose tool bodies.
  * - 2026-06-04: Covered Electron verbose-mode gating for reasoning and runtime diagnostics.
  * - 2026-06-04: Covered CLI-like tool title resolution for Electron transcript cards.
@@ -16,6 +17,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  accumulateTurnEvents,
+  appendTurnEvent,
   isTurnEventVisible,
   summarizeModelResponse,
   summarizeToolCall,
@@ -27,6 +30,25 @@ import {
 import { isToolRelatedMessage, resolveToolName, resolveToolTitle } from '../../electron/renderer/src/utils/message-utils.js';
 
 describe('transcript event helpers', () => {
+  it('accumulates adjacent thinking chunks into one reasoning event', () => {
+    const events = accumulateTurnEvents([
+      { type: 'reasoning', text: 'The', createdAt: '2026-06-03T00:00:00.000Z' },
+      { type: 'reasoning', text: ' user', createdAt: '2026-06-03T00:00:01.000Z' },
+      { type: 'reasoning', text: ' is asking', createdAt: '2026-06-03T00:00:02.000Z' },
+      { type: 'tool_call', toolCall: { name: 'load_skill' }, createdAt: '2026-06-03T00:00:03.000Z' },
+      { type: 'reasoning', text: 'Next thought', createdAt: '2026-06-03T00:00:04.000Z' },
+    ]);
+
+    expect(events).toEqual([
+      { type: 'reasoning', text: 'The user is asking', createdAt: '2026-06-03T00:00:00.000Z' },
+      { type: 'tool_call', toolCall: { name: 'load_skill' }, createdAt: '2026-06-03T00:00:03.000Z' },
+      { type: 'reasoning', text: 'Next thought', createdAt: '2026-06-03T00:00:04.000Z' },
+    ]);
+    expect(appendTurnEvent([], { type: 'reasoning', text: 'Thinking', createdAt: '2026-06-03T00:00:00.000Z' })).toEqual([
+      { type: 'reasoning', text: 'Thinking', createdAt: '2026-06-03T00:00:00.000Z' },
+    ]);
+  });
+
   it('hides verbose runtime events while preserving warnings and errors when verbose mode is disabled', () => {
     const events = [
       { type: 'reasoning', text: 'thinking', createdAt: '2026-06-03T00:00:00.000Z' },

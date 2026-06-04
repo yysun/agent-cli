@@ -10,6 +10,7 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-06-04: Accumulated streamed thinking chunks into one reasoning event.
  * - 2026-06-04: Appended live Electron turn events and defaulted verbose diagnostics off.
  * - 2026-06-03: Added transient human-input prompt state for Electron runtime turns.
  * - 2026-06-03: Clear stale pending human-input prompts after completed send/edit responses.
@@ -19,6 +20,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { THEME_STORAGE_KEY } from '../constants/storage';
+import { accumulateTurnEvents, appendTurnEvent } from '../features/chat/transcript-events';
 import type {
   AgentCliDesktopApi,
   AgentCliDesktopChatSummary,
@@ -326,7 +328,7 @@ export function useDesktopWorkspace() {
 
       setCurrentChatId(response.chatId || currentChatId);
       setMessages(response.messages || []);
-      setTurnEvents(response.turnEvents || []);
+      setTurnEvents(accumulateTurnEvents(response.turnEvents || []));
       setPendingHumanInputRequest(null);
       clearEdit();
       await refreshChats();
@@ -380,7 +382,7 @@ export function useDesktopWorkspace() {
     }
 
     return desktopApi.onTurnEvent((event) => {
-      setTurnEvents((currentEvents) => [...currentEvents, event]);
+      setTurnEvents((currentEvents) => appendTurnEvent(currentEvents, event));
     });
   }, [desktopApi]);
 

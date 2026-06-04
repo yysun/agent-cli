@@ -9,6 +9,7 @@
  * - Gates reasoning and runtime diagnostics behind Electron verbose mode.
  *
  * Recent changes:
+ * - 2026-06-04: Added reasoning-event accumulation so thinking streams render as one card.
  * - 2026-06-04: Preserved raw verbose tool call/result body text when expanded.
  * - 2026-06-04: Hid reasoning with other runtime diagnostics when verbose mode is disabled.
  * - 2026-06-04: Reused browser-safe CLI-style diagnostic formatting for Electron tool-card titles.
@@ -17,6 +18,25 @@
  */
 import type { AgentCliDesktopTurnEvent } from '../../types/desktop-api';
 import { formatToolCallTitle, formatToolResultTitle } from '../../utils/tool-title-format.js';
+
+export function appendTurnEvent(events: AgentCliDesktopTurnEvent[], event: AgentCliDesktopTurnEvent): AgentCliDesktopTurnEvent[] {
+  const lastEvent = events.at(-1);
+  if (lastEvent?.type === 'reasoning' && event.type === 'reasoning') {
+    return [
+      ...events.slice(0, -1),
+      {
+        ...lastEvent,
+        text: `${lastEvent.text ?? ''}${event.text ?? ''}`,
+      },
+    ];
+  }
+
+  return [...events, event];
+}
+
+export function accumulateTurnEvents(events: AgentCliDesktopTurnEvent[]): AgentCliDesktopTurnEvent[] {
+  return events.reduce<AgentCliDesktopTurnEvent[]>((accumulatedEvents, event) => appendTurnEvent(accumulatedEvents, event), []);
+}
 
 export function compactJson(value: unknown): string {
   try {

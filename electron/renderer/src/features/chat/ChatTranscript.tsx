@@ -9,13 +9,14 @@
  * - Shows reasoning/thinking, tool calls, tool results, warnings, errors, and model-response summaries.
  *
  * Recent changes:
+ * - 2026-06-04: Auto-scrolled the transcript to the end as messages and runtime events stream in.
  * - 2026-06-04: Updated hidden diagnostics empty state for Verbose mode.
  * - 2026-06-04: Added per-card collapse controls for tool-message transcript content.
  * - 2026-06-03: Reused deterministic runtime event helpers for labels, summaries, and filtering.
  * - 2026-06-03: Added Electron runtime activity cards for CLI-like reasoning and tool display.
  * - 2026-05-31: Added React transcript feature for Agent CLI messages.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentCliDesktopRuntimeMessage, AgentCliDesktopTurnEvent } from '../../types/desktop-api';
 import { formatTime } from '../../utils/format';
 import { isToolRelatedMessage, messageRoleLabel, resolveToolStatus, resolveToolTitle } from '../../utils/message-utils';
@@ -180,6 +181,7 @@ function renderTurnEvent(
 
 export default function ChatTranscript({ messages, turnEvents, showToolMessages, onStartEdit }: ChatTranscriptProps) {
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const handleToggleCard = (key: string) => {
     setCollapsedCards((cards) => toggleCollapsedCards(cards, key));
   };
@@ -190,8 +192,21 @@ export default function ChatTranscript({ messages, turnEvents, showToolMessages,
   const visibleTurnEvents = turnEvents.filter((event) => isTurnEventVisible(event, showToolMessages));
   const empty = visibleMessages.length === 0 && visibleTurnEvents.length === 0;
 
+  useEffect(() => {
+    const messageList = messageListRef.current;
+    if (!messageList) {
+      return undefined;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      messageList.scrollTop = messageList.scrollHeight;
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [messages, showToolMessages, turnEvents]);
+
   return (
-    <div id="message-list" className="aw-message-list">
+    <div id="message-list" className="aw-message-list" ref={messageListRef}>
       {empty ? (
         <div className="aw-empty-state">{messages.length === 0 ? 'Select a chat or send a message to begin.' : 'Verbose mode disabled.'}</div>
       ) : null}
