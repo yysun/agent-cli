@@ -16,6 +16,8 @@
  * - 2026-05-31: Loaded Electron workspace current chat from `.agent-world/chats/current.json` before returning startup state.
  * - 2026-05-31: Restored the last Electron workspace before loading env/runtime inputs and returned world summary metadata.
  * - 2026-05-31: Added Vite React renderer loading for dev-server and built renderer modes.
+ * - 2026-06-03: Added Electron human-input IPC handling for runtime `ask_user_input` turns.
+ * - 2026-06-03: Moved pending human-input session lifecycle into a testable helper.
  * - 2026-05-31: Matched the reference Electron app's hidden-inset macOS titlebar for sidebar controls.
  * - 2026-05-26: Added persisted workspace/chat IPC flows for the Electron renderer.
  * - 2026-05-26: Added IPC-backed Agent CLI runtime execution using core/agent-runtime.ts.
@@ -24,7 +26,7 @@
  * - 2026-05-24: Allowed same-origin dev-server navigation while keeping external links out of the shell.
  * - 2026-05-24: Added the initial minimal Electron shell entry point.
  */
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -40,6 +42,10 @@ import {
   loadSkillInventoryByScope,
   loadWorkspaceSystemPrompt,
 } from '../core/agent-files.js';
+import {
+  parseHumanInputRequest,
+} from '../cli/src/human-input-ui.js';
+import { HumanInputSessionManager } from './human-input-session.js';
 import { resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
 import { WORKSPACE_ROOT } from '../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../core/workspace-environment.js';
@@ -66,8 +72,11 @@ const CHAT_SELECT_CHANNEL = 'chat:select';
 const CHAT_GET_MESSAGES_CHANNEL = 'chat:getMessages';
 const CHAT_SEND_MESSAGE_CHANNEL = 'chat:sendMessage';
 const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
+const HUMAN_INPUT_REQUEST_CHANNEL = 'humanInput:request';
+const HUMAN_INPUT_ANSWER_CHANNEL = 'humanInput:answer';
 const RENDERER_URL_ENV = 'AGENT_CLI_ELECTRON_RENDERER_URL';
 const ELECTRON_WORKSPACE_STATE_FILE = 'workspace-state.json';
+const HUMAN_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
 
 type AgentTurnMessage = {
   role?: string;
@@ -113,6 +122,15 @@ type WorkspaceMetadata = {
   skillInventory: Awaited<ReturnType<typeof loadSkillInventoryByScope>>;
   globalSkillsEnabled: boolean;
   projectSkillsEnabled: boolean;
+};
+
+type TurnEvent = {
+  type: 'reasoning' | 'warning' | 'error' | 'model_response' | 'tool_call' | 'tool_result';
+  text?: string;
+  toolCall?: Record<string, unknown>;
+  toolResult?: Record<string, unknown>;
+  modelResponse?: Record<string, unknown>;
+  createdAt: string;
 };
 
 type SendMessageRequest = AgentTurnRequest & {
@@ -170,6 +188,10 @@ function hasSameOrigin(leftUrl: string, rightUrl: string): boolean {
 }
 
 let rendererMode: 'electron' = 'electron';
+const humanInputSessions = new HumanInputSessionManager({
+  requestChannel: HUMAN_INPUT_REQUEST_CHANNEL,
+  timeoutMs: HUMAN_INPUT_TIMEOUT_MS,
+});
 
 function normalizeChatMessages(messages: unknown): AgentTurnMessage[] {
   if (!Array.isArray(messages)) {
@@ -380,11 +402,13 @@ async function executeRuntimeTurn(params: {
   chat: { id: string; messages: AgentTurnMessage[]; createdAt?: string; updatedAt?: string };
   userMessage: string;
   request: Pick<AgentTurnRequest, 'agentConfig' | 'skillSelection' | 'stream' | 'historyMessageLimit'>;
+  rendererWebContents?: WebContents;
 }) {
   const { agentConfig, workspaceSystemPrompt, skillInventory } = await loadRuntimeInputs(params.request);
   const streamChunks: Array<Record<string, unknown>> = [];
   const toolCalls: Array<Record<string, unknown>> = [];
   const toolResults: Array<Record<string, unknown>> = [];
+  const turnEvents: TurnEvent[] = [];
 
   const result = await runChatTurn({
     chat: params.chat,
@@ -397,12 +421,73 @@ async function executeRuntimeTurn(params: {
     agentConfig,
     onStreamChunk: (chunk) => {
       streamChunks.push({ ...chunk });
+      const reasoningText = [
+        chunk.reasoningContent,
+        chunk.reasoning,
+        chunk.reasoningText,
+        chunk.thinking,
+      ].find((value) => typeof value === 'string' && value.length > 0);
+
+      if (reasoningText) {
+        turnEvents.push({
+          type: 'reasoning',
+          text: reasoningText,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      for (const warning of chunk.warnings ?? []) {
+        turnEvents.push({
+          type: 'warning',
+          text: String(warning && typeof warning === 'object' && 'message' in warning ? warning.message : warning),
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      for (const streamError of [
+        ...(Array.isArray(chunk.errors) ? chunk.errors : []),
+        ...(chunk.error ? [chunk.error] : []),
+      ]) {
+        turnEvents.push({
+          type: 'error',
+          text: String(streamError && typeof streamError === 'object' && 'message' in streamError ? streamError.message : streamError),
+          createdAt: new Date().toISOString(),
+        });
+      }
+    },
+    onModelResponse: (modelResponse) => {
+      turnEvents.push({
+        type: 'model_response',
+        modelResponse: { ...modelResponse },
+        createdAt: new Date().toISOString(),
+      });
     },
     onToolCall: (toolCall) => {
       toolCalls.push({ ...toolCall });
+      turnEvents.push({
+        type: 'tool_call',
+        toolCall: { ...toolCall },
+        createdAt: new Date().toISOString(),
+      });
     },
     onToolResult: (toolResult) => {
       toolResults.push({ ...toolResult });
+      turnEvents.push({
+        type: 'tool_result',
+        toolResult: { ...toolResult },
+        createdAt: new Date().toISOString(),
+      });
+    },
+    handleToolCall: async ({ toolCall, toolName, arguments: toolArguments }) => {
+      const humanInputRequest = parseHumanInputRequest(toolName, toolArguments, toolCall.id);
+      if (!humanInputRequest) {
+        return { handled: false };
+      }
+
+      return {
+        handled: true,
+        result: await humanInputSessions.requestInput(params.rendererWebContents, humanInputRequest),
+      };
     },
   });
 
@@ -419,10 +504,11 @@ async function executeRuntimeTurn(params: {
     streamChunks,
     toolCalls,
     toolResults,
+    turnEvents,
   };
 }
 
-async function runAgentTurn(rawRequest: AgentTurnRequest = {}) {
+async function runAgentTurn(rawRequest: AgentTurnRequest = {}, rendererWebContents?: WebContents) {
   const request = normalizeAgentTurnRequest(rawRequest);
   const userMessage = String(request.userMessage ?? request.message ?? '').trim();
   if (!userMessage) {
@@ -441,6 +527,7 @@ async function runAgentTurn(rawRequest: AgentTurnRequest = {}) {
     chat,
     userMessage,
     request,
+    rendererWebContents,
   });
 }
 
@@ -531,7 +618,7 @@ async function getChatMessages(request: ChatIdRequest = {}) {
   };
 }
 
-async function sendChatMessage(request: SendMessageRequest = {}) {
+async function sendChatMessage(request: SendMessageRequest = {}, rendererWebContents?: WebContents) {
   await prepareElectronWorkspace(request.workspaceRoot);
   const userMessage = String(request.content ?? request.userMessage ?? request.message ?? '').trim();
   if (!userMessage) {
@@ -550,6 +637,7 @@ async function sendChatMessage(request: SendMessageRequest = {}) {
     },
     userMessage,
     request,
+    rendererWebContents,
   });
 }
 
@@ -566,7 +654,7 @@ function resolveMessageIndex(chat: { messages: AgentTurnMessage[] }, request: Ed
   return chat.messages.findIndex((message) => String((message as Record<string, unknown>).id ?? '') === messageId);
 }
 
-async function editAndResendMessage(request: EditAndResendRequest = {}) {
+async function editAndResendMessage(request: EditAndResendRequest = {}, rendererWebContents?: WebContents) {
   await prepareElectronWorkspace();
   const chatId = String(request.chatId ?? '').trim();
   const replacementContent = String(request.content ?? request.message ?? '').trim();
@@ -599,6 +687,7 @@ async function editAndResendMessage(request: EditAndResendRequest = {}) {
     },
     userMessage: replacementContent,
     request,
+    rendererWebContents,
   });
 }
 
@@ -612,7 +701,7 @@ async function invokeWithWorkspace<T>(handler: () => Promise<T>): Promise<T> {
 }
 
 function registerAgentIpcHandlers(): void {
-  const handlers: Array<[string, (request: any) => Promise<unknown>]> = [
+  const handlers: Array<[string, (request: any, rendererWebContents: WebContents) => Promise<unknown>]> = [
     [AGENT_RUN_TURN_CHANNEL, runAgentTurn],
     [WORKSPACE_GET_CHANNEL, getWorkspace],
     [WORKSPACE_SELECT_CHANNEL, selectWorkspace],
@@ -625,7 +714,7 @@ function registerAgentIpcHandlers(): void {
   ];
 
   for (const [channel, handler] of handlers) {
-    ipcMain.handle(channel, (_event, request) => invokeWithWorkspace(() => handler(request)));
+    ipcMain.handle(channel, (event, request) => invokeWithWorkspace(() => handler(request, event.sender)));
   }
 }
 
@@ -636,6 +725,7 @@ function registerIpcHandlers(): void {
     platform: process.platform,
     rendererMode,
   }));
+  ipcMain.handle(HUMAN_INPUT_ANSWER_CHANNEL, (_event, answer) => humanInputSessions.resolveAnswer(answer));
   registerAgentIpcHandlers();
 }
 

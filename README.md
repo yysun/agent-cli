@@ -169,3 +169,5 @@ npm run electron:build
 ```
 
 `npm test` runs syntax, unit, and local `agent-cli` E2E checks.
+
+Real-LLM E2E runs (`npm run test:e2e`) use provider `google` with model `gemini-2.5-flash` and require `GOOGLE_API_KEY`.

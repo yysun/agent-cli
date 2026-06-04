@@ -13,4 +13,5 @@ Rules for AI agents working in this repo:
 - Deleted surfaces: no relay server, web app, `agent-world-cli`, `agent-cli --remote`, worlds, or persisted agents.
 - Safety: keep execution local-first. Do not move workspace files, tools, provider keys, or long-term memory off-machine.
 - Validation: prefer targeted checks. Key commands: `npm run build`, `npm run check`, `npm run test:unit`, `npm run test:e2e`, `npm run electron:build`.
+- E2E live LLM: when a real model is needed in `test:e2e`, use provider `google` with model `gemini-2.5-flash` (requires `GOOGLE_API_KEY`).
 - Editing: prefer root-cause fixes, keep changes minimal, update tests/docs when behavior changes, and do not describe outdated layouts as current.

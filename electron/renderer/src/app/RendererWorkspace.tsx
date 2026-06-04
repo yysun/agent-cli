@@ -20,6 +20,7 @@ import AppFrameLayout from './AppFrameLayout';
 import { Icon, IconButton } from '../design-system';
 import ChatComposer from '../features/chat/ChatComposer';
 import ChatTranscript from '../features/chat/ChatTranscript';
+import HumanInputPrompt from '../features/chat/HumanInputPrompt';
 import SettingsPanel from '../features/settings/SettingsPanel';
 import WorkspaceSidebar from '../features/workspace/WorkspaceSidebar';
 import { useDesktopWorkspace } from '../hooks/useDesktopWorkspace';
@@ -128,9 +129,16 @@ export default function RendererWorkspace() {
             <section className="aw-chat-column" aria-label="Chat transcript">
               <ChatTranscript
                 messages={workspace.messages}
+                turnEvents={workspace.turnEvents}
                 showToolMessages={workspace.showToolMessages}
                 onStartEdit={workspace.actions.startEdit}
               />
+              {workspace.pendingHumanInputRequest ? (
+                <HumanInputPrompt
+                  request={workspace.pendingHumanInputRequest}
+                  onSubmitAnswer={workspace.actions.submitHumanInputAnswer}
+                />
+              ) : null}
               <ChatComposer
                 busy={workspace.busy}
                 editingContent={editingContent}

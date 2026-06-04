@@ -10,6 +10,8 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-06-03: Added transient human-input prompt state for Electron runtime turns.
+ * - 2026-06-03: Clear stale pending human-input prompts after completed send/edit responses.
  * - 2026-05-31: Hydrated active runtime provider/model metadata from Electron IPC.
  * - 2026-05-31: Hydrated optional workspace world summary metadata from Electron IPC.
  * - 2026-05-31: Ported the static renderer behavior into a typed React hook.
@@ -19,11 +21,14 @@ import { THEME_STORAGE_KEY } from '../constants/storage';
 import type {
   AgentCliDesktopApi,
   AgentCliDesktopChatSummary,
+  AgentCliDesktopHumanInputAnswer,
+  AgentCliDesktopHumanInputRequest,
   AgentCliDesktopRuntimeSummary,
   AgentCliDesktopRuntimeMessage,
   AgentCliDesktopSkillInventory,
   AgentCliDesktopSkillSelection,
   AgentCliDesktopSkillSummary,
+  AgentCliDesktopTurnEvent,
   AgentCliDesktopWorkspaceResponse,
   AgentCliDesktopWorldSummary,
 } from '../types/desktop-api';
@@ -77,6 +82,8 @@ export function useDesktopWorkspace() {
   const [chats, setChats] = useState<AgentCliDesktopChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState('');
   const [messages, setMessages] = useState<AgentCliDesktopRuntimeMessage[]>([]);
+  const [turnEvents, setTurnEvents] = useState<AgentCliDesktopTurnEvent[]>([]);
+  const [pendingHumanInputRequest, setPendingHumanInputRequest] = useState<AgentCliDesktopHumanInputRequest | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [busyLabel, setBusyLabel] = useState('');
   const [status, setStatus] = useState('Loading');
@@ -189,6 +196,7 @@ export function useDesktopWorkspace() {
     setWorkspaceRoot(response.workspaceRoot || '');
     setCurrentChatId(response.chat?.id || chatId || '');
     setMessages(response.messages || []);
+    setTurnEvents([]);
     clearEdit();
   }, [clearEdit, desktopApi]);
 
@@ -232,6 +240,8 @@ export function useDesktopWorkspace() {
       applyWorkspaceMetadata(response, { resetSkillSelection: true });
       setCurrentChatId(response.currentChatId || '');
       setMessages([]);
+      setTurnEvents([]);
+      setPendingHumanInputRequest(null);
       if (response.currentChatId) {
         await loadMessages(response.currentChatId);
       }
@@ -251,6 +261,7 @@ export function useDesktopWorkspace() {
       setChats(response.chats || []);
       setCurrentChatId(response.chat?.id || '');
       setMessages(response.chat?.messages || []);
+      setTurnEvents([]);
       clearEdit();
       log('info', `Created chat ${response.chat?.id || ''}.`);
     });
@@ -267,6 +278,7 @@ export function useDesktopWorkspace() {
       setChats(response.chats || []);
       setCurrentChatId(response.chat?.id || chatId);
       setMessages(response.chat?.messages || []);
+      setTurnEvents([]);
       clearEdit();
     });
   }, [clearEdit, desktopApi, withBusy, workspaceRoot]);
@@ -299,7 +311,7 @@ export function useDesktopWorkspace() {
         content: trimmedContent,
         agentConfig,
         skillSelection: createSkillSelection(),
-        stream: false,
+        stream: true,
       };
       const wasEditing = editingIndex !== null;
       const response = wasEditing
@@ -312,6 +324,8 @@ export function useDesktopWorkspace() {
 
       setCurrentChatId(response.chatId || currentChatId);
       setMessages(response.messages || []);
+      setTurnEvents(response.turnEvents || []);
+      setPendingHumanInputRequest(null);
       clearEdit();
       await refreshChats();
       log('info', wasEditing ? 'Edited message resent.' : 'Message sent.');
@@ -336,12 +350,39 @@ export function useDesktopWorkspace() {
     }
   }, [themePreference]);
 
+  const submitHumanInputAnswer = useCallback(async (answer: AgentCliDesktopHumanInputAnswer) => {
+    if (!desktopApi) {
+      return;
+    }
+
+    const response = await desktopApi.submitHumanInputAnswer(answer);
+    if (!response.ok) {
+      log('error', 'Human input response was not accepted.');
+      return;
+    }
+
+    setPendingHumanInputRequest(null);
+    log('info', answer.status === 'cancelled' ? 'Human input cancelled.' : 'Human input submitted.');
+  }, [desktopApi, log]);
+
   useEffect(() => {
     void loadWorkspace().catch((error) => {
       setStatus('Load failed');
       log('error', safeErrorMessage(error));
     });
   }, [loadWorkspace, log]);
+
+  useEffect(() => {
+    if (!desktopApi) {
+      return undefined;
+    }
+
+    return desktopApi.onHumanInputRequest((request) => {
+      setPendingHumanInputRequest(request);
+      setBusyLabel('Waiting for input');
+      log('info', `Input requested: ${request.questions[0]?.question || request.toolName}`);
+    });
+  }, [desktopApi, log]);
 
   return useMemo(() => ({
     appInfo,
@@ -356,6 +397,7 @@ export function useDesktopWorkspace() {
     logs,
     messages,
     panelOpen,
+    pendingHumanInputRequest,
     projectSkillsEnabled,
     reasoningEffort,
     runtimeSummary,
@@ -365,6 +407,7 @@ export function useDesktopWorkspace() {
     status,
     themePreference,
     toolPermission,
+    turnEvents,
     worldSummary,
     worldSummaryWarning,
     workspaceRoot,
@@ -383,6 +426,7 @@ export function useDesktopWorkspace() {
       setThemePreference,
       setToolPermission,
       startEdit,
+      submitHumanInputAnswer,
       submitMessage,
     },
   }), [
@@ -400,6 +444,7 @@ export function useDesktopWorkspace() {
     logs,
     messages,
     panelOpen,
+    pendingHumanInputRequest,
     projectSkillsEnabled,
     reasoningEffort,
     runtimeSummary,
@@ -412,9 +457,11 @@ export function useDesktopWorkspace() {
     setThemePreference,
     startEdit,
     status,
+    submitHumanInputAnswer,
     submitMessage,
     themePreference,
     toolPermission,
+    turnEvents,
     worldSummary,
     worldSummaryWarning,
     workspaceRoot,

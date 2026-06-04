@@ -47,6 +47,16 @@ export type AgentCliDesktopRunTurnResponse = {
   streamChunks: Array<Record<string, unknown>>;
   toolCalls: Array<Record<string, unknown>>;
   toolResults: Array<Record<string, unknown>>;
+  turnEvents: AgentCliDesktopTurnEvent[];
+};
+
+export type AgentCliDesktopTurnEvent = {
+  type: 'reasoning' | 'warning' | 'error' | 'model_response' | 'tool_call' | 'tool_result';
+  text?: string;
+  toolCall?: Record<string, unknown>;
+  toolResult?: Record<string, unknown>;
+  modelResponse?: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type AgentCliDesktopChatSummary = {
@@ -93,6 +103,44 @@ export type AgentCliDesktopSkillSelection = {
   disabledSkillKeys: string[];
 };
 
+export type AgentCliDesktopHumanInputOption = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+export type AgentCliDesktopHumanInputQuestion = {
+  header: string;
+  id: string;
+  question: string;
+  options: AgentCliDesktopHumanInputOption[];
+  allowFreeformInput?: boolean;
+};
+
+export type AgentCliDesktopHumanInputRequest = {
+  toolName: string;
+  requestId: string;
+  type: 'single-select' | 'multiple-select';
+  allowSkip: boolean;
+  questions: AgentCliDesktopHumanInputQuestion[];
+};
+
+export type AgentCliDesktopHumanInputSelection = {
+  questionId: string;
+  questionText?: string;
+  skipped: boolean;
+  selectedOptions: AgentCliDesktopHumanInputOption[];
+  enteredText?: string;
+};
+
+export type AgentCliDesktopHumanInputAnswer = {
+  ok: boolean;
+  status: 'answered' | 'skipped' | 'cancelled' | 'unavailable';
+  requestId: string;
+  selections: AgentCliDesktopHumanInputSelection[];
+  message?: string;
+};
+
 export type AgentCliDesktopWorkspaceResponse = {
   canceled?: boolean;
   workspaceRoot: string;
@@ -133,6 +181,8 @@ export type AgentCliDesktopApi = {
     messageIndex?: number;
     messageId?: string;
   }) => Promise<AgentCliDesktopRunTurnResponse>;
+  onHumanInputRequest: (callback: (request: AgentCliDesktopHumanInputRequest) => void) => () => void;
+  submitHumanInputAnswer: (answer: AgentCliDesktopHumanInputAnswer) => Promise<{ ok: boolean }>;
 };
 
 declare global {

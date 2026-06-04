@@ -865,6 +865,23 @@ button:disabled {
   background: color-mix(in srgb, var(--destructive) 10%, var(--card));
 }
 
+.aw-reasoning-card,
+.aw-model-card {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr);
+  gap: 11px;
+  border: 1px solid color-mix(in srgb, var(--muted-foreground) 22%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 58%, var(--card));
+  color: var(--muted-foreground);
+  padding: 12px 14px;
+}
+
+.aw-reasoning-card .aw-tool-dot,
+.aw-model-card .aw-tool-dot {
+  background: color-mix(in srgb, var(--muted-foreground) 56%, transparent);
+}
+
 .aw-tool-dot {
   width: 8px;
   height: 8px;
@@ -1009,6 +1026,120 @@ button:disabled {
   border-radius: 999px;
   background: var(--status-running);
   animation: aw-status-pulse 1.4s ease-in-out infinite;
+}
+
+.aw-human-input {
+  display: grid;
+  width: min(calc(100% - 32px), 860px);
+  gap: 12px;
+  margin: 12px auto 0;
+  border: 1px solid color-mix(in srgb, var(--sidebar-primary) 38%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sidebar-primary) 7%, var(--card));
+  padding: 14px;
+}
+
+.aw-human-input-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aw-human-input-header span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
+.aw-human-input-header h3 {
+  margin: 2px 0 0;
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.aw-human-input-questions {
+  display: grid;
+  gap: 12px;
+}
+
+.aw-human-input-question {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.aw-human-input-question legend {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.aw-human-input-question p {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.aw-human-input-options {
+  display: grid;
+  gap: 7px;
+}
+
+.aw-human-input-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 8px 9px;
+}
+
+.aw-human-input-option strong,
+.aw-human-input-option small {
+  display: block;
+}
+
+.aw-human-input-option strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.aw-human-input-option small {
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.aw-human-input .aw-input {
+  min-height: 36px;
+  border: 1px solid var(--input);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.aw-human-input-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.aw-human-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .aw-right-panel {

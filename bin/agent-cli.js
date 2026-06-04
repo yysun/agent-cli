@@ -1241,6 +1241,8 @@ AZURE_OPENAI_DEPLOYMENT_NAME=
 # AZURE_OPENAI_API_VERSION=
 `;
 var loadedDotEnvPaths = /* @__PURE__ */ new Set();
+var workspaceDotEnvOriginalValues = /* @__PURE__ */ new Map();
+var workspaceDotEnvManagedKeys = /* @__PURE__ */ new Set();
 function resolveWorkspaceDotEnvPath(workspaceRoot = WORKSPACE_ROOT) {
   return path3.join(workspaceRoot || process.cwd(), ".env");
 }
@@ -1261,9 +1263,23 @@ function ensureDotEnvExampleFile(dotEnvPath) {
     throw error;
   }
 }
-function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT) {
+function restoreManagedDotEnvKeys(parsedEnvironment) {
+  for (const key of workspaceDotEnvManagedKeys) {
+    if (Object.hasOwn(parsedEnvironment, key)) {
+      continue;
+    }
+    const originalValue = workspaceDotEnvOriginalValues.get(key);
+    if (typeof originalValue === "undefined") {
+      delete process.env[key];
+    } else {
+      process.env[key] = originalValue;
+    }
+    workspaceDotEnvManagedKeys.delete(key);
+  }
+}
+function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT, options = {}) {
   const dotEnvPath = resolveWorkspaceDotEnvPath(workspaceRoot);
-  if (loadedDotEnvPaths.has(dotEnvPath)) {
+  if (!options.refresh && loadedDotEnvPaths.has(dotEnvPath)) {
     return;
   }
   loadedDotEnvPaths.add(dotEnvPath);
@@ -1273,19 +1289,26 @@ function loadAllowedDotEnvEnvironment(workspaceRoot = WORKSPACE_ROOT) {
     path: dotEnvPath,
     quiet: true
   }).parsed ?? {};
+  if (options.refresh) {
+    restoreManagedDotEnvKeys(parsed);
+  }
   for (const [key, value] of Object.entries(parsed)) {
     if (!DOTENV_ALLOWED_ENV_KEYS.has(key)) {
       continue;
     }
-    if (typeof process.env[key] === "string" && process.env[key].trim()) {
+    if (!workspaceDotEnvManagedKeys.has(key) && typeof process.env[key] === "string" && process.env[key].trim()) {
       continue;
     }
+    if (!workspaceDotEnvOriginalValues.has(key)) {
+      workspaceDotEnvOriginalValues.set(key, process.env[key]);
+    }
     process.env[key] = value;
+    workspaceDotEnvManagedKeys.add(key);
   }
 }
-function prepareWorkspaceEnvironment(workspaceRoot) {
+function prepareWorkspaceEnvironment(workspaceRoot, options = {}) {
   const resolvedRoot = configureWorkspaceRoot(workspaceRoot);
-  loadAllowedDotEnvEnvironment(resolvedRoot);
+  loadAllowedDotEnvEnvironment(resolvedRoot, { refresh: options.refreshDotEnv === true });
   return resolvedRoot;
 }
 
