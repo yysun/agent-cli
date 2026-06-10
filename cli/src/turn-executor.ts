@@ -10,6 +10,7 @@
  * - Formats verbose tool activity through a dedicated trace renderer.
  *
  * Recent changes:
+ * - 2026-06-10: Reject unresolved host-owned tool calls before persisting a completed CLI turn.
  * - 2026-05-28: Restored pending dots after verbose continuation diagnostics while waiting for assistant text.
  * - 2026-05-26: Removed agent-id-specific persisted runtime config and chat persistence.
  * - 2026-05-23: Renamed from agent-runtime to clarify this is the CLI turn executor.
@@ -23,7 +24,7 @@ import {
   persistCompletedChat,
   persistStreamTraceEvents,
 } from '../../core/chat-store.js';
-import { runChatTurn } from '../../core/agent-runtime.js';
+import { assertCompletedChatTurn, runChatTurn } from '../../core/agent-runtime.js';
 import {
   collectHumanInputAnswer,
   type HumanInputPrompt,
@@ -480,6 +481,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
       verboseDisplay.closeReasoning();
       flushHeldAssistantText();
+      assertCompletedChatTurn(turnResult);
 
       await persistCompletedChat({
         chat,

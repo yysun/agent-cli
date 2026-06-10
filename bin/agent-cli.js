@@ -662,6 +662,23 @@ function parseToolCallArguments(toolCall) {
     return {};
   }
 }
+function unresolvedToolCallName(toolCall) {
+  if (!isRecord(toolCall)) {
+    return "unknown_tool";
+  }
+  const callable = isRecord(toolCall.function) ? toolCall.function : null;
+  const name = callable && typeof callable.name === "string" && callable.name.trim() ? callable.name.trim() : "";
+  return name || "unknown_tool";
+}
+function assertCompletedChatTurn(result) {
+  if (result?.status !== "tool_calls") {
+    return;
+  }
+  const toolNames = Array.isArray(result.toolCalls) && result.toolCalls.length > 0 ? result.toolCalls.map(unresolvedToolCallName).join(", ") : "unknown_tool";
+  throw new Error(
+    `LLM turn paused with unresolved tool calls: ${toolNames}. Host must handle these tool calls before completing the turn.`
+  );
+}
 function extractRejectedTextResponse(error) {
   const message = String(error ?? "");
   if (!message.startsWith(REJECTED_TEXT_RESPONSE_PREFIX)) {
@@ -3075,6 +3092,7 @@ function createTurnExecutor(options) {
       });
       verboseDisplay.closeReasoning();
       flushHeldAssistantText();
+      assertCompletedChatTurn(turnResult);
       await persistCompletedChat({
         chat,
         messages: turnResult.messages

@@ -11,6 +11,7 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-06-10: Covered shared rejection for unresolved host-owned tool-call turns.
  * - 2026-06-04: Covered host-provided runtime skill roots for settings-filtered Electron turns.
  * - 2026-05-27: Added check-js annotations for mocked stream events and captured runtime callbacks.
  * - 2026-05-28: Covered omitted default built-ins and streamed `answer_delta` content for `llm-runtime` 0.6.3.
@@ -92,6 +93,37 @@ afterEach(() => {
 });
 
 describe('agent-runtime', () => {
+  it('allows completed chat turns and rejects unresolved host-owned tool calls', async () => {
+    const { assertCompletedChatTurn } = await import('../../core/agent-runtime.js');
+
+    expect(() => assertCompletedChatTurn({
+      status: 'completed',
+      assistantText: 'Done',
+      messages: [],
+    })).not.toThrow();
+
+    expect(() => assertCompletedChatTurn({
+      status: 'tool_calls',
+      toolCalls: [
+        { id: 'tool-1', function: { name: 'ask_user_input' } },
+        { id: 'tool-2', function: { name: 'custom_lookup' } },
+      ],
+      assistantText: '',
+      messages: [],
+    })).toThrow('LLM turn paused with unresolved tool calls: ask_user_input, custom_lookup. Host must handle these tool calls before completing the turn.');
+  });
+
+  it('uses an unknown-tool fallback when unresolved tool calls are malformed', async () => {
+    const { assertCompletedChatTurn } = await import('../../core/agent-runtime.js');
+
+    expect(() => assertCompletedChatTurn({
+      status: 'tool_calls',
+      toolCalls: [{ id: 'tool-1', function: {} }],
+      assistantText: '',
+      messages: [],
+    })).toThrow('LLM turn paused with unresolved tool calls: unknown_tool. Host must handle these tool calls before completing the turn.');
+  });
+
   it('defaults to openai/gpt-5 when runtime config omits provider and model', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
 

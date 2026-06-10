@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-06-10: Added a shared host guard so unresolved tool-call results cannot be persisted as completed turns.
  * - 2026-06-04: Allowed hosts to pass filtered runtime skill roots so prompt inventory and `load_skill` stay aligned.
  * - 2026-05-27: Tightened JSDoc boundary types so editor check-js sees runtime options and callbacks correctly.
  * - 2026-05-28: Updated for `llm-runtime` 0.6.3 runtime-owned tool permissions and `answer_delta` events.
@@ -440,6 +441,39 @@ function parseToolCallArguments(toolCall): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * @param {unknown} toolCall
+ */
+function unresolvedToolCallName(toolCall) {
+  if (!isRecord(toolCall)) {
+    return 'unknown_tool';
+  }
+
+  const callable = isRecord(toolCall.function) ? toolCall.function : null;
+  const name = callable && typeof callable.name === 'string' && callable.name.trim()
+    ? callable.name.trim()
+    : '';
+
+  return name || 'unknown_tool';
+}
+
+/**
+ * @param {{ status?: unknown, toolCalls?: unknown[] }} result
+ */
+export function assertCompletedChatTurn(result) {
+  if (result?.status !== 'tool_calls') {
+    return;
+  }
+
+  const toolNames = Array.isArray(result.toolCalls) && result.toolCalls.length > 0
+    ? result.toolCalls.map(unresolvedToolCallName).join(', ')
+    : 'unknown_tool';
+
+  throw new Error(
+    `LLM turn paused with unresolved tool calls: ${toolNames}. Host must handle these tool calls before completing the turn.`,
+  );
 }
 
 /**

@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-06-10: Reject unresolved host-owned tool calls before persisting an Electron turn.
  * - 2026-06-04: Applied settings-panel skill enablement to both chat prompt inventory and runtime `load_skill` roots.
  * - 2026-06-04: Streamed current-turn runtime events to the renderer as Electron verbose diagnostics.
  * - 2026-05-31: Returned active runtime provider and model in Electron workspace metadata.
@@ -49,7 +50,7 @@ import {
   parseHumanInputRequest,
 } from '../cli/src/human-input-ui.js';
 import { HumanInputSessionManager } from './human-input-session.js';
-import { resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
+import { assertCompletedChatTurn, resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
 import { WORKSPACE_ROOT } from '../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../core/workspace-environment.js';
 import { ensureWorkspaceWorld } from '../core/workspace-store.js';
@@ -490,6 +491,8 @@ async function executeRuntimeTurn(params: {
       };
     },
   });
+
+  assertCompletedChatTurn(result);
 
   const persistedChat = await persistCompletedChat({
     chat: params.chat,

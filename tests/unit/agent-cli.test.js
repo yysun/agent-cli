@@ -6,6 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-06-10: Covered unresolved host-owned tool calls failing before chat persistence.
  * - 2026-05-28: Covered verbose pending dots as a waiting-for-assistant-text indicator.
  * - 2026-05-26: Covered workspace-local `.env` loading and `.env.example` creation.
  * - 2026-05-26: Asserted generated initial `.env.example` exactly matches the checked-in example.
@@ -346,6 +347,47 @@ describe('agent-cli entrypoint', () => {
         model: 'gpt-5',
       }),
     }));
+  });
+
+  it('rejects unresolved host-owned tool calls without persisting a partial turn', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+    await writeSystemPrompt(rootPath, 'Prompt');
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    const toolCall = {
+      id: 'input-1',
+      function: {
+        name: 'ask_user_input',
+        arguments: '{"questions":[{"id":"scope","question":"Scope?","options":[{"id":"all","label":"All"}]}]}',
+      },
+    };
+    const runChatTurn = vi.fn().mockResolvedValue({
+      status: 'tool_calls',
+      toolCalls: [toolCall],
+      assistantText: '',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: '', tool_calls: [toolCall] },
+      ],
+    });
+    const { main } = await loadCliModule(rootPath, {
+      runtimeClient: {
+        runChatTurn,
+      },
+    });
+
+    await expect(main(['hello'], createIoCapture())).rejects.toThrow(
+      'LLM turn paused with unresolved tool calls: ask_user_input. Host must handle these tool calls before completing the turn.',
+    );
+
+    const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
+    const messagesFile = await readFile(
+      path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'),
+      'utf8',
+    );
+
+    expect(messagesFile).toBe('');
   });
 
   it('streams verbose reasoning chunks into one readable diagnostic block', async () => {
