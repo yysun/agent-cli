@@ -9,6 +9,7 @@
  * - Covers verbose-mode filtering, ordinary message visibility, and compact runtime summaries.
  *
  * Recent changes:
+ * - 2026-06-10: Covered consolidated Electron tool request/result trace grouping.
  * - 2026-06-04: Covered accumulated thinking chunks for one rendered reasoning block.
  * - 2026-06-04: Covered raw expanded verbose tool bodies.
  * - 2026-06-04: Covered Electron verbose-mode gating for reasoning and runtime diagnostics.
@@ -19,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 import {
   accumulateTurnEvents,
   appendTurnEvent,
+  groupTurnEventsForTranscript,
   isTurnEventVisible,
   summarizeModelResponse,
   summarizeToolCall,
@@ -27,7 +29,7 @@ import {
   toolNameFromRecord,
   toolResultTitleFromRecord,
 } from '../../electron/renderer/src/features/chat/transcript-events.js';
-import { isToolRelatedMessage, resolveToolName, resolveToolTitle } from '../../electron/renderer/src/utils/message-utils.js';
+import { groupMessagesForTranscript, isToolRelatedMessage, resolveToolName, resolveToolTitle } from '../../electron/renderer/src/utils/message-utils.js';
 
 describe('transcript event helpers', () => {
   it('accumulates adjacent thinking chunks into one reasoning event', () => {
@@ -129,5 +131,98 @@ describe('transcript event helpers', () => {
       tool_call_id: 'tool-1',
       content: '<skill_context id="agent-world-skill">\nLoaded\n</skill_context>',
     }, new Map([['tool-1', { name: 'load_skill', arguments: JSON.stringify({ skill_id: 'agent-world-skill' }) }]]))).toBe('load_skill 3 lines');
+  });
+
+  it('groups current-turn tool call and result events into one trace item', () => {
+    const grouped = groupTurnEventsForTranscript([
+      {
+        type: 'tool_call',
+        toolCall: { id: 'tool-1', name: 'load_skill', arguments: JSON.stringify({ skill_id: 'agent-world-skill' }) },
+        createdAt: '2026-06-10T00:00:00.000Z',
+      },
+      {
+        type: 'tool_result',
+        toolResult: { id: 'tool-1', name: 'load_skill', result: '<skill_context>\nLoaded\n</skill_context>', durationMs: 7 },
+        createdAt: '2026-06-10T00:00:01.000Z',
+      },
+      {
+        type: 'warning',
+        text: 'warn',
+        createdAt: '2026-06-10T00:00:02.000Z',
+      },
+      {
+        type: 'tool_result',
+        toolResult: { id: 'tool-2', name: 'search_files', result: 'Error: denied' },
+        createdAt: '2026-06-10T00:00:03.000Z',
+      },
+    ]);
+
+    expect(grouped).toHaveLength(3);
+    expect(grouped[0]).toMatchObject({
+      kind: 'tool_trace',
+      key: 'turn-tool:tool-1',
+      trace: {
+        key: 'turn-tool:tool-1',
+        status: 'completed',
+        title: 'load_skill {"skill_id":"agent-world-skill"}',
+        request: { label: 'Request', body: '{"skill_id":"agent-world-skill"}' },
+        response: { label: 'Response', body: '<skill_context>\nLoaded\n</skill_context>' },
+      },
+    });
+    expect(grouped[1]).toMatchObject({ kind: 'event', event: { type: 'warning' } });
+    expect(grouped[2]).toMatchObject({
+      kind: 'tool_trace',
+      trace: {
+        status: 'error',
+        title: 'search_files Error: denied',
+        response: { label: 'Response', body: 'Error: denied' },
+      },
+    });
+  });
+
+  it('groups persisted assistant tool calls and tool responses into one trace item', () => {
+    const messages = [
+      { role: 'user', content: 'load it', createdAt: '2026-06-10T00:00:00.000Z' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'tool-1', function: { name: 'load_skill', arguments: JSON.stringify({ skill_id: 'agent-world-skill' }) } }],
+        createdAt: '2026-06-10T00:00:01.000Z',
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'tool-1',
+        content: '<skill_context>\nLoaded\n</skill_context>',
+        createdAt: '2026-06-10T00:00:02.000Z',
+      },
+      { role: 'assistant', content: 'done', createdAt: '2026-06-10T00:00:03.000Z' },
+      { role: 'tool', tool_call_id: 'orphan', content: 'orphan result', createdAt: '2026-06-10T00:00:04.000Z' },
+    ];
+    const grouped = groupMessagesForTranscript(messages, true);
+
+    expect(grouped).toHaveLength(4);
+    expect(grouped[0]).toMatchObject({ kind: 'message', message: { role: 'user' } });
+    expect(grouped[1]).toMatchObject({
+      kind: 'tool_trace',
+      key: 'message-tool:tool-1',
+      trace: {
+        key: 'message-tool:tool-1',
+        status: 'completed',
+        title: 'load_skill {"skill_id":"agent-world-skill"}',
+        request: { label: 'Request', body: '{"skill_id":"agent-world-skill"}' },
+        response: { label: 'Response', body: '<skill_context>\nLoaded\n</skill_context>' },
+      },
+    });
+    expect(grouped[2]).toMatchObject({ kind: 'message', message: { role: 'assistant', content: 'done' } });
+    expect(grouped[3]).toMatchObject({
+      kind: 'tool_trace',
+      key: 'message-tool:orphan',
+      trace: {
+        status: 'completed',
+        response: { label: 'Response', body: 'orphan result' },
+      },
+    });
+
+    expect(groupMessagesForTranscript(messages, false)).toHaveLength(2);
   });
 });

@@ -9,6 +9,7 @@
  * - Shows reasoning/thinking, tool calls, tool results, warnings, errors, and model-response summaries.
  *
  * Recent changes:
+ * - 2026-06-10: Consolidated tool request/result diagnostics into compact collapsed trace sections.
  * - 2026-06-04: Auto-scrolled the transcript to the end as messages and runtime events stream in.
  * - 2026-06-04: Updated hidden diagnostics empty state for Verbose mode.
  * - 2026-06-04: Added per-card collapse controls for tool-message transcript content.
@@ -19,16 +20,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AgentCliDesktopRuntimeMessage, AgentCliDesktopTurnEvent } from '../../types/desktop-api';
 import { formatTime } from '../../utils/format';
-import { isToolRelatedMessage, messageRoleLabel, resolveToolStatus, resolveToolTitle } from '../../utils/message-utils';
-import type { ToolCallMetadata } from '../../utils/message-utils';
+import { groupMessagesForTranscript, messageRoleLabel } from '../../utils/message-utils';
 import {
+  groupTurnEventsForTranscript,
   isTurnEventVisible,
   summarizeModelResponse,
-  summarizeToolCall,
-  summarizeToolResult,
-  toolCallTitleFromRecord,
-  toolResultTitleFromRecord,
 } from './transcript-events';
+import type { ToolTraceSection as ToolTraceSectionData } from './transcript-events';
 
 export interface ChatTranscriptProps {
   messages: AgentCliDesktopRuntimeMessage[];
@@ -80,43 +78,53 @@ function ToolCard({ body, className = '', collapsed = false, collapsible = false
   );
 }
 
+interface ToolTraceSectionProps {
+  collapsed?: boolean;
+  onToggle?: () => void;
+  trace: ToolTraceSectionData;
+}
+
+function ToolTraceSection({ collapsed = true, onToggle, trace }: ToolTraceSectionProps) {
+  const collapseLabel = collapsed ? 'Expand tool trace details' : 'Collapse tool trace details';
+  const statusClassName = `aw-tool-trace aw-tool-trace-${trace.status} ${collapsed ? 'aw-tool-trace-collapsed' : ''}`.trim();
+  const details = [trace.request, trace.response].filter((detail): detail is NonNullable<typeof detail> => Boolean(detail));
+
+  return (
+    <section className={`aw-message ${statusClassName}`}>
+      <button
+        type="button"
+        className="aw-tool-trace-toggle"
+        aria-label={collapseLabel}
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+      >
+        <span className="aw-tool-dot" aria-hidden="true" />
+        <span className="aw-tool-trace-title">{trace.title}</span>
+        <span className="aw-tool-trace-status">{trace.status}</span>
+        <span className="aw-tool-trace-chevron" aria-hidden="true">{collapsed ? '▼' : '▲'}</span>
+      </button>
+      {collapsed ? null : (
+        <div className="aw-tool-trace-details">
+          {details.map((detail) => (
+            <div className="aw-tool-trace-detail" key={detail.label}>
+              <div className="aw-tool-trace-detail-label">{detail.label}</div>
+              <p>{detail.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function toggleCollapsedCards(cards: Record<string, boolean>, key: string): Record<string, boolean> {
   return { ...cards, [key]: !(cards[key] ?? true) };
 }
 
-function collectToolCallsById(messages: AgentCliDesktopRuntimeMessage[]): Map<string, ToolCallMetadata> {
-  const toolCallsById = new Map<string, ToolCallMetadata>();
-
-  for (const message of messages) {
-    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    for (const toolCall of toolCalls) {
-      if (!toolCall || typeof toolCall !== 'object') {
-        continue;
-      }
-
-      const record = toolCall as Record<string, any>;
-      const id = typeof record.id === 'string' ? record.id : '';
-      const name = record.function?.name || record.name || record.toolName;
-      if (id && typeof name === 'string' && name.trim()) {
-        toolCallsById.set(id, {
-          name,
-          ...(typeof record.function?.arguments === 'string' ? { arguments: record.function.arguments } : {}),
-        });
-      }
-    }
-  }
-
-  return toolCallsById;
-}
-
 function renderTurnEvent(
   event: AgentCliDesktopTurnEvent,
-  index: number,
-  collapsedCards: Record<string, boolean>,
-  onToggleCard: (key: string) => void,
+  cardKey: string,
 ) {
-  const cardKey = `event:${event.createdAt}:${index}:${event.type}`;
-
   if (event.type === 'reasoning') {
     return (
       <ToolCard
@@ -125,34 +133,6 @@ function renderTurnEvent(
         key={cardKey}
         status="reasoning"
         title="thinking"
-      />
-    );
-  }
-
-  if (event.type === 'tool_call') {
-    return (
-      <ToolCard
-        body={summarizeToolCall(event.toolCall)}
-        collapsed={collapsedCards[cardKey] ?? true}
-        collapsible
-        key={cardKey}
-        onToggle={() => onToggleCard(cardKey)}
-        status="requested"
-        title={toolCallTitleFromRecord(event.toolCall)}
-      />
-    );
-  }
-
-  if (event.type === 'tool_result') {
-    return (
-      <ToolCard
-        body={summarizeToolResult(event.toolResult)}
-        collapsed={collapsedCards[cardKey] ?? true}
-        collapsible
-        key={cardKey}
-        onToggle={() => onToggleCard(cardKey)}
-        status="completed"
-        title={toolResultTitleFromRecord(event.toolResult)}
       />
     );
   }
@@ -185,12 +165,10 @@ export default function ChatTranscript({ messages, turnEvents, showToolMessages,
   const handleToggleCard = (key: string) => {
     setCollapsedCards((cards) => toggleCollapsedCards(cards, key));
   };
-  const visibleMessages = messages
-    .map((message, index) => ({ message, index }))
-    .filter(({ message }) => showToolMessages || !isToolRelatedMessage(message));
-  const toolCallsById = collectToolCallsById(messages);
+  const visibleMessageItems = groupMessagesForTranscript(messages, showToolMessages);
   const visibleTurnEvents = turnEvents.filter((event) => isTurnEventVisible(event, showToolMessages));
-  const empty = visibleMessages.length === 0 && visibleTurnEvents.length === 0;
+  const visibleTurnEventItems = groupTurnEventsForTranscript(visibleTurnEvents);
+  const empty = visibleMessageItems.length === 0 && visibleTurnEventItems.length === 0;
 
   useEffect(() => {
     const messageList = messageListRef.current;
@@ -210,23 +188,20 @@ export default function ChatTranscript({ messages, turnEvents, showToolMessages,
       {empty ? (
         <div className="aw-empty-state">{messages.length === 0 ? 'Select a chat or send a message to begin.' : 'Verbose mode disabled.'}</div>
       ) : null}
-      {visibleMessages.map(({ message, index }) => {
-        if (isToolRelatedMessage(message)) {
-          const status = resolveToolStatus(message);
-          const cardKey = `message:${index}:${message.id || message.tool_call_id || message.toolCallId || message.role || 'tool'}`;
+      {visibleMessageItems.map((item) => {
+        if (item.kind === 'tool_trace') {
+          const collapsed = collapsedCards[item.key] ?? true;
           return (
-            <ToolCard
-              body={String(message.content || '').trim() || (status === 'requested' ? 'Waiting for tool result.' : 'No tool output.')}
-              collapsed={collapsedCards[cardKey] ?? true}
-              collapsible
-              key={cardKey}
-              onToggle={() => handleToggleCard(cardKey)}
-              status={status}
-              title={resolveToolTitle(message, toolCallsById)}
+            <ToolTraceSection
+              collapsed={collapsed}
+              key={item.key}
+              onToggle={() => handleToggleCard(item.key)}
+              trace={item.trace}
             />
           );
         }
 
+        const { message, index } = item;
         const isUser = message.role === 'user';
         return (
           <article className={`aw-message ${isUser ? 'aw-message-user' : 'aw-message-agent'}`} key={`${index}-${message.role || 'assistant'}`}>
@@ -246,7 +221,21 @@ export default function ChatTranscript({ messages, turnEvents, showToolMessages,
           </article>
         );
       })}
-      {visibleTurnEvents.map((event, index) => renderTurnEvent(event, index, collapsedCards, handleToggleCard))}
+      {visibleTurnEventItems.map((item) => {
+        if (item.kind === 'tool_trace') {
+          const collapsed = collapsedCards[item.key] ?? true;
+          return (
+            <ToolTraceSection
+              collapsed={collapsed}
+              key={item.key}
+              onToggle={() => handleToggleCard(item.key)}
+              trace={item.trace}
+            />
+          );
+        }
+
+        return renderTurnEvent(item.event, item.key);
+      })}
     </div>
   );
 }
