@@ -255,8 +255,32 @@ function configureWorkspaceRoot(workspaceRoot) {
   return WORKSPACE_ROOT;
 }
 configureWorkspaceRoot();
+function assertSafeChatId(chatId) {
+  const normalizedChatId = String(chatId ?? "").trim();
+  if (!normalizedChatId) {
+    throw new Error("Missing chat ID.");
+  }
+  if (normalizedChatId.includes("/") || normalizedChatId.includes("\\") || normalizedChatId.includes("\0") || normalizedChatId === "." || normalizedChatId === "..") {
+    throw new Error(`Invalid chat ID: ${normalizedChatId}`);
+  }
+  const chatsRoot = path.resolve(AGENT_WORLD_CHATS_ROOT);
+  const relativePath = path.relative(chatsRoot, path.resolve(chatsRoot, normalizedChatId));
+  const relativeSegments = relativePath ? relativePath.split(path.sep) : [];
+  if (relativeSegments.length !== 1 || relativeSegments[0] !== normalizedChatId) {
+    throw new Error(`Invalid chat ID: ${normalizedChatId}`);
+  }
+  return normalizedChatId;
+}
+function isSafeChatId(chatId) {
+  try {
+    assertSafeChatId(chatId);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function buildWorldChatDirectoryPath(chatId) {
-  return path.join(AGENT_WORLD_CHATS_ROOT, chatId);
+  return path.join(AGENT_WORLD_CHATS_ROOT, assertSafeChatId(chatId));
 }
 function buildWorldChatMetadataPath(chatId) {
   return path.join(buildWorldChatDirectoryPath(chatId), "chat.json");
@@ -863,6 +887,8 @@ async function runChatTurn({
           parsedArguments,
           context: {
             ...executionContext,
+            // `LLMToolExecutionContext.messages` is declared as loose records; the
+            // values are unchanged, only their static type is widened.
             messages: [...resumeMessages, ...toolMessages]
           },
           executeDefault: async () => ({
@@ -1475,9 +1501,10 @@ function createEmptyChat() {
 }
 async function readCurrentChatId() {
   const current = await readJsonIfPresent(CURRENT_CHAT_PATH);
-  return String(
+  const chatId = String(
     current && typeof current === "object" && "chatId" in current ? current.chatId ?? "" : ""
   ).trim();
+  return isSafeChatId(chatId) ? chatId : "";
 }
 async function writeCurrentChatId(chatId) {
   await writeJsonAtomic(CURRENT_CHAT_PATH, {
@@ -1523,10 +1550,7 @@ async function loadWorldChatMetadata(chatId) {
   }
 }
 async function loadWorldChatById(chatId) {
-  const normalizedChatId = String(chatId ?? "").trim();
-  if (!normalizedChatId) {
-    throw new Error("Missing chat ID.");
-  }
+  const normalizedChatId = assertSafeChatId(chatId);
   const metadata = await loadWorldChatMetadata(normalizedChatId);
   const messages = (await readJsonl(buildWorldChatMessagesPath(normalizedChatId))).map((message) => normalizePersistedMessage(message, (/* @__PURE__ */ new Date()).toISOString()));
   return {
@@ -1537,6 +1561,7 @@ async function loadWorldChatById(chatId) {
   };
 }
 async function loadChatById(chatId) {
+  assertSafeChatId(chatId);
   await ensureChatStorage();
   return await loadWorldChatById(chatId);
 }
@@ -1584,6 +1609,7 @@ async function createPersistedChat(options = {}) {
   return chat;
 }
 async function setCurrentChat(chatId) {
+  assertSafeChatId(chatId);
   await ensureChatStorage();
   const chat = await loadChatById(chatId);
   await writeCurrentChatId(chat.id);
@@ -1608,6 +1634,7 @@ async function loadRequestedChat({ newChat }) {
   }
 }
 async function persistCompletedChat({ chat, messages, setCurrent = true }) {
+  assertSafeChatId(chat?.id);
   await ensureChatStorage();
   const persistedChat = await persistWorldChat({
     id: chat.id,
@@ -2677,6 +2704,64 @@ function formatModelResponseDiagnostic(response) {
 ` : "";
 }
 
+// cli/src/tool-approval-ui.ts
+var APPROVE_TOKENS = /* @__PURE__ */ new Set(["y", "yes", "a", "approve"]);
+var DENY_TOKENS = /* @__PURE__ */ new Set(["n", "no", "d", "deny", ""]);
+function readToolApprovalName(request) {
+  const toolName = String(request?.toolName ?? "").trim();
+  return toolName || "unknown_tool";
+}
+function formatToolApprovalCheckpoint(request) {
+  const toolName = readToolApprovalName(request);
+  const view = summarizeToolCall(toolName, request?.arguments);
+  const summary = String(view.summary ?? "").trim();
+  return [
+    "",
+    `Approve tool call: ${toolName}`,
+    ...summary ? [`  ${summary}`] : [],
+    ""
+  ].join("\n");
+}
+function createToolApprovalPromptText(request) {
+  return `Approve ${readToolApprovalName(request)}? [y/N]: `;
+}
+function createCliApprovalGate(options) {
+  return {
+    async requestApproval(request) {
+      const toolName = readToolApprovalName(request);
+      if (isHumanInputToolName(toolName)) {
+        return { approved: true };
+      }
+      if (!options.prompt) {
+        return {
+          approved: false,
+          reason: `Tool execution denied: interactive approval is unavailable for ${toolName}.`
+        };
+      }
+      options.beforePrompt?.();
+      try {
+        options.output.write(formatToolApprovalCheckpoint(request));
+        while (true) {
+          const rawAnswer = await options.prompt.question(createToolApprovalPromptText(request));
+          const answer = rawAnswer.trim().toLowerCase();
+          if (APPROVE_TOKENS.has(answer)) {
+            return { approved: true };
+          }
+          if (DENY_TOKENS.has(answer)) {
+            return {
+              approved: false,
+              reason: `Tool execution denied by user: ${toolName}.`
+            };
+          }
+          options.output.write("Answer y to approve or n to deny.\n");
+        }
+      } finally {
+        options.afterPrompt?.();
+      }
+    }
+  };
+}
+
 // cli/src/verbose-display.ts
 var ANSI_GRAY = "\x1B[90m";
 var ANSI_RESET = "\x1B[0m";
@@ -2857,8 +2942,8 @@ function createTurnExecutor(options) {
       clearPending: () => pendingDisplay.clear(),
       enabled: options.verbose
     });
-    const pastMessages = Number(options.agentConfig.pastMessages);
-    const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0 ? pastMessages : 0;
+    const configuredPastMessages = options.agentConfig.pastMessages;
+    const historyMessageLimit = typeof configuredPastMessages === "number" && Number.isInteger(configuredPastMessages) && configuredPastMessages >= 0 ? configuredPastMessages : void 0;
     function writeAssistantText(text) {
       pendingDisplay.writeText(text);
       verboseDisplay.noteAssistantText(text);
@@ -2898,6 +2983,18 @@ function createTurnExecutor(options) {
         pendingDisplay.start({ separateFromText: true });
       }
     }
+    const effectiveApprovalGate = approvalGate ?? createCliApprovalGate({
+      prompt: inputPrompt,
+      output: options.verbose ? stderr : options.io.stdout,
+      beforePrompt: () => {
+        flushHeldAssistantText();
+        pendingDisplay.clear();
+      },
+      afterPrompt: () => {
+        pendingDisplay.noteExternalOutput();
+        resumePendingAssistantText();
+      }
+    });
     try {
       if (!options.streamOff) {
         pendingDisplay.start();
@@ -2906,7 +3003,7 @@ function createTurnExecutor(options) {
         chat,
         userMessage: message,
         stream: !options.streamOff,
-        approvalGate,
+        approvalGate: effectiveApprovalGate,
         abortSignal,
         onStreamChunk: options.streamOff ? void 0 : async (chunk) => {
           const reasoningText = [

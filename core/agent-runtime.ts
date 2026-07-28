@@ -708,7 +708,9 @@ export async function runChatTurn({
           parsedArguments,
           context: {
             ...executionContext,
-            messages: [...resumeMessages, ...toolMessages],
+            // `LLMToolExecutionContext.messages` is declared as loose records; the
+            // values are unchanged, only their static type is widened.
+            messages: [...resumeMessages, ...toolMessages] as unknown as Array<Record<string, unknown>>,
           },
           executeDefault: async () => ({
             ok: false,

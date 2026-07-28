@@ -3,14 +3,12 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "rootDir": "./cli/src",
     "noEmit": true,
     "types": [
       "node"
     ],
     "strict": false,
     "noImplicitAny": false,
-    "noCheck": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

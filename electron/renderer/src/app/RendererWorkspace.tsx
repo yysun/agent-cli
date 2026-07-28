@@ -10,6 +10,7 @@
  * - Uses design-system patterns for the outer app frame.
  *
  * Recent changes:
+ * - 2026-07-27: Rendered the tool-approval prompt alongside the human-input prompt.
  * - 2026-05-31: Used the workspace folder name as the main header title and hid header agents without `world.json` agents.
  * - 2026-05-31: Rendered `world.json` agent labels in the header agent strip.
  * - 2026-05-31: Passed optional workspace world summary metadata into the sidebar.
@@ -22,6 +23,7 @@ import ChatComposer from '../features/chat/ChatComposer';
 import ChatTranscript from '../features/chat/ChatTranscript';
 import HumanInputPrompt from '../features/chat/HumanInputPrompt';
 import SettingsPanel from '../features/settings/SettingsPanel';
+import ToolApprovalPrompt from '../features/chat/ToolApprovalPrompt';
 import WorkspaceSidebar from '../features/workspace/WorkspaceSidebar';
 import { useDesktopWorkspace } from '../hooks/useDesktopWorkspace';
 import { shortId, workspaceFolderName } from '../utils/format';
@@ -133,6 +135,12 @@ export default function RendererWorkspace() {
                 showToolMessages={workspace.showToolMessages}
                 onStartEdit={workspace.actions.startEdit}
               />
+              {workspace.pendingToolApprovalRequest ? (
+                <ToolApprovalPrompt
+                  request={workspace.pendingToolApprovalRequest}
+                  onSubmitAnswer={workspace.actions.submitToolApprovalAnswer}
+                />
+              ) : null}
               {workspace.pendingHumanInputRequest ? (
                 <HumanInputPrompt
                   request={workspace.pendingHumanInputRequest}

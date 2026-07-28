@@ -10,6 +10,8 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-07-27: Added tool-approval prompt state and blocked workspace/chat switches during a turn.
+ * - 2026-07-27: Initialized tool-permission and reasoning controls from workspace runtime configuration.
  * - 2026-06-04: Accumulated streamed thinking chunks into one reasoning event.
  * - 2026-06-04: Appended live Electron turn events and defaulted verbose diagnostics off.
  * - 2026-06-03: Added transient human-input prompt state for Electron runtime turns.
@@ -31,6 +33,8 @@ import type {
   AgentCliDesktopSkillInventory,
   AgentCliDesktopSkillSelection,
   AgentCliDesktopSkillSummary,
+  AgentCliDesktopToolApprovalAnswer,
+  AgentCliDesktopToolApprovalRequest,
   AgentCliDesktopTurnEvent,
   AgentCliDesktopWorkspaceResponse,
   AgentCliDesktopWorldSummary,
@@ -77,6 +81,8 @@ export function useDesktopWorkspace() {
   const [runtimeSummary, setRuntimeSummary] = useState<AgentCliDesktopRuntimeSummary>({
     provider: '',
     model: '',
+    toolPermission: '',
+    reasoningEffort: '',
   });
   const [worldSummary, setWorldSummary] = useState<AgentCliDesktopWorldSummary | null>(null);
   const [worldSummaryWarning, setWorldSummaryWarning] = useState('');
@@ -87,6 +93,7 @@ export function useDesktopWorkspace() {
   const [messages, setMessages] = useState<AgentCliDesktopRuntimeMessage[]>([]);
   const [turnEvents, setTurnEvents] = useState<AgentCliDesktopTurnEvent[]>([]);
   const [pendingHumanInputRequest, setPendingHumanInputRequest] = useState<AgentCliDesktopHumanInputRequest | null>(null);
+  const [pendingToolApprovalRequest, setPendingToolApprovalRequest] = useState<AgentCliDesktopToolApprovalRequest | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [busyLabel, setBusyLabel] = useState('');
   const [status, setStatus] = useState('Loading');
@@ -138,10 +145,21 @@ export function useDesktopWorkspace() {
     };
     const nextSkillKeys = collectSkillSelectionKeys(nextSkillInventory);
 
+    const nextToolPermission = response.runtimeSummary?.toolPermission || '';
+    const nextReasoningEffort = response.runtimeSummary?.reasoningEffort || '';
+
     setRuntimeSummary({
       provider: response.runtimeSummary?.provider || '',
       model: response.runtimeSummary?.model || '',
+      toolPermission: nextToolPermission,
+      reasoningEffort: nextReasoningEffort,
     });
+    // Start the composer controls from the workspace configuration so `.env`
+    // is not silently overridden by a hardcoded default on every turn.
+    if (options.resetSkillSelection) {
+      setToolPermission(nextToolPermission || 'auto');
+      setReasoningEffort(nextReasoningEffort);
+    }
     setSkillInventory(nextSkillInventory);
     setDisabledSkillKeys((currentKeys) => (
       options.resetSkillSelection ? [] : currentKeys.filter((key) => nextSkillKeys.has(key))
@@ -236,6 +254,11 @@ export function useDesktopWorkspace() {
       return;
     }
 
+    // Switching mid-turn would repoint the workspace root the running turn uses.
+    if (busy) {
+      return;
+    }
+
     await withBusy('Selecting workspace', async () => {
       const response = await desktopApi.selectWorkspace();
       setWorkspaceRoot(response.workspaceRoot || workspaceRoot);
@@ -245,16 +268,16 @@ export function useDesktopWorkspace() {
       setMessages([]);
       setTurnEvents([]);
       setPendingHumanInputRequest(null);
+      setPendingToolApprovalRequest(null);
       if (response.currentChatId) {
         await loadMessages(response.currentChatId);
       }
       log('info', response.canceled ? 'Workspace selection canceled.' : `Workspace selected: ${response.workspaceRoot}`);
     });
-  }, [applyWorkspaceMetadata, desktopApi, loadMessages, log, withBusy, workspaceRoot]);
+  }, [applyWorkspaceMetadata, busy, desktopApi, loadMessages, log, withBusy, workspaceRoot]);
 
   const createChat = useCallback(async () => {
-    if (!desktopApi) {
-      log('error', 'Electron bridge unavailable.');
+    if (!desktopApi || busy) {
       return;
     }
 
@@ -268,10 +291,10 @@ export function useDesktopWorkspace() {
       clearEdit();
       log('info', `Created chat ${response.chat?.id || ''}.`);
     });
-  }, [clearEdit, desktopApi, log, withBusy, workspaceRoot]);
+  }, [busy, clearEdit, desktopApi, log, withBusy, workspaceRoot]);
 
   const selectChat = useCallback(async (chatId: string) => {
-    if (!desktopApi || !chatId) {
+    if (!desktopApi || !chatId || busy) {
       return;
     }
 
@@ -284,7 +307,7 @@ export function useDesktopWorkspace() {
       setTurnEvents([]);
       clearEdit();
     });
-  }, [clearEdit, desktopApi, withBusy, workspaceRoot]);
+  }, [busy, clearEdit, desktopApi, withBusy, workspaceRoot]);
 
   const startEdit = useCallback((index: number) => {
     setEditingIndex(index);
@@ -330,6 +353,7 @@ export function useDesktopWorkspace() {
       setMessages(response.messages || []);
       setTurnEvents(accumulateTurnEvents(response.turnEvents || []));
       setPendingHumanInputRequest(null);
+      setPendingToolApprovalRequest(null);
       clearEdit();
       await refreshChats();
       log('info', wasEditing ? 'Edited message resent.' : 'Message sent.');
@@ -369,6 +393,21 @@ export function useDesktopWorkspace() {
     log('info', answer.status === 'cancelled' ? 'Human input cancelled.' : 'Human input submitted.');
   }, [desktopApi, log]);
 
+  const submitToolApprovalAnswer = useCallback(async (answer: AgentCliDesktopToolApprovalAnswer) => {
+    if (!desktopApi) {
+      return;
+    }
+
+    const response = await desktopApi.submitToolApprovalAnswer(answer);
+    if (!response.ok) {
+      log('error', 'Tool approval response was not accepted.');
+      return;
+    }
+
+    setPendingToolApprovalRequest(null);
+    log('info', answer.approved ? 'Tool approved.' : 'Tool denied.');
+  }, [desktopApi, log]);
+
   useEffect(() => {
     void loadWorkspace().catch((error) => {
       setStatus('Load failed');
@@ -398,6 +437,18 @@ export function useDesktopWorkspace() {
     });
   }, [desktopApi, log]);
 
+  useEffect(() => {
+    if (!desktopApi) {
+      return undefined;
+    }
+
+    return desktopApi.onToolApprovalRequest((request) => {
+      setPendingToolApprovalRequest(request);
+      setBusyLabel('Waiting for tool approval');
+      log('info', `Approval requested: ${request.toolName}`);
+    });
+  }, [desktopApi, log]);
+
   return useMemo(() => ({
     appInfo,
     bridgeAvailable,
@@ -412,6 +463,7 @@ export function useDesktopWorkspace() {
     messages,
     panelOpen,
     pendingHumanInputRequest,
+    pendingToolApprovalRequest,
     projectSkillsEnabled,
     reasoningEffort,
     runtimeSummary,
@@ -442,6 +494,7 @@ export function useDesktopWorkspace() {
       startEdit,
       submitHumanInputAnswer,
       submitMessage,
+      submitToolApprovalAnswer,
     },
   }), [
     appInfo,
@@ -459,6 +512,7 @@ export function useDesktopWorkspace() {
     messages,
     panelOpen,
     pendingHumanInputRequest,
+    pendingToolApprovalRequest,
     projectSkillsEnabled,
     reasoningEffort,
     runtimeSummary,
@@ -473,6 +527,7 @@ export function useDesktopWorkspace() {
     status,
     submitHumanInputAnswer,
     submitMessage,
+    submitToolApprovalAnswer,
     themePreference,
     toolPermission,
     turnEvents,

@@ -15,9 +15,13 @@
  * - 2026-05-26: Removed persisted runtime config loading from world and agent metadata.
  */
 
-const REASONING_EFFORTS = new Set(['default', 'none', 'low', 'medium', 'high']);
-const TOOL_PERMISSIONS = new Set(['auto', 'ask', 'read']);
-const WEB_SEARCH_CONTEXT_SIZES = new Set(['low', 'medium', 'high']);
+type ReasoningEffortValue = 'default' | 'none' | 'low' | 'medium' | 'high';
+type ToolPermissionValue = 'auto' | 'ask' | 'read';
+type WebSearchContextSize = 'low' | 'medium' | 'high';
+
+const REASONING_EFFORTS = new Set<ReasoningEffortValue>(['default', 'none', 'low', 'medium', 'high']);
+const TOOL_PERMISSIONS = new Set<ToolPermissionValue>(['auto', 'ask', 'read']);
+const WEB_SEARCH_CONTEXT_SIZES = new Set<WebSearchContextSize>(['low', 'medium', 'high']);
 
 /** @param {unknown} value */
 function isPlainObject(value) {
@@ -141,14 +145,14 @@ function normalizeBoolean(value, label) {
 /**
  * @param {unknown} value
  * @param {string} label
- * @param {Set<string>} allowedValues
+ * @param {Set<T>} allowedValues
  */
-function normalizeEnum(value, label, allowedValues) {
+function normalizeEnum<T extends string>(value: unknown, label: string, allowedValues: Set<T>): T | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
   }
 
-  const normalized = String(value).trim().toLowerCase();
+  const normalized = String(value).trim().toLowerCase() as T;
 
   if (!allowedValues.has(normalized)) {
     throw new Error(
@@ -225,21 +229,19 @@ function normalizeWebSearch(value) {
   return true;
 }
 
-/**
- * @typedef {{
- *   provider?: string,
- *   model?: string,
- *   temperature?: number,
- *   maxTokens?: number,
- *   maxToolTurns?: number,
- *   toolPermission?: 'auto' | 'ask' | 'read',
- *   reasoningEffort?: 'default' | 'none' | 'low' | 'medium' | 'high',
- *   webSearch?: boolean | { searchContextSize?: 'low' | 'medium' | 'high' },
- *   pastMessages?: number,
- *   stream?: boolean,
- *   streamTrace?: boolean,
- * }} AgentConfig
- */
+export type AgentConfig = {
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  maxToolTurns?: number;
+  toolPermission?: 'auto' | 'ask' | 'read';
+  reasoningEffort?: 'default' | 'none' | 'low' | 'medium' | 'high';
+  webSearch?: boolean | { searchContextSize?: 'low' | 'medium' | 'high' };
+  pastMessages?: number;
+  stream?: boolean;
+  streamTrace?: boolean;
+};
 
 const AGENT_CONFIG_ALIASES = {
   provider: ['provider'],
@@ -266,8 +268,7 @@ export function normalizeAgentConfig(source) {
     }
     : source;
 
-  /** @type {AgentConfig} */
-  const normalizedConfig = {
+  const normalizedConfig: AgentConfig = {
     provider: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.provider), 'provider'),
     model: normalizeString(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.model), 'model'),
     temperature: normalizeNumber(readAliasedValue(configSource, AGENT_CONFIG_ALIASES.temperature), 'temperature'),

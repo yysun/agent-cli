@@ -12,6 +12,10 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-07-27: Added the renderer tool-approval gate so `ask` tool permission prompts instead of auto-approving.
+ * - 2026-07-27: Serialized workspace-touching IPC handlers so a workspace switch cannot repoint an in-flight turn.
+ * - 2026-07-27: Loaded `agent:runTurn` history from storage instead of accepting renderer-supplied messages.
+ * - 2026-07-27: Reported the workspace root captured at turn start and surfaced runtime tool-permission defaults.
  * - 2026-06-10: Reject unresolved host-owned tool calls before persisting an Electron turn.
  * - 2026-06-04: Applied settings-panel skill enablement to both chat prompt inventory and runtime `load_skill` roots.
  * - 2026-06-04: Streamed current-turn runtime events to the renderer as Electron verbose diagnostics.
@@ -50,6 +54,7 @@ import {
   parseHumanInputRequest,
 } from '../cli/src/human-input-ui.js';
 import { HumanInputSessionManager } from './human-input-session.js';
+import { ToolApprovalSessionManager } from './tool-approval-session.js';
 import { assertCompletedChatTurn, resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
 import { WORKSPACE_ROOT } from '../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../core/workspace-environment.js';
@@ -79,9 +84,12 @@ const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
 const TURN_EVENT_CHANNEL = 'turn:event';
 const HUMAN_INPUT_REQUEST_CHANNEL = 'humanInput:request';
 const HUMAN_INPUT_ANSWER_CHANNEL = 'humanInput:answer';
+const TOOL_APPROVAL_REQUEST_CHANNEL = 'toolApproval:request';
+const TOOL_APPROVAL_ANSWER_CHANNEL = 'toolApproval:answer';
 const RENDERER_URL_ENV = 'AGENT_CLI_ELECTRON_RENDERER_URL';
 const ELECTRON_WORKSPACE_STATE_FILE = 'workspace-state.json';
 const HUMAN_INPUT_TIMEOUT_MS = 30 * 60 * 1000;
+const TOOL_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
 
 type AgentTurnMessage = {
   role?: string;
@@ -101,7 +109,6 @@ type AgentTurnRequest = {
   chatId?: string;
   message?: string;
   userMessage?: string;
-  messages?: AgentTurnMessage[];
   workspaceRoot?: string;
   agentConfig?: Record<string, unknown>;
   skillSelection?: SkillSelectionRequest;
@@ -123,6 +130,8 @@ type WorkspaceMetadata = {
   runtimeSummary: {
     provider: string;
     model: string;
+    toolPermission: string;
+    reasoningEffort: string;
   };
   skillInventory: Awaited<ReturnType<typeof loadSkillInventoryByScope>>;
   globalSkillsEnabled: boolean;
@@ -198,6 +207,10 @@ let rendererMode: 'electron' = 'electron';
 const humanInputSessions = new HumanInputSessionManager({
   requestChannel: HUMAN_INPUT_REQUEST_CHANNEL,
   timeoutMs: HUMAN_INPUT_TIMEOUT_MS,
+});
+const toolApprovalSessions = new ToolApprovalSessionManager({
+  requestChannel: TOOL_APPROVAL_REQUEST_CHANNEL,
+  timeoutMs: TOOL_APPROVAL_TIMEOUT_MS,
 });
 
 function normalizeChatMessages(messages: unknown): AgentTurnMessage[] {
@@ -311,7 +324,14 @@ async function prepareElectronWorkspace(workspaceRoot?: string): Promise<string>
 }
 
 async function loadWorkspaceMetadata(): Promise<WorkspaceMetadata> {
-  const runtimeSummary = resolveRuntimeSelection(process.env, loadPersistedRuntimeConfig());
+  const persistedRuntimeConfig = loadPersistedRuntimeConfig();
+  // Surfaced so the renderer controls start from the workspace `.env` instead of
+  // overriding it with a hardcoded default on every turn.
+  const runtimeSummary = {
+    ...resolveRuntimeSelection(process.env, persistedRuntimeConfig),
+    toolPermission: String(persistedRuntimeConfig.toolPermission ?? ''),
+    reasoningEffort: String(persistedRuntimeConfig.reasoningEffort ?? ''),
+  };
   const skillInventory = await loadSkillInventoryByScope();
 
   try {
@@ -400,6 +420,9 @@ async function executeRuntimeTurn(params: {
   request: Pick<AgentTurnRequest, 'agentConfig' | 'skillSelection' | 'stream' | 'historyMessageLimit'>;
   rendererWebContents?: WebContents;
 }) {
+  // Capture the root this turn started with so the reported workspace cannot
+  // drift if the module-level binding is repointed later.
+  const turnWorkspaceRoot = WORKSPACE_ROOT;
   const { agentConfig, workspaceSystemPrompt, skillInventory, runtimeSkillRoots } = await loadRuntimeInputs(params.request);
   const streamChunks: Array<Record<string, unknown>> = [];
   const toolCalls: Array<Record<string, unknown>> = [];
@@ -420,6 +443,7 @@ async function executeRuntimeTurn(params: {
     chat: params.chat,
     userMessage: params.userMessage,
     stream: params.request.stream === true,
+    approvalGate: toolApprovalSessions.createApprovalGate(params.rendererWebContents),
     historyMessageLimit: resolveHistoryMessageLimit(params.request, agentConfig),
     builtInSystemPrompt: getBuiltInSystemPrompt(),
     workspaceSystemPrompt,
@@ -501,7 +525,7 @@ async function executeRuntimeTurn(params: {
 
   return {
     chatId: persistedChat.id,
-    workspaceRoot: WORKSPACE_ROOT,
+    workspaceRoot: turnWorkspaceRoot,
     assistantText: result.assistantText,
     messages: persistedChat.messages,
     streamChunks,
@@ -519,15 +543,19 @@ async function runAgentTurn(rawRequest: AgentTurnRequest = {}, rendererWebConten
   }
 
   await prepareElectronWorkspace(request.workspaceRoot);
-  const chatId = String(request.chatId ?? 'electron-default-chat').trim() || 'electron-default-chat';
-  const requestMessages = normalizeChatMessages(request.messages);
-  const chat = {
-    id: chatId,
-    messages: requestMessages,
-  };
+
+  // Chat history is read from storage, never from the renderer. Accepting a
+  // caller-supplied transcript here would let one call overwrite a stored chat.
+  const chatId = String(request.chatId ?? '').trim();
+  const chat = chatId
+    ? await setCurrentChat(chatId)
+    : await loadRequestedChat({ newChat: false });
 
   return executeRuntimeTurn({
-    chat,
+    chat: {
+      ...chat,
+      messages: normalizeChatMessages(chat.messages),
+    },
     userMessage,
     request,
     rendererWebContents,
@@ -694,9 +722,29 @@ async function editAndResendMessage(request: EditAndResendRequest = {}, renderer
   });
 }
 
+/**
+ * Workspace root and provider credentials are process-global: `configureWorkspaceRoot`
+ * reassigns the shared path bindings and the `.env` loader mutates `process.env`.
+ * Running two handlers concurrently would let a workspace switch repoint an
+ * in-flight turn, so every workspace-touching handler runs serially.
+ *
+ * The human-input and tool-approval answer channels are deliberately registered
+ * outside this queue; a turn holds the queue while awaiting those answers.
+ */
+let workspaceOperationQueue: Promise<unknown> = Promise.resolve();
+
+export function enqueueWorkspaceOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = workspaceOperationQueue.then(operation, operation);
+  workspaceOperationQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 async function invokeWithWorkspace<T>(handler: () => Promise<T>): Promise<T> {
   try {
-    return await handler();
+    return await enqueueWorkspaceOperation(handler);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(message);
@@ -728,7 +776,11 @@ function registerIpcHandlers(): void {
     platform: process.platform,
     rendererMode,
   }));
+  // The answer channels must stay off the serial queue in `invokeWithWorkspace`.
+  // A running turn holds that queue while it waits for these answers, so routing
+  // them through it would deadlock every prompt.
   ipcMain.handle(HUMAN_INPUT_ANSWER_CHANNEL, (_event, answer) => humanInputSessions.resolveAnswer(answer));
+  ipcMain.handle(TOOL_APPROVAL_ANSWER_CHANNEL, (_event, answer) => toolApprovalSessions.resolveAnswer(answer));
   registerAgentIpcHandlers();
 }
 

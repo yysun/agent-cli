@@ -11,6 +11,8 @@
  * - Avoids exposing Node.js or Electron primitives directly to web code.
  *
  * Recent changes:
+ * - 2026-07-27: Exposed the tool-approval request subscription and answer bridge.
+ * - 2026-07-27: Dropped renderer-supplied chat history from the runtime turn request.
  * - 2026-06-04: Exposed a current-turn runtime event subscription for Electron verbose mode.
  * - 2026-05-31: Added runtime provider/model metadata to workspace IPC responses.
  * - 2026-05-31: Added optional workspace world summary metadata to workspace IPC responses.
@@ -34,6 +36,8 @@ const CHAT_EDIT_AND_RESEND_CHANNEL = 'chat:editAndResend';
 const TURN_EVENT_CHANNEL = 'turn:event';
 const HUMAN_INPUT_REQUEST_CHANNEL = 'humanInput:request';
 const HUMAN_INPUT_ANSWER_CHANNEL = 'humanInput:answer';
+const TOOL_APPROVAL_REQUEST_CHANNEL = 'toolApproval:request';
+const TOOL_APPROVAL_ANSWER_CHANNEL = 'toolApproval:answer';
 
 export type AgentCliDesktopAppInfo = {
   name: string;
@@ -54,7 +58,6 @@ export type AgentCliDesktopRunTurnRequest = {
   chatId?: string;
   message?: string;
   userMessage?: string;
-  messages?: AgentCliDesktopRuntimeMessage[];
   workspaceRoot?: string;
   agentConfig?: Record<string, unknown>;
   skillSelection?: AgentCliDesktopSkillSelection;
@@ -106,6 +109,21 @@ export type AgentCliDesktopWorldSummary = {
 export type AgentCliDesktopRuntimeSummary = {
   provider: string;
   model: string;
+  toolPermission: string;
+  reasoningEffort: string;
+};
+
+export type AgentCliDesktopToolApprovalRequest = {
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  argumentsSummary: string;
+};
+
+export type AgentCliDesktopToolApprovalAnswer = {
+  requestId: string;
+  approved: boolean;
+  reason?: string;
 };
 
 export type AgentCliDesktopSkillSummary = {
@@ -215,6 +233,8 @@ export type AgentCliDesktopApi = {
   onTurnEvent: (callback: (event: AgentCliDesktopTurnEvent) => void) => () => void;
   onHumanInputRequest: (callback: (request: AgentCliDesktopHumanInputRequest) => void) => () => void;
   submitHumanInputAnswer: (answer: AgentCliDesktopHumanInputAnswer) => Promise<{ ok: boolean }>;
+  onToolApprovalRequest: (callback: (request: AgentCliDesktopToolApprovalRequest) => void) => () => void;
+  submitToolApprovalAnswer: (answer: AgentCliDesktopToolApprovalAnswer) => Promise<{ ok: boolean }>;
 };
 
 const desktopApi: AgentCliDesktopApi = {
@@ -258,6 +278,15 @@ const desktopApi: AgentCliDesktopApi = {
   },
   submitHumanInputAnswer: async (answer) => ipcRenderer.invoke(
     HUMAN_INPUT_ANSWER_CHANNEL,
+    answer,
+  ) as Promise<{ ok: boolean }>,
+  onToolApprovalRequest: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: AgentCliDesktopToolApprovalRequest) => callback(request);
+    ipcRenderer.on(TOOL_APPROVAL_REQUEST_CHANNEL, listener);
+    return () => ipcRenderer.removeListener(TOOL_APPROVAL_REQUEST_CHANNEL, listener);
+  },
+  submitToolApprovalAnswer: async (answer) => ipcRenderer.invoke(
+    TOOL_APPROVAL_ANSWER_CHANNEL,
     answer,
   ) as Promise<{ ok: boolean }>,
 };

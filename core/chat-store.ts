@@ -11,6 +11,7 @@
  * - Does not persist worlds, world ids, agents, `agent.json`, or runtime defaults.
  *
  * Recent changes:
+ * - 2026-07-27: Rejected chat ids that escape the chats root, and ignored unsafe ids in `current.json`.
  * - 2026-05-26: Made requested or missing current chats persist as the selected chat immediately.
  * - 2026-05-26: Ensured new chat requests also initialize workspace storage.
  * - 2026-05-26: Flattened storage to `.agent-world/chats` and removed persisted agent/world state.
@@ -21,12 +22,14 @@ import path from 'node:path';
 
 import {
   AGENT_WORLD_CHATS_ROOT,
+  assertSafeChatId,
   buildWorldChatDirectoryPath,
   buildWorldChatEventsPath,
   buildWorldChatMessagesPath,
   buildWorldChatMetadataPath,
   buildWorldChatSummaryPath,
   CURRENT_CHAT_PATH,
+  isSafeChatId,
 } from './paths.js';
 import { ensureWorkspaceWorld } from './workspace-store.js';
 
@@ -244,11 +247,15 @@ function createEmptyChat() {
 
 async function readCurrentChatId() {
   const current = await readJsonIfPresent(CURRENT_CHAT_PATH);
-  return String(
+  const chatId = String(
     current && typeof current === 'object' && 'chatId' in current
       ? current.chatId ?? ''
       : '',
   ).trim();
+
+  // A pointer file that names an unsafe id degrades to "no current chat" so a
+  // poisoned `current.json` starts a fresh chat instead of failing startup.
+  return isSafeChatId(chatId) ? chatId : '';
 }
 
 /** @param {string} chatId */
@@ -308,11 +315,7 @@ async function loadWorldChatMetadata(chatId) {
 
 /** @param {string} chatId */
 async function loadWorldChatById(chatId) {
-  const normalizedChatId = String(chatId ?? '').trim();
-
-  if (!normalizedChatId) {
-    throw new Error('Missing chat ID.');
-  }
+  const normalizedChatId = assertSafeChatId(chatId);
 
   const metadata = await loadWorldChatMetadata(normalizedChatId);
   const messages = (await readJsonl(buildWorldChatMessagesPath(normalizedChatId)))
@@ -330,6 +333,7 @@ async function loadWorldChatById(chatId) {
  * @param {string} chatId
  */
 export async function loadChatById(chatId) {
+  assertSafeChatId(chatId);
   await ensureChatStorage();
   return await loadWorldChatById(chatId);
 }
@@ -388,7 +392,7 @@ export async function listPersistedChats() {
 /**
  * @param {{ setCurrent?: boolean }} [options]
  */
-export async function createPersistedChat(options = {}) {
+export async function createPersistedChat(options: { setCurrent?: boolean } = {}) {
   const chat = createEmptyChat();
 
   await persistCompletedChat({
@@ -402,11 +406,7 @@ export async function createPersistedChat(options = {}) {
 
 /** @param {string} chatId */
 export async function deletePersistedChat(chatId) {
-  const normalizedChatId = String(chatId ?? '').trim();
-
-  if (!normalizedChatId) {
-    throw new Error('Missing chat ID.');
-  }
+  const normalizedChatId = assertSafeChatId(chatId);
 
   await ensureChatStorage();
   await fs.rm(buildWorldChatDirectoryPath(normalizedChatId), { recursive: true, force: true });
@@ -425,6 +425,7 @@ export async function deletePersistedChat(chatId) {
  * @param {string} chatId
  */
 export async function setCurrentChat(chatId) {
+  assertSafeChatId(chatId);
   await ensureChatStorage();
   const chat = await loadChatById(chatId);
   await writeCurrentChatId(chat.id);
@@ -462,6 +463,7 @@ export async function loadRequestedChat({ newChat }) {
  * @param {{ chat: { id: string, createdAt?: string, updatedAt?: string }, messages: any[], setCurrent?: boolean }} params
  */
 export async function persistCompletedChat({ chat, messages, setCurrent = true }) {
+  assertSafeChatId(chat?.id);
   await ensureChatStorage();
   const persistedChat = await persistWorldChat({
     id: chat.id,

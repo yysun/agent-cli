@@ -8,8 +8,11 @@
  * - Streams assistant text to stdout while keeping diagnostics on stderr.
  * - Persists completed chats and optional stream-trace events.
  * - Formats verbose tool activity through a dedicated trace renderer.
+ * - Supplies the terminal tool-approval gate used when tool permission is `ask`.
  *
  * Recent changes:
+ * - 2026-07-27: Supplied a CLI approval gate so `ask` tool permission prompts instead of auto-approving.
+ * - 2026-07-27: Treated an unset `pastMessages` as full history instead of truncating to zero messages.
  * - 2026-06-10: Reject unresolved host-owned tool calls before persisting a completed CLI turn.
  * - 2026-05-28: Restored pending dots after verbose continuation diagnostics while waiting for assistant text.
  * - 2026-05-26: Removed agent-id-specific persisted runtime config and chat persistence.
@@ -32,6 +35,7 @@ import {
   parseHumanInputRequest,
 } from './human-input-ui.js';
 import { createPendingDisplay } from './pending-display.js';
+import { createCliApprovalGate } from './tool-approval-ui.js';
 import {
   formatModelResponseDiagnostic,
   formatToolCallDiagnostic,
@@ -196,10 +200,14 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       clearPending: () => pendingDisplay.clear(),
       enabled: options.verbose,
     });
-    const pastMessages = Number(options.agentConfig.pastMessages);
-    const historyMessageLimit = Number.isInteger(pastMessages) && pastMessages >= 0
-      ? pastMessages
-      : 0;
+    // An unset limit means "send the whole conversation". Only an explicitly
+    // configured non-negative integer truncates history; `0` still means none.
+    const configuredPastMessages = options.agentConfig.pastMessages;
+    const historyMessageLimit = typeof configuredPastMessages === 'number'
+      && Number.isInteger(configuredPastMessages)
+      && configuredPastMessages >= 0
+      ? configuredPastMessages
+      : undefined;
 
     function writeAssistantText(text: string): void {
       pendingDisplay.writeText(text);
@@ -258,6 +266,23 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
       }
     }
 
+    // Core only consults the gate when tool permission resolves to `ask`, so
+    // building one unconditionally does not add prompts to `auto` or `read`.
+    const effectiveApprovalGate = approvalGate ?? createCliApprovalGate({
+      prompt: inputPrompt,
+      output: options.verbose ? stderr : options.io.stdout,
+      beforePrompt: () => {
+        // Unlike a human-input prompt, held text here is ordinary assistant
+        // output that still belongs in the transcript, so flush rather than drop.
+        flushHeldAssistantText();
+        pendingDisplay.clear();
+      },
+      afterPrompt: () => {
+        pendingDisplay.noteExternalOutput();
+        resumePendingAssistantText();
+      },
+    });
+
     try {
       if (!options.streamOff) {
         pendingDisplay.start();
@@ -267,7 +292,7 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         chat,
         userMessage: message,
         stream: !options.streamOff,
-        approvalGate,
+        approvalGate: effectiveApprovalGate,
         abortSignal,
         onStreamChunk: options.streamOff
           ? undefined

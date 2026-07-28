@@ -5,6 +5,7 @@
  * - Type the preload-exposed Electron bridge consumed by the React renderer.
  *
  * Recent changes:
+ * - 2026-07-27: Added tool-approval request/answer types and runtime permission defaults.
  * - 2026-06-04: Added current-turn runtime event subscription for verbose-mode streaming.
  * - 2026-05-31: Added runtime provider/model metadata to workspace responses.
  * - 2026-05-31: Added optional workspace world summary metadata to workspace responses.
@@ -32,7 +33,6 @@ export type AgentCliDesktopRunTurnRequest = {
   message?: string;
   userMessage?: string;
   content?: string;
-  messages?: AgentCliDesktopRuntimeMessage[];
   workspaceRoot?: string;
   agentConfig?: Record<string, unknown>;
   skillSelection?: AgentCliDesktopSkillSelection;
@@ -84,6 +84,21 @@ export type AgentCliDesktopWorldSummary = {
 export type AgentCliDesktopRuntimeSummary = {
   provider: string;
   model: string;
+  toolPermission: string;
+  reasoningEffort: string;
+};
+
+export type AgentCliDesktopToolApprovalRequest = {
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  argumentsSummary: string;
+};
+
+export type AgentCliDesktopToolApprovalAnswer = {
+  requestId: string;
+  approved: boolean;
+  reason?: string;
 };
 
 export type AgentCliDesktopSkillSummary = {
@@ -185,6 +200,8 @@ export type AgentCliDesktopApi = {
   onTurnEvent: (callback: (event: AgentCliDesktopTurnEvent) => void) => () => void;
   onHumanInputRequest: (callback: (request: AgentCliDesktopHumanInputRequest) => void) => () => void;
   submitHumanInputAnswer: (answer: AgentCliDesktopHumanInputAnswer) => Promise<{ ok: boolean }>;
+  onToolApprovalRequest: (callback: (request: AgentCliDesktopToolApprovalRequest) => void) => () => void;
+  submitToolApprovalAnswer: (answer: AgentCliDesktopToolApprovalAnswer) => Promise<{ ok: boolean }>;
 };
 
 declare global {

@@ -73,6 +73,14 @@ npm run electron:start
 
 ## Runtime Settings
 
+Tool permission modes:
+
+- `auto`: tools run without asking.
+- `ask`: each tool call is presented for approval first. The CLI prompts on the terminal; the Electron app renders an in-chat approval card. A denial is reported back to the model and the tool does not run. When no interactive prompt is available, the call is denied rather than silently approved.
+- `read`: the runtime restricts execution to read-only tools.
+
+`AGENT_CLI_PAST_MESSAGES` controls how many prior messages are sent to the model. When it is unset, the full persisted conversation is sent; set it to `0` to send none, or to `N` to send the last `N`.
+
 LLM-time defaults come from the selected workspace `.env`:
 
 ```sh
@@ -95,7 +103,7 @@ CLI flags override `.env`:
 - `--model <name>`
 - `--temperature <number>`
 - `--max-tokens <number>`
-- `--tool-permission <auto|ask|read>`
+- `--tool-permission <auto|ask|read>` (`ask` prompts on the terminal before each tool call)
 - `--reasoning-effort <level>`
 - `--past-messages <count>`
 - `--stream-trace <true|false>`

@@ -10,23 +10,19 @@
  * - Cleans up accepted, duplicate, unknown, unavailable, and timed-out requests deterministically.
  *
  * Recent changes:
+ * - 2026-07-27: Re-expressed on the shared pending-request lifecycle without behavior change.
  * - 2026-06-03: Extracted pending human-input lifecycle from the Electron main process.
  */
-import { randomUUID } from 'node:crypto';
 import type {
   HumanInputAnswerArtifact,
   PendingHumanInputRequest,
 } from '../cli/src/human-input-ui.js';
+import {
+  PendingRequestSessionManager,
+  type PendingRequestRenderer,
+} from './pending-request-session.js';
 
-export type HumanInputRenderer = {
-  isDestroyed: () => boolean;
-  send: (channel: string, request: PendingHumanInputRequest) => void;
-};
-
-type PendingHumanInputAnswer = {
-  resolve: (answer: HumanInputAnswerArtifact) => void;
-  timeout: ReturnType<typeof setTimeout>;
-};
+export type HumanInputRenderer = PendingRequestRenderer<PendingHumanInputRequest>;
 
 export type HumanInputSessionOptions = {
   requestChannel: string;
@@ -40,6 +36,9 @@ const HUMAN_INPUT_STATUSES = new Set([
   'cancelled',
   'unavailable',
 ]);
+
+const RENDERER_UNAVAILABLE_MESSAGE = 'Electron renderer is unavailable for ask_user_input.';
+const TIMEOUT_MESSAGE = 'Timed out waiting for ask_user_input response.';
 
 function isHumanInputStatus(value: unknown): value is HumanInputAnswerArtifact['status'] {
   return typeof value === 'string' && HUMAN_INPUT_STATUSES.has(value);
@@ -79,82 +78,32 @@ export function unavailableHumanInputAnswer(
 }
 
 export class HumanInputSessionManager {
-  private readonly pendingAnswers = new Map<string, PendingHumanInputAnswer>();
-
-  private readonly requestChannel: string;
-
-  private readonly timeoutMs: number;
-
-  private readonly createRequestId: () => string;
+  private readonly sessions: PendingRequestSessionManager<PendingHumanInputRequest, HumanInputAnswerArtifact>;
 
   constructor(options: HumanInputSessionOptions) {
-    this.requestChannel = options.requestChannel;
-    this.timeoutMs = options.timeoutMs;
-    this.createRequestId = options.createRequestId ?? randomUUID;
+    this.sessions = new PendingRequestSessionManager({
+      requestChannel: options.requestChannel,
+      timeoutMs: options.timeoutMs,
+      ...(options.createRequestId ? { createRequestId: options.createRequestId } : {}),
+      normalizeAnswer: normalizeHumanInputAnswer,
+      buildFallbackAnswer: unavailableHumanInputAnswer,
+      rendererUnavailableMessage: RENDERER_UNAVAILABLE_MESSAGE,
+      timeoutMessage: TIMEOUT_MESSAGE,
+    });
   }
 
   get pendingCount(): number {
-    return this.pendingAnswers.size;
-  }
-
-  private prepareRendererRequest(request: PendingHumanInputRequest): PendingHumanInputRequest {
-    const preferredRequestId = request.requestId.trim();
-    if (preferredRequestId && !this.pendingAnswers.has(preferredRequestId)) {
-      return { ...request, requestId: preferredRequestId };
-    }
-
-    let requestId = this.createRequestId();
-    while (this.pendingAnswers.has(requestId)) {
-      requestId = this.createRequestId();
-    }
-
-    return { ...request, requestId };
+    return this.sessions.pendingCount;
   }
 
   requestInput(
     renderer: HumanInputRenderer | undefined,
     request: PendingHumanInputRequest,
   ): Promise<HumanInputAnswerArtifact> {
-    const rendererRequest = this.prepareRendererRequest(request);
-
-    if (!renderer || renderer.isDestroyed()) {
-      return Promise.resolve(unavailableHumanInputAnswer(rendererRequest, 'Electron renderer is unavailable for ask_user_input.'));
-    }
-
-    const { requestId } = rendererRequest;
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingAnswers.delete(requestId);
-        resolve(unavailableHumanInputAnswer(rendererRequest, 'Timed out waiting for ask_user_input response.'));
-      }, this.timeoutMs);
-
-      this.pendingAnswers.set(requestId, { resolve, timeout });
-
-      try {
-        renderer.send(this.requestChannel, rendererRequest);
-      } catch {
-        clearTimeout(timeout);
-        this.pendingAnswers.delete(requestId);
-        resolve(unavailableHumanInputAnswer(rendererRequest, 'Electron renderer is unavailable for ask_user_input.'));
-      }
-    });
+    return this.sessions.request(renderer, request);
   }
 
   resolveAnswer(rawAnswer: unknown): { ok: boolean } {
-    const answer = normalizeHumanInputAnswer(rawAnswer);
-    if (!answer) {
-      return { ok: false };
-    }
-
-    const pendingAnswer = this.pendingAnswers.get(answer.requestId);
-    if (!pendingAnswer) {
-      return { ok: false };
-    }
-
-    clearTimeout(pendingAnswer.timeout);
-    this.pendingAnswers.delete(answer.requestId);
-    pendingAnswer.resolve(answer);
-    return { ok: true };
+    return this.sessions.resolveAnswer(rawAnswer);
   }
 }

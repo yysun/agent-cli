@@ -6,6 +6,7 @@
  * - Validate flat `.agent-world/chats` persistence.
  *
  * Recent changes:
+ * - 2026-07-27: Added unsafe chat-id rejection and poisoned current-pointer coverage.
  * - 2026-06-02: Removed environment-based workspace root setup.
  * - 2026-05-26: Removed world and agent metadata expectations.
  */
@@ -288,5 +289,50 @@ describe('chat-store', () => {
         messageCount: 0,
       }),
     ]);
+  });
+
+  it('rejects chat ids that escape the chats root before touching the filesystem', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    const victimRoot = path.join(rootPath, 'victim');
+    await mkdir(victimRoot, { recursive: true });
+    await writeFile(path.join(victimRoot, 'important.txt'), 'do not delete', 'utf8');
+
+    const {
+      deletePersistedChat,
+      loadChatById,
+      persistCompletedChat,
+      setCurrentChat,
+    } = await loadChatStore(rootPath);
+
+    const unsafeChatIds = ['../../victim', '..', '.', 'nested/chat', 'nested\\chat', '/etc/passwd', '', '   '];
+
+    for (const chatId of unsafeChatIds) {
+      await expect(loadChatById(chatId)).rejects.toThrow(/chat ID/i);
+      await expect(setCurrentChat(chatId)).rejects.toThrow(/chat ID/i);
+      await expect(deletePersistedChat(chatId)).rejects.toThrow(/chat ID/i);
+      await expect(persistCompletedChat({ chat: { id: chatId }, messages: [] })).rejects.toThrow(/chat ID/i);
+    }
+
+    await expect(readFile(path.join(victimRoot, 'important.txt'), 'utf8')).resolves.toBe('do not delete');
+  });
+
+  it('ignores an unsafe current chat pointer instead of failing startup', async () => {
+    const rootPath = await createTestRoot();
+    rootsToClean.push(rootPath);
+
+    await mkdir(path.join(rootPath, '.agent-world', 'chats'), { recursive: true });
+    await writeFile(
+      path.join(rootPath, '.agent-world', 'chats', 'current.json'),
+      `${JSON.stringify({ chatId: '../../victim' }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const { loadRequestedChat } = await loadChatStore(rootPath);
+    const chat = await loadRequestedChat({ newChat: false });
+
+    expect(chat.id).not.toBe('../../victim');
+    expect(chat.messages).toEqual([]);
   });
 });
