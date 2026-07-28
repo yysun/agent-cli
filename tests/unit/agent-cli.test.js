@@ -6,6 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-07-27: A rejected unresolved tool-call turn now keeps the user message; only the orphaned call is dropped.
  * - 2026-06-10: Covered unresolved host-owned tool calls failing before chat persistence.
  * - 2026-05-28: Covered verbose pending dots as a waiting-for-assistant-text indicator.
  * - 2026-05-26: Covered workspace-local `.env` loading and `.env.example` creation.
@@ -349,7 +350,7 @@ describe('agent-cli entrypoint', () => {
     }));
   });
 
-  it('rejects unresolved host-owned tool calls without persisting a partial turn', async () => {
+  it('rejects unresolved host-owned tool calls while keeping the surviving transcript', async () => {
     const rootPath = await createTestRoot();
     rootsToClean.push(rootPath);
     await writeSystemPrompt(rootPath, 'Prompt');
@@ -382,12 +383,17 @@ describe('agent-cli entrypoint', () => {
     );
 
     const current = await readJson(path.join(rootPath, '.agent-world', 'chats', 'current.json'));
-    const messagesFile = await readFile(
+    const persisted = (await readFile(
       path.join(rootPath, '.agent-world', 'chats', current.chatId, 'messages.jsonl'),
       'utf8',
-    );
+    )).split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
 
-    expect(messagesFile).toBe('');
+    // The rejection must not destroy the user's message.
+    expect(persisted).toContainEqual(expect.objectContaining({ role: 'user', content: 'hello' }));
+
+    // ...but the unresolved assistant tool call must not be saved, or replaying
+    // this chat as history would be rejected by the provider on the next turn.
+    expect(persisted.some((message) => Array.isArray(message.tool_calls) && message.tool_calls.length > 0)).toBe(false);
   });
 
   it('streams verbose reasoning chunks into one readable diagnostic block', async () => {

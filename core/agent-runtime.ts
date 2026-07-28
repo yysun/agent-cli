@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-07-27: Added `selectPersistableMessages` so a rejected turn can be saved without orphaned tool calls.
  * - 2026-06-10: Added a shared host guard so unresolved tool-call results cannot be persisted as completed turns.
  * - 2026-06-04: Allowed hosts to pass filtered runtime skill roots so prompt inventory and `load_skill` stay aligned.
  * - 2026-05-27: Tightened JSDoc boundary types so editor check-js sees runtime options and callbacks correctly.
@@ -474,6 +475,56 @@ export function assertCompletedChatTurn(result) {
   throw new Error(
     `LLM turn paused with unresolved tool calls: ${toolNames}. Host must handle these tool calls before completing the turn.`,
   );
+}
+
+/**
+ * Selects the messages from a turn that form a conversation a provider will
+ * accept as replayed history.
+ *
+ * A rejected turn ends with an assistant message whose `tool_calls` have no
+ * matching `tool` result — that is why it was rejected. Persisting that orphan
+ * would poison the chat: OpenAI and Anthropic both reject history in which an
+ * assistant tool call has no result for every `tool_call_id`, so every later
+ * turn in the chat would fail. Drop those fragments and keep everything else.
+ *
+ * @param {any[]} messages
+ */
+export function selectPersistableMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  const resolvedToolCallIds = new Set(
+    messages
+      .filter((message) => message?.role === 'tool' && message?.tool_call_id)
+      .map((message) => message.tool_call_id),
+  );
+
+  const retainedToolCallIds = new Set();
+  const retained = messages.filter((message) => {
+    if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
+      return true;
+    }
+
+    const hasUnresolvedToolCall = message.tool_calls.some(
+      (toolCall) => !resolvedToolCallIds.has(toolCall?.id),
+    );
+
+    if (hasUnresolvedToolCall) {
+      return false;
+    }
+
+    for (const toolCall of message.tool_calls) {
+      retainedToolCallIds.add(toolCall?.id);
+    }
+
+    return true;
+  });
+
+  // Drop tool results whose assistant call was just removed.
+  return retained.filter((message) => (
+    message?.role !== 'tool' || retainedToolCallIds.has(message.tool_call_id)
+  ));
 }
 
 /**

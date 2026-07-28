@@ -703,6 +703,31 @@ function assertCompletedChatTurn(result) {
     `LLM turn paused with unresolved tool calls: ${toolNames}. Host must handle these tool calls before completing the turn.`
   );
 }
+function selectPersistableMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+  const resolvedToolCallIds = new Set(
+    messages.filter((message) => message?.role === "tool" && message?.tool_call_id).map((message) => message.tool_call_id)
+  );
+  const retainedToolCallIds = /* @__PURE__ */ new Set();
+  const retained = messages.filter((message) => {
+    if (message?.role !== "assistant" || !Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
+      return true;
+    }
+    const hasUnresolvedToolCall = message.tool_calls.some(
+      (toolCall) => !resolvedToolCallIds.has(toolCall?.id)
+    );
+    if (hasUnresolvedToolCall) {
+      return false;
+    }
+    for (const toolCall of message.tool_calls) {
+      retainedToolCallIds.add(toolCall?.id);
+    }
+    return true;
+  });
+  return retained.filter((message) => message?.role !== "tool" || retainedToolCallIds.has(message.tool_call_id));
+}
 function extractRejectedTextResponse(error) {
   const message = String(error ?? "");
   if (!message.startsWith(REJECTED_TEXT_RESPONSE_PREFIX)) {
@@ -3189,18 +3214,19 @@ function createTurnExecutor(options) {
       });
       verboseDisplay.closeReasoning();
       flushHeldAssistantText();
-      assertCompletedChatTurn(turnResult);
+      const persistableMessages = selectPersistableMessages(turnResult.messages);
       await persistCompletedChat({
         chat,
-        messages: turnResult.messages
+        messages: persistableMessages
       });
+      chat.messages = persistableMessages;
+      assertCompletedChatTurn(turnResult);
       if (streamTraceEnabled) {
         await persistStreamTraceEvents({
           chat,
           streamTraceEvents
         });
       }
-      chat.messages = turnResult.messages;
       if (options.streamOff) {
         pendingDisplay.clear();
         verboseDisplay.beforeAssistantText(lastStreamType);

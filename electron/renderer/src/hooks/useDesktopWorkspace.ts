@@ -10,6 +10,7 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-07-27: Surfaced failed turns as an error log entry and reloaded the persisted transcript.
  * - 2026-07-27: Added tool-approval prompt state and blocked workspace/chat switches during a turn.
  * - 2026-07-27: Initialized tool-permission and reasoning controls from workspace runtime configuration.
  * - 2026-06-04: Accumulated streamed thinking chunks into one reasoning event.
@@ -357,8 +358,18 @@ export function useDesktopWorkspace() {
       clearEdit();
       await refreshChats();
       log('info', wasEditing ? 'Edited message resent.' : 'Message sent.');
+    }).catch(async (error) => {
+      // A failed turn still persists the work that completed, so reload from
+      // storage instead of leaving the transcript showing pre-send state.
+      log('error', `Turn failed: ${safeErrorMessage(error)}`);
+      setPendingHumanInputRequest(null);
+      setPendingToolApprovalRequest(null);
+      if (currentChatId) {
+        await loadMessages(currentChatId).catch(() => undefined);
+      }
+      await refreshChats().catch(() => undefined);
     });
-  }, [busy, clearEdit, createSkillSelection, currentChatId, desktopApi, editingIndex, log, reasoningEffort, refreshChats, toolPermission, withBusy]);
+  }, [busy, clearEdit, createSkillSelection, currentChatId, desktopApi, editingIndex, loadMessages, log, reasoningEffort, refreshChats, toolPermission, withBusy]);
 
   const setThemePreference = useCallback((preference: ThemePreference) => {
     setThemePreferenceState(normalizeThemePreference(preference));

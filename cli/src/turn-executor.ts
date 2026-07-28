@@ -11,6 +11,7 @@
  * - Supplies the terminal tool-approval gate used when tool permission is `ask`.
  *
  * Recent changes:
+ * - 2026-07-27: Persisted a rejected turn's sanitized transcript before reporting the rejection.
  * - 2026-07-27: Supplied a CLI approval gate so `ask` tool permission prompts instead of auto-approving.
  * - 2026-07-27: Treated an unset `pastMessages` as full history instead of truncating to zero messages.
  * - 2026-06-10: Reject unresolved host-owned tool calls before persisting a completed CLI turn.
@@ -27,7 +28,7 @@ import {
   persistCompletedChat,
   persistStreamTraceEvents,
 } from '../../core/chat-store.js';
-import { assertCompletedChatTurn, runChatTurn } from '../../core/agent-runtime.js';
+import { assertCompletedChatTurn, runChatTurn, selectPersistableMessages } from '../../core/agent-runtime.js';
 import {
   collectHumanInputAnswer,
   type HumanInputPrompt,
@@ -506,12 +507,18 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
 
       verboseDisplay.closeReasoning();
       flushHeldAssistantText();
-      assertCompletedChatTurn(turnResult);
 
+      // Persist before asserting: a turn rejected for unresolved tool calls still
+      // produced real conversation, and throwing first discarded the user's own
+      // message. Sanitizing keeps the saved history provider-valid.
+      const persistableMessages = selectPersistableMessages(turnResult.messages);
       await persistCompletedChat({
         chat,
-        messages: turnResult.messages,
+        messages: persistableMessages,
       });
+      chat.messages = persistableMessages;
+
+      assertCompletedChatTurn(turnResult);
 
       if (streamTraceEnabled) {
         await persistStreamTraceEvents({
@@ -519,8 +526,6 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
           streamTraceEvents,
         });
       }
-
-      chat.messages = turnResult.messages;
 
       if (options.streamOff) {
         pendingDisplay.clear();

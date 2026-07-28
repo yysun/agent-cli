@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-07-27: Persisted a rejected turn's sanitized transcript before reporting the rejection.
  * - 2026-07-27: Added the renderer tool-approval gate so `ask` tool permission prompts instead of auto-approving.
  * - 2026-07-27: Serialized workspace-touching IPC handlers so a workspace switch cannot repoint an in-flight turn.
  * - 2026-07-27: Loaded `agent:runTurn` history from storage instead of accepting renderer-supplied messages.
@@ -55,7 +56,7 @@ import {
 } from '../cli/src/human-input-ui.js';
 import { HumanInputSessionManager } from './human-input-session.js';
 import { ToolApprovalSessionManager } from './tool-approval-session.js';
-import { assertCompletedChatTurn, resolveRuntimeSelection, runChatTurn } from '../core/agent-runtime.js';
+import { assertCompletedChatTurn, resolveRuntimeSelection, runChatTurn, selectPersistableMessages } from '../core/agent-runtime.js';
 import { WORKSPACE_ROOT } from '../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../core/workspace-environment.js';
 import { ensureWorkspaceWorld } from '../core/workspace-store.js';
@@ -516,12 +517,15 @@ async function executeRuntimeTurn(params: {
     },
   });
 
-  assertCompletedChatTurn(result);
-
+  // Persist before asserting: a turn rejected for unresolved tool calls still
+  // produced real conversation, and throwing first discarded the user's own
+  // message. Sanitizing keeps the saved history provider-valid.
   const persistedChat = await persistCompletedChat({
     chat: params.chat,
-    messages: result.messages,
+    messages: selectPersistableMessages(result.messages),
   });
+
+  assertCompletedChatTurn(result);
 
   return {
     chatId: persistedChat.id,

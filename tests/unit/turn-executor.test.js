@@ -10,6 +10,7 @@
  * - Exercises the approval gate the executor supplies when tool permission is `ask`.
  *
  * Recent changes:
+ * - 2026-07-27: Added coverage for rejected-turn persistence.
  * - 2026-07-27: Added coverage for full-history default and terminal tool approval.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -177,6 +178,59 @@ describe('turn executor history depth', () => {
 
     expect(conversationMessages(options.messages).map((message) => message.content))
       .toEqual(['second', 'third', 'hello']);
+  });
+});
+
+describe('turn executor rejected turns', () => {
+  const unhandledCall = { id: 'host-1', function: { name: 'some_host_tool', arguments: '{}' } };
+
+  async function runRejectedTurn(io) {
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'assistant_message', message: { role: 'assistant', content: '', tool_calls: [unhandledCall] } },
+      { type: 'tool_calls', iteration: 1, result: { status: 'tool_calls', toolCalls: [unhandledCall], messages: [] } },
+    ]));
+
+    const { createTurnExecutor } = await import('../../cli/src/turn-executor.js');
+    const executeTurn = createTurnExecutor({
+      io: io.io,
+      verbose: false,
+      streamOff: false,
+      agentConfig: { provider: 'openai', model: 'gpt-5' },
+      skillInventory: [],
+    });
+
+    return executeTurn({
+      chat: { id: 'chat-1', messages: [{ role: 'user', content: 'earlier turn' }] },
+      message: 'hello',
+    });
+  }
+
+  it('still reports the rejection and names the unresolved tool', async () => {
+    const io = createIo();
+    await expect(runRejectedTurn(io)).rejects.toThrow(/some_host_tool/);
+  });
+
+  it('persists the surviving transcript instead of discarding the user message', async () => {
+    const io = createIo();
+    await expect(runRejectedTurn(io)).rejects.toThrow();
+
+    expect(persistCompletedChat).toHaveBeenCalledTimes(1);
+    const persisted = persistCompletedChat.mock.calls[0][0].messages;
+    expect(persisted).toContainEqual(expect.objectContaining({ role: 'user', content: 'earlier turn' }));
+    expect(persisted).toContainEqual(expect.objectContaining({ role: 'user', content: 'hello' }));
+  });
+
+  it('does not persist an orphaned assistant tool call that would break the next turn', async () => {
+    const io = createIo();
+    await expect(runRejectedTurn(io)).rejects.toThrow();
+
+    const persisted = persistCompletedChat.mock.calls[0][0].messages;
+    const resolvedIds = new Set(persisted.filter((m) => m.role === 'tool').map((m) => m.tool_call_id));
+    for (const message of persisted) {
+      for (const toolCall of message.tool_calls ?? []) {
+        expect(resolvedIds.has(toolCall.id)).toBe(true);
+      }
+    }
   });
 });
 

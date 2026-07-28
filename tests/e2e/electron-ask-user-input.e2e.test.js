@@ -11,6 +11,8 @@
  * - Verifies rendered prompt submission, same-turn continuation, tool-card visibility, and reload behavior.
  *
  * Recent changes:
+ * - 2026-07-27: Reported live-model non-compliance explicitly instead of a bare locator timeout.
+ * - 2026-07-27: Corrected stale verbose-mode direction and tool-trace selectors after the trace-section refactor.
  * - 2026-06-04: Added live Electron E2E coverage for renderer `ask_user_input` flow.
  */
 import 'dotenv/config';
@@ -104,6 +106,72 @@ async function launchElectronApp(workspaceRoot) {
   return { app, page, runtimeConfig };
 }
 
+/**
+ * The fixture asks the live model to emit a specific `ask_user_input` call, and
+ * the model does not always comply. Distinguish that from a product failure so a
+ * red run points at the real cause instead of a bare locator timeout.
+ *
+ * @param {import('playwright').Page} page
+ * @param {import('playwright').Locator} prompt
+ */
+async function waitForPromptOrModelNonCompliance(page, prompt) {
+  const promptVisible = prompt.waitFor({ state: 'visible', timeout: 60000 }).then(() => 'prompt');
+  const turnFinished = page
+    .waitForFunction(() => document.querySelector('#working-status')?.hasAttribute('hidden'), undefined, { timeout: 60000 })
+    .then(() => 'finished');
+
+  const outcome = await Promise.race([promptVisible, turnFinished]).catch(() => 'timeout');
+
+  if (outcome === 'prompt') {
+    return;
+  }
+
+  if (await prompt.isVisible()) {
+    return;
+  }
+
+  if (outcome === 'finished') {
+    throw new Error(
+      `Live model (${GEMINI_LIVE_MODEL}) did not emit the ask_user_input tool call the fixture requested; `
+      + 'the turn completed without rendering a prompt. This is model non-compliance, not a product failure. Re-run to resample.',
+    );
+  }
+
+  throw new Error(
+    `No ask_user_input prompt appeared and the turn never finished within 60s (model ${GEMINI_LIVE_MODEL}).`,
+  );
+}
+
+/**
+ * A turn can finish without persisting any assistant text for two very different
+ * reasons: the product rejected the turn, or the live model simply never produced
+ * a final answer. The renderer logs `Turn failed: ...` only in the first case, so
+ * use that to say which one happened instead of failing on a bare count.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string | undefined} assistantText
+ * @param {Array<Record<string, any>>} persistedMessages
+ */
+async function assertFinalAnswerOrExplain(page, assistantText, persistedMessages) {
+  if (String(assistantText || '').trim()) {
+    return;
+  }
+
+  const failureEntry = (await page.locator('.aw-log-entry').allTextContents())
+    .find((entry) => entry.includes('Turn failed:'));
+
+  if (failureEntry) {
+    throw new Error(`Product failure: the turn was rejected and persisted no final answer. Renderer reported "${failureEntry.trim()}".`);
+  }
+
+  const roles = persistedMessages.map((message) => message.role).join(', ');
+  throw new Error(
+    `Live model (${GEMINI_LIVE_MODEL}) completed the turn without producing a final answer; `
+    + `persisted roles were [${roles}] and the renderer reported no turn failure. `
+    + 'This is model non-compliance, not a product failure. Re-run to resample.',
+  );
+}
+
 async function readMessagesJsonl(workspaceRoot) {
   const current = JSON.parse(await readFile(path.join(workspaceRoot, '.agent-world', 'chats', 'current.json'), 'utf8'));
   const content = await readFile(path.join(workspaceRoot, '.agent-world', 'chats', current.chatId, 'messages.jsonl'), 'utf8');
@@ -135,7 +203,7 @@ describe('Electron ask_user_input live flow', () => {
     await page.click('#send-button');
 
     const prompt = page.locator('.aw-human-input');
-    await prompt.waitFor({ state: 'visible', timeout: 60000 });
+    await waitForPromptOrModelNonCompliance(page, prompt);
     expect(await prompt.textContent()).toContain('Choose the Electron E2E route.');
     expect(await page.locator('input[type="radio"][name*="route"]').count()).toBe(2);
 
@@ -148,15 +216,20 @@ describe('Electron ask_user_input live flow', () => {
     const assistantText = [...persistedMessages]
       .reverse()
       .find((message) => message.role === 'assistant' && String(message.content || '').trim())?.content;
+    await assertFinalAnswerOrExplain(page, assistantText, persistedMessages);
     expect(String(assistantText || '').trim().length).toBeGreaterThan(0);
     expect(await page.locator('#message-list').textContent()).toContain(assistantText);
-    await page.locator('.aw-tool-title').filter({ hasText: 'ask_user_input' }).first().waitFor({ state: 'visible' });
+    // Verbose mode is off by default, so persisted tool traces start hidden.
+    const toolTrace = page.locator('.aw-tool-trace-title').filter({ hasText: 'ask_user_input' });
+    expect(await toolTrace.count()).toBe(0);
 
     await page.click('#show-tool-messages-toggle');
-    expect(await page.locator('.aw-tool-title').filter({ hasText: 'ask_user_input' }).count()).toBe(0);
+    await toolTrace.first().waitFor({ state: 'visible' });
     expect(await page.locator('#message-list').textContent()).toContain(assistantText);
+
     await page.click('#show-tool-messages-toggle');
-    await page.locator('.aw-tool-title').filter({ hasText: 'ask_user_input' }).first().waitFor({ state: 'visible' });
+    expect(await toolTrace.count()).toBe(0);
+    expect(await page.locator('#message-list').textContent()).toContain(assistantText);
 
     persistedMessages = await readMessagesJsonl(workspaceRoot);
     expect(persistedMessages.some((message) => message.role === 'tool' && String(message.content || '').includes('alpha'))).toBe(true);
@@ -164,6 +237,6 @@ describe('Electron ask_user_input live flow', () => {
     await page.reload();
     await page.waitForSelector('#message-input', { timeout: 30000 });
     await page.waitForFunction((expectedText) => document.querySelector('#message-list')?.textContent?.includes(String(expectedText)), assistantText, { timeout: 30000 });
-    expect(await page.locator('.aw-tool-title').filter({ hasText: 'model response' }).count()).toBe(0);
+    expect(await page.locator('.aw-tool-trace-title').filter({ hasText: 'model response' }).count()).toBe(0);
   }, LIVE_ELECTRON_E2E_TIMEOUT_MS);
 });
