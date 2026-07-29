@@ -2,21 +2,20 @@
  * Human Input Selection Helpers
  *
  * Purpose:
- * - Build structured Electron human-input answers from renderer prompt state.
+ * - Build canonical Electron human-input outcomes from renderer prompt state.
  *
  * Key features:
  * - Keeps answer construction deterministic and testable outside React.
- * - Enforces single-select, multiple-select, freeform, required-answer, skip, and cancel rules.
+ * - Enforces declared single/multiple selections and opt-in `allowOther` input.
  *
  * Recent changes:
+ * - 2026-07-28: Migrated renderer answers to the `llm-runtime` 0.7 contract.
  * - 2026-06-03: Extracted Electron prompt answer construction from `HumanInputPrompt`.
  */
 import type {
   AgentCliDesktopHumanInputAnswer,
-  AgentCliDesktopHumanInputOption,
   AgentCliDesktopHumanInputQuestion,
   AgentCliDesktopHumanInputRequest,
-  AgentCliDesktopHumanInputSelection,
 } from '../../types/desktop-api';
 
 export type HumanInputPromptState = {
@@ -24,80 +23,12 @@ export type HumanInputPromptState = {
   freeformTextByQuestion: Record<string, string>;
 };
 
-export type HumanInputSelectionsResult =
-  | { ok: true; selections: AgentCliDesktopHumanInputSelection[] }
-  | { ok: false; error: string };
-
 export type HumanInputAnswerResult =
   | { ok: true; answer: AgentCliDesktopHumanInputAnswer }
   | { ok: false; error: string };
 
-export function allowsFreeformInput(question: AgentCliDesktopHumanInputQuestion): boolean {
-  return question.allowFreeformInput !== false;
-}
-
-export function selectedOptionsForQuestion(
-  question: AgentCliDesktopHumanInputQuestion,
-  selectedOptionIds: string[],
-): AgentCliDesktopHumanInputOption[] {
-  return selectedOptionIds
-    .map((optionId) => question.options.find((option) => option.id === optionId))
-    .filter((option): option is AgentCliDesktopHumanInputOption => Boolean(option));
-}
-
-export function buildHumanInputSelections(
-  request: AgentCliDesktopHumanInputRequest,
-  state: HumanInputPromptState,
-  skipAll = false,
-): HumanInputSelectionsResult {
-  const selections: AgentCliDesktopHumanInputSelection[] = [];
-
-  for (const question of request.questions) {
-    const selectedOptionIds = state.selectedOptionIdsByQuestion[question.id] || [];
-    const selectedOptions = selectedOptionsForQuestion(question, selectedOptionIds);
-    const normalizedSelectedOptions = request.type === 'single-select'
-      ? selectedOptions.slice(0, 1)
-      : selectedOptions;
-    const enteredText = String(state.freeformTextByQuestion[question.id] || '').trim();
-
-    if (skipAll || (request.allowSkip && normalizedSelectedOptions.length === 0 && !enteredText)) {
-      selections.push({
-        questionId: question.id,
-        questionText: question.question,
-        skipped: true,
-        selectedOptions: [],
-      });
-      continue;
-    }
-
-    if (normalizedSelectedOptions.length > 0) {
-      selections.push({
-        questionId: question.id,
-        questionText: question.question,
-        skipped: false,
-        selectedOptions: normalizedSelectedOptions,
-      });
-      continue;
-    }
-
-    if (enteredText && allowsFreeformInput(question)) {
-      selections.push({
-        questionId: question.id,
-        questionText: question.question,
-        skipped: false,
-        selectedOptions: [],
-        enteredText,
-      });
-      continue;
-    }
-
-    return {
-      ok: false,
-      error: `Answer required: ${question.question}`,
-    };
-  }
-
-  return { ok: true, selections };
+export function allowsOtherInput(question: AgentCliDesktopHumanInputQuestion): boolean {
+  return question.allowOther === true;
 }
 
 export function buildHumanInputAnswer(
@@ -105,21 +36,57 @@ export function buildHumanInputAnswer(
   state: HumanInputPromptState,
   skipAll = false,
 ): HumanInputAnswerResult {
-  const result = buildHumanInputSelections(request, state, skipAll);
-  if (result.ok === false) {
+  if (skipAll) {
+    if (!request.allowSkip) {
+      return { ok: false, error: 'This input request cannot be skipped.' };
+    }
     return {
-      ok: false,
-      error: result.error,
+      ok: true,
+      answer: {
+        requestId: request.requestId,
+        status: 'cancelled',
+        reason: 'skipped',
+        message: 'User skipped input.',
+      },
     };
+  }
+
+  const answers: Record<string, string | string[]> = {};
+
+  for (const question of request.questions) {
+    const selectedOptionIds = state.selectedOptionIdsByQuestion[question.id] || [];
+    const declaredOptionIds = new Set(question.options.map((option) => option.id));
+    const validSelectedIds = selectedOptionIds.filter((optionId) => declaredOptionIds.has(optionId));
+    const enteredText = String(state.freeformTextByQuestion[question.id] || '').trim();
+
+    if (request.type === 'multiple-select') {
+      const uniqueSelectedIds = [...new Set(validSelectedIds)];
+      if (uniqueSelectedIds.length === 0) {
+        return { ok: false, error: `Answer required: ${question.question}` };
+      }
+      answers[question.id] = uniqueSelectedIds;
+      continue;
+    }
+
+    if (validSelectedIds[0]) {
+      answers[question.id] = validSelectedIds[0];
+      continue;
+    }
+
+    if (enteredText && allowsOtherInput(question)) {
+      answers[question.id] = enteredText;
+      continue;
+    }
+
+    return { ok: false, error: `Answer required: ${question.question}` };
   }
 
   return {
     ok: true,
     answer: {
-      ok: true,
-      status: result.selections.every((selection) => selection.skipped) ? 'skipped' : 'answered',
       requestId: request.requestId,
-      selections: result.selections,
+      status: 'answered',
+      answers,
     },
   };
 }
@@ -128,10 +95,9 @@ export function buildCancelledHumanInputAnswer(
   request: AgentCliDesktopHumanInputRequest,
 ): AgentCliDesktopHumanInputAnswer {
   return {
-    ok: false,
-    status: 'cancelled',
     requestId: request.requestId,
-    selections: [],
+    status: 'cancelled',
+    reason: 'dismissed',
     message: 'User cancelled input.',
   };
 }

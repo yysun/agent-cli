@@ -11,6 +11,7 @@
  * - Confirms answer channels resolve while a queued operation holds the queue.
  *
  * Recent changes:
+ * - 2026-07-28: Updated queued approval evidence to the 0.7 decision contract.
  * - 2026-07-27: Added coverage for the serial workspace operation queue.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -122,7 +123,7 @@ describe('enqueueWorkspaceOperation', () => {
       expect(renderer.sent).toHaveLength(1);
     });
 
-    expect(manager.resolveAnswer({ requestId: 'tool-1', approved: true })).toEqual({ ok: true });
-    await expect(queuedTurn).resolves.toEqual({ approved: true });
+    expect(manager.resolveAnswer({ requestId: 'tool-1', decision: 'approve' })).toEqual({ ok: true });
+    await expect(queuedTurn).resolves.toEqual({ decision: 'approve' });
   });
 });

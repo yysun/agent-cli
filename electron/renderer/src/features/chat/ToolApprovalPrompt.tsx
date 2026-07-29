@@ -9,6 +9,7 @@
  * - Returns an explicit approve or deny decision to the main process.
  *
  * Recent changes:
+ * - 2026-07-28: Submitted explicit 0.7 approve/cancel decisions.
  * - 2026-07-27: Added the in-chat approval prompt for `ask` tool permission.
  */
 import { useState } from 'react';
@@ -35,8 +36,13 @@ export default function ToolApprovalPrompt({ request, onSubmitAnswer }: ToolAppr
     try {
       await onSubmitAnswer({
         requestId: request.requestId,
-        approved,
-        ...(approved ? {} : { reason: `Tool execution denied by user: ${request.toolName}.` }),
+        ...(approved
+          ? { decision: 'approve' as const }
+          : {
+            decision: 'cancel' as const,
+            reason: 'rejected' as const,
+            message: `Tool execution denied by user: ${request.toolName}.`,
+          }),
       });
     } finally {
       setSubmitting(false);

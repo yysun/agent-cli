@@ -11,6 +11,7 @@
  * - Verifies rendered prompt submission, same-turn continuation, tool-card visibility, and reload behavior.
  *
  * Recent changes:
+ * - 2026-07-28: Updated the live fixture for strict `llm-runtime` 0.7 input schema.
  * - 2026-07-27: Reported live-model non-compliance explicitly instead of a bare locator timeout.
  * - 2026-07-27: Corrected stale verbose-mode direction and tool-trace selectors after the trace-section refactor.
  * - 2026-06-04: Added live Electron E2E coverage for renderer `ask_user_input` flow.
@@ -66,7 +67,7 @@ async function createElectronWorkspace() {
       'You are an Electron ask-user-input e2e test assistant.',
       'When the user message contains ELECTRON_INPUT_E2E, do not answer first.',
       'Immediately call the ask_user_input tool with this exact JSON argument:',
-      '{"type":"single-select","requestId":"electron-input-e2e","allowSkip":true,"questions":[{"header":"E2E","id":"route","question":"Choose the Electron E2E route.","options":[{"id":"alpha","label":"Alpha route","description":"Use the alpha route."},{"id":"beta","label":"Beta route","description":"Use the beta route."}],"allowFreeformInput":false}]}',
+      '{"type":"single-select","allowSkip":true,"questions":[{"header":"E2E","id":"route","question":"Choose the Electron E2E route.","options":[{"id":"alpha","label":"Alpha route","description":"Use the alpha route."},{"id":"beta","label":"Beta route","description":"Use the beta route."}]}]}',
       'After the tool result is returned, answer exactly: Electron input e2e complete.',
     ].join(' '),
     'utf8',

@@ -10,6 +10,7 @@
  * - Asserts the gate denies by default rather than falling open.
  *
  * Recent changes:
+ * - 2026-07-28: Covered explicit approve/rejected/dismissed/timeout decisions.
  * - 2026-07-27: Added coverage for Electron tool-approval sessions.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -69,8 +70,8 @@ describe('ToolApprovalSessionManager', () => {
     });
     expect(manager.pendingCount).toBe(1);
 
-    expect(manager.resolveAnswer({ requestId: 'tool-1', approved: true })).toEqual({ ok: true });
-    await expect(pending).resolves.toEqual({ approved: true });
+    expect(manager.resolveAnswer({ requestId: 'tool-1', decision: 'approve' })).toEqual({ ok: true });
+    await expect(pending).resolves.toEqual({ decision: 'approve' });
     expect(manager.pendingCount).toBe(0);
   });
 
@@ -82,11 +83,20 @@ describe('ToolApprovalSessionManager', () => {
     const pending = gate.requestApproval(loadSkillRequest);
     await Promise.resolve();
 
-    manager.resolveAnswer({ requestId: 'tool-1', approved: false, reason: 'Not this time.' });
-    await expect(pending).resolves.toEqual({ approved: false, reason: 'Not this time.' });
+    manager.resolveAnswer({
+      requestId: 'tool-1',
+      decision: 'cancel',
+      reason: 'rejected',
+      message: 'Not this time.',
+    });
+    await expect(pending).resolves.toEqual({
+      decision: 'cancel',
+      reason: 'rejected',
+      message: 'Not this time.',
+    });
   });
 
-  it('falls back to a default denial reason when none is supplied', async () => {
+  it('preserves a rejected decision without inventing a message', async () => {
     const renderer = createRenderer();
     const manager = createManager();
     const gate = manager.createApprovalGate(renderer);
@@ -94,10 +104,10 @@ describe('ToolApprovalSessionManager', () => {
     const pending = gate.requestApproval(loadSkillRequest);
     await Promise.resolve();
 
-    manager.resolveAnswer({ requestId: 'tool-1', approved: false });
+    manager.resolveAnswer({ requestId: 'tool-1', decision: 'cancel', reason: 'rejected' });
     await expect(pending).resolves.toEqual({
-      approved: false,
-      reason: 'Tool execution denied by user: load_skill.',
+      decision: 'cancel',
+      reason: 'rejected',
     });
   });
 
@@ -107,9 +117,9 @@ describe('ToolApprovalSessionManager', () => {
     destroyedRenderer.destroyed = true;
 
     await expect(manager.createApprovalGate(undefined).requestApproval(loadSkillRequest))
-      .resolves.toMatchObject({ approved: false });
+      .resolves.toMatchObject({ decision: 'cancel', reason: 'dismissed' });
     await expect(manager.createApprovalGate(destroyedRenderer).requestApproval(loadSkillRequest))
-      .resolves.toMatchObject({ approved: false });
+      .resolves.toMatchObject({ decision: 'cancel', reason: 'dismissed' });
     expect(manager.pendingCount).toBe(0);
   });
 
@@ -123,7 +133,7 @@ describe('ToolApprovalSessionManager', () => {
     };
 
     await expect(manager.createApprovalGate(throwingRenderer).requestApproval(loadSkillRequest))
-      .resolves.toMatchObject({ approved: false });
+      .resolves.toMatchObject({ decision: 'cancel', reason: 'dismissed' });
     expect(manager.pendingCount).toBe(0);
   });
 
@@ -138,8 +148,9 @@ describe('ToolApprovalSessionManager', () => {
     vi.advanceTimersByTime(1000);
 
     await expect(pending).resolves.toEqual({
-      approved: false,
-      reason: 'Timed out waiting for tool approval.',
+      decision: 'cancel',
+      reason: 'timeout',
+      message: 'Timed out waiting for tool approval.',
     });
     expect(manager.pendingCount).toBe(0);
   });
@@ -152,12 +163,13 @@ describe('ToolApprovalSessionManager', () => {
     await Promise.resolve();
 
     expect(manager.resolveAnswer(null)).toEqual({ ok: false });
-    expect(manager.resolveAnswer({ approved: true })).toEqual({ ok: false });
-    expect(manager.resolveAnswer({ requestId: 'other', approved: true })).toEqual({ ok: false });
-    expect(manager.resolveAnswer({ requestId: 'tool-1', approved: true })).toEqual({ ok: true });
-    expect(manager.resolveAnswer({ requestId: 'tool-1', approved: true })).toEqual({ ok: false });
+    expect(manager.resolveAnswer({ decision: 'approve' })).toEqual({ ok: false });
+    expect(manager.resolveAnswer({ requestId: 'other', decision: 'approve' })).toEqual({ ok: false });
+    expect(manager.resolveAnswer({ requestId: 'tool-1', decision: 'approve', approved: true })).toEqual({ ok: false });
+    expect(manager.resolveAnswer({ requestId: 'tool-1', decision: 'approve' })).toEqual({ ok: true });
+    expect(manager.resolveAnswer({ requestId: 'tool-1', decision: 'approve' })).toEqual({ ok: false });
 
-    await expect(pending).resolves.toEqual({ approved: true });
+    await expect(pending).resolves.toEqual({ decision: 'approve' });
   });
 
   it('generates a request id when the tool call id is missing or already pending', async () => {
@@ -169,8 +181,8 @@ describe('ToolApprovalSessionManager', () => {
     await Promise.resolve();
     expect(renderer.sent[0].request.requestId).toBe('generated-request');
 
-    manager.resolveAnswer({ requestId: 'generated-request', approved: true });
-    await expect(first).resolves.toEqual({ approved: true });
+    manager.resolveAnswer({ requestId: 'generated-request', decision: 'approve' });
+    await expect(first).resolves.toEqual({ decision: 'approve' });
   });
 
   it('approves host-owned human input tools without prompting the renderer', async () => {
@@ -181,7 +193,7 @@ describe('ToolApprovalSessionManager', () => {
       toolCallId: 'tool-9',
       toolName: 'ask_user_input',
       arguments: {},
-    })).resolves.toEqual({ approved: true });
+    })).resolves.toEqual({ decision: 'approve' });
     expect(renderer.sent).toHaveLength(0);
   });
 });

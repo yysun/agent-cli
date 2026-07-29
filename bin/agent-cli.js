@@ -214,7 +214,9 @@ function loadPersistedRuntimeConfig() {
 // core/agent-runtime.ts
 import {
   complete,
+  createAskUserInputResult,
   createRuntime,
+  normalizeAskUserInputOutcome,
   streamComplete
 } from "llm-runtime";
 
@@ -623,6 +625,7 @@ function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, ski
   }];
 }
 var RUNTIME_CONTROL_TOOL_NAMES = /* @__PURE__ */ new Set(["final_answer", "need_user_input", "blocked"]);
+var RUNTIME_HUMAN_INPUT_TOOL_NAME = "ask_user_input";
 var REJECTED_TEXT_RESPONSE_PREFIX = "Assistant response did not complete the task with required evidence:";
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -832,6 +835,7 @@ async function runChatTurn({
     let streamedAssistantText = "";
     let fallbackRejectedText = "";
     let failureError = null;
+    let turnCancellation = null;
     let pendingToolCalls = [];
     const completionOptions = {
       environment: runtime,
@@ -844,21 +848,21 @@ async function runChatTurn({
       ...typeof runtimeAgentConfig.maxToolTurns === "number" ? { maxConsecutiveToolTurns: runtimeAgentConfig.maxToolTurns } : {},
       ...runtimeAgentConfig.webSearch !== void 0 ? { webSearch: runtimeAgentConfig.webSearch } : {},
       onToolApproval: async ({ toolCall, toolName, parsedArguments }) => {
-        if (executionContext.toolPermission !== "ask" || typeof approvalGate?.requestApproval !== "function") {
-          return { approved: true };
+        if (executionContext.toolPermission !== "ask") {
+          return { decision: "approve" };
         }
-        const decision = await approvalGate.requestApproval({
+        if (typeof approvalGate?.requestApproval !== "function") {
+          return {
+            decision: "cancel",
+            reason: "dismissed",
+            message: `Tool execution denied: approval is unavailable for ${toolName}.`
+          };
+        }
+        return approvalGate.requestApproval({
           toolCallId: toolCall.id,
           toolName,
           arguments: parsedArguments
         });
-        if (decision?.approved) {
-          return { approved: true };
-        }
-        return {
-          approved: false,
-          reason: decision?.reason || `Tool execution rejected: ${toolName}`
-        };
       },
       ...typeof handleToolCall === "function" ? {
         onToolCall: async ({ toolCall, toolName, parsedArguments, context, executeDefault }) => {
@@ -879,10 +883,7 @@ async function runChatTurn({
             context,
             executeDefault
           });
-          return {
-            handled: Boolean(handlerResult?.handled),
-            result: handlerResult?.result
-          };
+          return handlerResult?.handled ? { handled: true, result: handlerResult.result } : { handled: false };
         }
       } : {}
     };
@@ -922,6 +923,44 @@ async function runChatTurn({
             message: `Tool "${toolName}" is host-owned and has no default executor.`
           })
         });
+        if (toolName === RUNTIME_HUMAN_INPUT_TOOL_NAME) {
+          const pendingHumanInput = {
+            toolCallId: toolCall.id,
+            toolName,
+            request: parsedArguments
+          };
+          const outcome = handlerResult?.handled ? normalizeAskUserInputOutcome(pendingHumanInput, handlerResult.result) : {
+            status: "cancelled",
+            reason: "invalid",
+            message: "ask_user_input request was invalid or could not be rendered."
+          };
+          if (outcome.status === "cancelled") {
+            turnCancellation = {
+              kind: "human_input",
+              reason: outcome.reason,
+              toolCallId: toolCall.id,
+              toolName,
+              ...outcome.message ? { message: outcome.message } : {}
+            };
+            return false;
+          }
+          const toolMessage2 = createAskUserInputResult(pendingHumanInput, outcome);
+          toolMessages.push(toolMessage2);
+          if (typeof onToolResult === "function") {
+            onToolResult({
+              id: toolCall.id,
+              name: toolName,
+              result: outcome,
+              arguments: toolCall.function?.arguments,
+              durationMs: Date.now() - startedAt
+            });
+          }
+          persistedMessages.push({
+            ...toolMessage2,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          continue;
+        }
         if (!handlerResult?.handled) {
           return false;
         }
@@ -966,6 +1005,12 @@ async function runChatTurn({
           }
         } else if (completionResult.status === "tool_calls") {
           pendingToolCalls = completionResult.toolCalls ?? [];
+        } else if (completionResult.status === "cancelled") {
+          if (completionResult.cancellation) {
+            turnCancellation = completionResult.cancellation;
+          } else {
+            failureError = "LLM turn was cancelled without cancellation metadata.";
+          }
         } else if (completionResult.status === "completed" && typeof completionResult.output === "string") {
           finalText = completionResult.output;
         } else {
@@ -1089,6 +1134,14 @@ async function runChatTurn({
               }
               break;
             }
+            case "cancelled":
+              emitModelResponse(onModelResponse, event.result.raw, void 0);
+              if (event.result.cancellation) {
+                turnCancellation = event.result.cancellation;
+              } else {
+                failureError = "LLM turn was cancelled without cancellation metadata.";
+              }
+              break;
             case "failed":
               emitModelResponse(onModelResponse, event.result.raw, void 0);
               {
@@ -1105,14 +1158,14 @@ async function runChatTurn({
           }
         }
       }
-      if (failureError || pendingToolCalls.length === 0) {
+      if (failureError || turnCancellation || pendingToolCalls.length === 0) {
         break;
       }
       if (!await handlePendingToolCalls()) {
         break;
       }
     }
-    if (!finalText.trim() && fallbackRejectedText) {
+    if (!turnCancellation && !finalText.trim() && fallbackRejectedText) {
       finalText = fallbackRejectedText;
       if (typeof onStreamChunk === "function" && !streamedAssistantText) {
         streamedAssistantText = fallbackRejectedText;
@@ -1126,6 +1179,14 @@ async function runChatTurn({
     }
     if (failureError) {
       throw new Error(failureError);
+    }
+    if (turnCancellation) {
+      return {
+        status: "cancelled",
+        cancellation: turnCancellation,
+        assistantText: "",
+        messages: persistedMessages
+      };
     }
     if (pendingToolCalls.length > 0) {
       return {
@@ -1696,15 +1757,11 @@ async function persistStreamTraceEvents({ chat, streamTraceEvents }) {
 }
 
 // cli/src/human-input-ui.ts
-var EXIT_HUMAN_INPUT_TOKEN = "0";
-var HUMAN_INPUT_TOOL_NAMES = /* @__PURE__ */ new Set([
-  "ask_user_input",
-  "ask_human_input",
-  "human_intervention_request",
-  "ask_user_question"
-]);
+var EXIT_HUMAN_INPUT_TOKEN = ":exit";
+var ESCAPE_HUMAN_INPUT_PREFIX = "\\";
+var HUMAN_INPUT_TOOL_NAME = "ask_user_input";
 function isHumanInputToolName(toolName) {
-  return HUMAN_INPUT_TOOL_NAMES.has(toolName);
+  return toolName === HUMAN_INPUT_TOOL_NAME;
 }
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1723,144 +1780,152 @@ function parseJsonRecord(value) {
     return null;
   }
 }
-function readTrimmedString(record, fieldName) {
-  const value = record?.[fieldName];
+function hasOnlyKeys(record, allowedKeys) {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(record).every((key) => allowed.has(key));
+}
+function readRequiredString(record, fieldName) {
+  const value = record[fieldName];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function sanitizeDisplayText(value) {
   return value.replace(/\s{2,}/g, " ").trim();
 }
-function parseHumanInputOption(value, index) {
-  if (typeof value === "string" && value.trim()) {
-    return {
-      id: String(index + 1),
-      label: sanitizeDisplayText(value)
-    };
-  }
-  if (!isRecord3(value)) {
+function parseHumanInputOption(value) {
+  if (!isRecord3(value) || !hasOnlyKeys(value, ["id", "label", "description"])) {
     return null;
   }
-  const label = readTrimmedString(value, "label") ?? readTrimmedString(value, "text");
-  if (!label) {
+  const id = readRequiredString(value, "id");
+  const label = readRequiredString(value, "label");
+  const description = value.description;
+  if (!id || !label || description !== void 0 && typeof description !== "string") {
     return null;
   }
   return {
-    id: readTrimmedString(value, "id") ?? String(index + 1),
+    id,
     label: sanitizeDisplayText(label),
-    ...readTrimmedString(value, "description") ? { description: sanitizeDisplayText(readTrimmedString(value, "description") ?? "") } : {}
+    ...typeof description === "string" && description.trim() ? { description: sanitizeDisplayText(description) } : {}
   };
 }
-function parseHumanInputQuestion(value, index) {
-  if (!isRecord3(value)) {
+function parseHumanInputQuestion(value, selectionType) {
+  if (!isRecord3(value) || !hasOnlyKeys(value, ["header", "id", "question", "allowOther", "options"])) {
     return null;
   }
-  const question = readTrimmedString(value, "question") ?? readTrimmedString(value, "prompt");
-  if (!question) {
+  const header = readRequiredString(value, "header");
+  const id = readRequiredString(value, "id");
+  const question = readRequiredString(value, "question");
+  if (!header || !id || !question || !Array.isArray(value.options) || value.options.length < 2) {
     return null;
   }
-  const rawOptions = Array.isArray(value.options) ? value.options : [];
-  const options = rawOptions.map(parseHumanInputOption).filter((option) => option !== null);
+  if (value.allowOther !== void 0 && typeof value.allowOther !== "boolean") {
+    return null;
+  }
+  if (selectionType === "multiple-select" && value.allowOther === true) {
+    return null;
+  }
+  const options = value.options.map(parseHumanInputOption);
+  if (options.some((option) => option === null)) {
+    return null;
+  }
+  const normalizedOptions = options;
+  if (new Set(normalizedOptions.map((option) => option.id)).size !== normalizedOptions.length) {
+    return null;
+  }
   return {
-    header: readTrimmedString(value, "header") ?? "Input",
-    id: readTrimmedString(value, "id") ?? `question-${index + 1}`,
+    header: sanitizeDisplayText(header),
+    id,
     question: sanitizeDisplayText(question),
-    options,
-    ...value.allowFreeformInput === false ? { allowFreeformInput: false } : {}
+    options: normalizedOptions,
+    ...value.allowOther === true ? { allowOther: true } : {}
   };
-}
-function normalizeQuestions(record) {
-  if (Array.isArray(record.questions)) {
-    return record.questions.map(parseHumanInputQuestion).filter((question) => question !== null);
-  }
-  const singleQuestion = parseHumanInputQuestion(record, 0);
-  return singleQuestion ? [singleQuestion] : [];
-}
-function allowsFreeformInput(question) {
-  return question.allowFreeformInput !== false;
 }
 function parseHumanInputRequest(toolName, payload, fallbackRequestId = "") {
   if (!isHumanInputToolName(toolName)) {
     return null;
   }
   const record = parseJsonRecord(payload);
-  if (!record) {
+  if (!record || !hasOnlyKeys(record, ["type", "allowSkip", "questions"])) {
     return null;
   }
   const rawType = record.type;
-  const type = rawType === "multiple-select" ? "multiple-select" : "single-select";
   if (rawType !== void 0 && rawType !== "single-select" && rawType !== "multiple-select") {
     return null;
   }
-  const questions = normalizeQuestions(record);
-  if (questions.length === 0) {
+  if (record.allowSkip !== void 0 && typeof record.allowSkip !== "boolean") {
+    return null;
+  }
+  if (!Array.isArray(record.questions) || record.questions.length === 0) {
+    return null;
+  }
+  const type = rawType === "multiple-select" ? "multiple-select" : "single-select";
+  const questions = record.questions.map((value) => parseHumanInputQuestion(value, type));
+  if (questions.some((question) => question === null)) {
+    return null;
+  }
+  const normalizedQuestions = questions;
+  if (new Set(normalizedQuestions.map((question) => question.id)).size !== normalizedQuestions.length) {
     return null;
   }
   return {
-    toolName,
-    requestId: readTrimmedString(record, "requestId") ?? fallbackRequestId,
+    toolName: HUMAN_INPUT_TOOL_NAME,
+    requestId: fallbackRequestId,
     type,
     allowSkip: record.allowSkip === true,
-    questions
+    questions: normalizedQuestions
   };
 }
 function resolveHumanInputOption(question, token) {
+  const exactOption = question.options.find((option) => option.id === token);
+  if (exactOption) {
+    return exactOption;
+  }
   const index = Number(token);
   if (Number.isInteger(index) && index >= 1 && index <= question.options.length) {
     return question.options[index - 1] ?? null;
   }
-  return question.options.find((option) => option.id === token) ?? null;
+  return null;
 }
-function parseSelection(question, selectionType, allowSkip, rawInput) {
+function prepareHumanInputSelection(question, rawInput) {
   const trimmedInput = rawInput.trim();
-  if (!trimmedInput) {
-    if (allowSkip) {
-      return {
-        questionId: question.id,
-        questionText: question.question,
-        skipped: true,
-        selectedOptions: []
-      };
+  if (question.options.some((option) => option.id === trimmedInput)) {
+    return { cancelled: false, value: trimmedInput };
+  }
+  if (trimmedInput === EXIT_HUMAN_INPUT_TOKEN) {
+    return { cancelled: true };
+  }
+  if (trimmedInput.startsWith(ESCAPE_HUMAN_INPUT_PREFIX)) {
+    return { cancelled: false, value: trimmedInput.slice(ESCAPE_HUMAN_INPUT_PREFIX.length) };
+  }
+  return { cancelled: false, value: trimmedInput };
+}
+function parseAnswer(question, selectionType, rawInput) {
+  const trimmedInput = rawInput.trim();
+  if (selectionType === "single-select") {
+    const option = resolveHumanInputOption(question, trimmedInput);
+    if (option) {
+      return option.id;
     }
-    return "Select an option before continuing.";
+    if (question.allowOther === true) {
+      return trimmedInput;
+    }
+    if (trimmedInput.includes(",")) {
+      return { error: "Select exactly one option." };
+    }
+    return { error: `Unknown option: ${trimmedInput}` };
   }
   const tokens = trimmedInput.split(",").map((token) => token.trim()).filter(Boolean);
-  if (selectionType === "single-select" && tokens.length !== 1) {
-    if (allowsFreeformInput(question)) {
-      return {
-        questionId: question.id,
-        questionText: question.question,
-        skipped: false,
-        selectedOptions: [],
-        enteredText: trimmedInput
-      };
-    }
-    return "Select exactly one option.";
-  }
-  const selectedOptions = [];
+  const selectedOptionIds = [];
   for (const token of tokens) {
     const option = resolveHumanInputOption(question, token);
     if (!option) {
-      if (allowsFreeformInput(question)) {
-        return {
-          questionId: question.id,
-          questionText: question.question,
-          skipped: false,
-          selectedOptions: [],
-          enteredText: trimmedInput
-        };
-      }
-      return `Unknown option: ${token}`;
+      return { error: `Unknown option: ${token}` };
     }
-    if (!selectedOptions.some((selectedOption) => selectedOption.id === option.id)) {
-      selectedOptions.push(option);
+    if (selectedOptionIds.includes(option.id)) {
+      return { error: `Duplicate option: ${token}` };
     }
+    selectedOptionIds.push(option.id);
   }
-  return {
-    questionId: question.id,
-    questionText: question.question,
-    skipped: false,
-    selectedOptions
-  };
+  return selectedOptionIds;
 }
 function formatHumanInputCheckpoint(request, question) {
   const lines = [question.question, ""];
@@ -1876,50 +1941,56 @@ function formatHumanInputCheckpoint(request, question) {
 `;
 }
 function createHumanInputPrompt(request, question) {
-  const selectionHint = question.options.length === 0 ? "Type your answer" : request.type === "multiple-select" ? "Select numbers or option ids separated by commas" : "Select a number or option id";
-  const freeformHint = allowsFreeformInput(question) ? ", or type a custom answer" : "";
+  const selectionHint = request.type === "multiple-select" ? "Select numbers or option ids separated by commas" : "Select a number or option id";
+  const freeformHint = question.allowOther === true ? ", or type a custom answer" : "";
   const skipHint = request.allowSkip ? ", or press Enter to skip" : "";
-  return `${selectionHint}${freeformHint}${skipHint}. Enter ${EXIT_HUMAN_INPUT_TOKEN} to exit UI: `;
+  return `${selectionHint}${freeformHint}${skipHint}. Enter ${EXIT_HUMAN_INPUT_TOKEN} to exit UI; prefix it with \\ to answer literally: `;
 }
 async function collectHumanInputAnswer(request, prompt, output) {
   if (!prompt) {
     return {
-      ok: false,
-      status: "unavailable",
-      requestId: request.requestId,
-      selections: [],
+      status: "cancelled",
+      reason: "dismissed",
       message: "Interactive input is unavailable for ask_user_input."
     };
   }
-  const selections = [];
+  const answers = {};
   for (const question of request.questions) {
     output.write(`
 ${formatHumanInputCheckpoint(request, question)}`);
     while (true) {
       const rawSelection = await prompt.question(createHumanInputPrompt(request, question));
-      if (rawSelection.trim() === EXIT_HUMAN_INPUT_TOKEN) {
+      const preparedSelection = prepareHumanInputSelection(question, rawSelection);
+      if (!("value" in preparedSelection)) {
         return {
-          ok: false,
           status: "cancelled",
-          requestId: request.requestId,
-          selections,
+          reason: "dismissed",
           message: "User cancelled input."
         };
       }
-      const selection = parseSelection(question, request.type, request.allowSkip, rawSelection);
-      if (typeof selection !== "string") {
-        selections.push(selection);
+      if (!preparedSelection.value) {
+        if (request.allowSkip) {
+          return {
+            status: "cancelled",
+            reason: "skipped",
+            message: "User skipped input."
+          };
+        }
+        output.write("Select an option before continuing.\n");
+        continue;
+      }
+      const answer = parseAnswer(question, request.type, preparedSelection.value);
+      if (!isRecord3(answer) || !("error" in answer)) {
+        answers[question.id] = answer;
         break;
       }
-      output.write(`${selection}
+      output.write(`${answer.error}
 `);
     }
   }
   return {
-    ok: true,
-    status: selections.every((selection) => selection.skipped) ? "skipped" : "answered",
-    requestId: request.requestId,
-    selections
+    status: "answered",
+    answers
   };
 }
 
@@ -2755,12 +2826,13 @@ function createCliApprovalGate(options) {
     async requestApproval(request) {
       const toolName = readToolApprovalName(request);
       if (isHumanInputToolName(toolName)) {
-        return { approved: true };
+        return { decision: "approve" };
       }
       if (!options.prompt) {
         return {
-          approved: false,
-          reason: `Tool execution denied: interactive approval is unavailable for ${toolName}.`
+          decision: "cancel",
+          reason: "dismissed",
+          message: `Tool execution denied: interactive approval is unavailable for ${toolName}.`
         };
       }
       options.beforePrompt?.();
@@ -2770,12 +2842,13 @@ function createCliApprovalGate(options) {
           const rawAnswer = await options.prompt.question(createToolApprovalPromptText(request));
           const answer = rawAnswer.trim().toLowerCase();
           if (APPROVE_TOKENS.has(answer)) {
-            return { approved: true };
+            return { decision: "approve" };
           }
           if (DENY_TOKENS.has(answer)) {
             return {
-              approved: false,
-              reason: `Tool execution denied by user: ${toolName}.`
+              decision: "cancel",
+              reason: "rejected",
+              message: `Tool execution denied by user: ${toolName}.`
             };
           }
           options.output.write("Answer y to approve or n to deny.\n");
@@ -3227,7 +3300,9 @@ function createTurnExecutor(options) {
           streamTraceEvents
         });
       }
-      if (options.streamOff) {
+      if (turnResult.status === "cancelled") {
+        pendingDisplay.clear();
+      } else if (options.streamOff) {
         pendingDisplay.clear();
         verboseDisplay.beforeAssistantText(lastStreamType);
         options.io.stdout.write(`${turnResult.assistantText}

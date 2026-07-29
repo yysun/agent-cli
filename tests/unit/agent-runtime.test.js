@@ -11,6 +11,7 @@
  * - Confirms `runChatTurn` forwards normalized options to `llm-runtime`.
  *
  * Recent changes:
+ * - 2026-07-28: Covered `llm-runtime` 0.7 approval and human-input outcomes.
  * - 2026-06-10: Covered shared rejection for unresolved host-owned tool-call turns.
  * - 2026-06-04: Covered host-provided runtime skill roots for settings-filtered Electron turns.
  * - 2026-05-27: Added check-js annotations for mocked stream events and captured runtime callbacks.
@@ -33,7 +34,8 @@ const complete = vi.fn();
 const streamComplete = vi.fn();
 const runtimeDispose = vi.fn();
 
-vi.mock('llm-runtime', () => ({
+vi.mock('llm-runtime', async (importOriginal) => ({
+  ...await importOriginal(),
   complete,
   createRuntime,
   streamComplete,
@@ -619,7 +621,7 @@ describe('agent-runtime', () => {
       id: 'ask-1',
       function: {
         name: 'ask_user_input',
-        arguments: '{"questions":[{"id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"}]}]}',
+        arguments: '{"questions":[{"header":"Scope","id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"},{"id":"changed","label":"Changed"}]}]}',
       },
     };
     complete.mockResolvedValue({
@@ -678,7 +680,7 @@ describe('agent-runtime', () => {
       id: 'ask-resume-1',
       function: {
         name: 'ask_user_input',
-        arguments: '{"questions":[{"id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"}]}]}',
+        arguments: '{"questions":[{"header":"Scope","id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"},{"id":"changed","label":"Changed"}]}]}',
       },
     };
 
@@ -721,7 +723,7 @@ describe('agent-runtime', () => {
     const onToolResult = vi.fn();
     const handleToolCall = vi.fn().mockResolvedValue({
       handled: true,
-      result: { ok: true, status: 'answered', selections: [] },
+      result: { status: 'answered', answers: { scope: 'all' } },
     });
 
     const result = await runChatTurn({
@@ -752,7 +754,7 @@ describe('agent-runtime', () => {
     expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
       id: 'ask-resume-1',
       name: 'ask_user_input',
-      result: { ok: true, status: 'answered', selections: [] },
+      result: { status: 'answered', answers: { scope: 'all' } },
     }));
     expect(result.messages).toContainEqual(expect.objectContaining({
       role: 'tool',
@@ -834,7 +836,7 @@ describe('agent-runtime', () => {
       id: 'ask-stream-1',
       function: {
         name: 'ask_user_input',
-        arguments: '{"questions":[{"id":"format","question":"Which format?","options":[{"id":"pdf","label":"PDF"}]}]}',
+        arguments: '{"questions":[{"header":"Format","id":"format","question":"Which format?","options":[{"id":"pdf","label":"PDF"},{"id":"docx","label":"DOCX"}]}]}',
       },
     };
     streamComplete.mockImplementation(() => eventStream([
@@ -910,7 +912,7 @@ describe('agent-runtime', () => {
       id: 'ask-stream-resume-1',
       function: {
         name: 'ask_user_input',
-        arguments: '{"questions":[{"id":"format","question":"Which format?","options":[{"id":"pdf","label":"PDF"}]}]}',
+        arguments: '{"questions":[{"header":"Format","id":"format","question":"Which format?","options":[{"id":"pdf","label":"PDF"},{"id":"docx","label":"DOCX"}]}]}',
       },
     };
 
@@ -972,7 +974,7 @@ describe('agent-runtime', () => {
     const onToolResult = vi.fn();
     const handleToolCall = vi.fn().mockResolvedValue({
       handled: true,
-      result: { ok: true, status: 'answered', selections: [] },
+      result: { status: 'answered', answers: { format: 'pdf' } },
     });
 
     const result = await runChatTurn({
@@ -1003,7 +1005,7 @@ describe('agent-runtime', () => {
     expect(onToolResult).toHaveBeenCalledWith(expect.objectContaining({
       id: 'ask-stream-resume-1',
       name: 'ask_user_input',
-      result: { ok: true, status: 'answered', selections: [] },
+      result: { status: 'answered', answers: { format: 'pdf' } },
     }));
     expect(result.messages).toContainEqual(expect.objectContaining({
       role: 'tool',
@@ -1027,7 +1029,11 @@ describe('agent-runtime', () => {
 
     const { runChatTurn } = await import('../../core/agent-runtime.js');
     const approvalGate = {
-      requestApproval: vi.fn().mockResolvedValue({ approved: false, reason: 'Nope' }),
+      requestApproval: vi.fn().mockResolvedValue({
+        decision: 'cancel',
+        reason: 'rejected',
+        message: 'Nope',
+      }),
     };
 
     const result = await runChatTurn({
@@ -1057,8 +1063,188 @@ describe('agent-runtime', () => {
       toolName: 'load_skill',
       arguments: { skillId: 'agent-cli-core' },
     });
-    expect(decision).toEqual({ approved: false, reason: 'Nope' });
+    expect(decision).toEqual({
+      decision: 'cancel',
+      reason: 'rejected',
+      message: 'Nope',
+    });
     expect(result.assistantText).toBe('Denied');
+  });
+
+  it('fails closed when ask permission has no approval gate', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+
+    /** @type {undefined | ((request: Record<string, any>) => Promise<Record<string, any>> | Record<string, any>)} */
+    let receivedOnToolApproval;
+    streamComplete.mockImplementation(({ onToolApproval }) => {
+      receivedOnToolApproval = onToolApproval;
+      return eventStream([
+        { type: 'completed', iteration: 1, result: { status: 'completed', output: 'Not executed', messages: [] } },
+      ]);
+    });
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: {
+        provider: 'openai',
+        model: 'gpt-5',
+        toolPermission: 'ask',
+      },
+    });
+
+    expect(typeof receivedOnToolApproval).toBe('function');
+    if (typeof receivedOnToolApproval !== 'function') {
+      throw new Error('streamComplete did not receive onToolApproval');
+    }
+    await expect(receivedOnToolApproval({
+      toolCall: { id: 'tool-no-gate', function: { name: 'load_skill', arguments: '{}' } },
+      toolName: 'load_skill',
+      parsedArguments: {},
+    })).resolves.toEqual({
+      decision: 'cancel',
+      reason: 'dismissed',
+      message: 'Tool execution denied: approval is unavailable for load_skill.',
+    });
+  });
+
+  it('returns buffered approval cancellation without requiring final text or retrying', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const toolCall = {
+      id: 'tool-cancel-1',
+      type: 'function',
+      function: { name: 'load_skill', arguments: '{"skillId":"core"}' },
+    };
+    complete.mockResolvedValue({
+      status: 'cancelled',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: '', tool_calls: [toolCall] },
+      ],
+      cancellation: {
+        kind: 'tool_approval',
+        reason: 'approval_rejected',
+        toolCall,
+        message: 'User rejected the call.',
+      },
+    });
+
+    const { runChatTurn, selectPersistableMessages } = await import('../../core/agent-runtime.js');
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: false,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: { provider: 'openai', model: 'gpt-5' },
+    });
+
+    expect(result).toMatchObject({
+      status: 'cancelled',
+      assistantText: '',
+      cancellation: {
+        kind: 'tool_approval',
+        reason: 'approval_rejected',
+      },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(selectPersistableMessages(result.messages)).toEqual([
+      expect.objectContaining({ role: 'user', content: 'hello' }),
+    ]);
+  });
+
+  it.each(['approval_invalid', 'approval_callback_error'])(
+    'preserves streamed %s cancellation as a terminal host outcome',
+    async (reason) => {
+      process.env.OPENAI_API_KEY = 'test-openai-key';
+      const toolCall = {
+        id: `tool-${reason}`,
+        type: 'function',
+        function: { name: 'load_skill', arguments: '{"skillId":"core"}' },
+      };
+      streamComplete.mockImplementation(() => eventStream([
+        { type: 'assistant_message', iteration: 1, message: { role: 'assistant', content: '', tool_calls: [toolCall] } },
+        {
+          type: 'cancelled',
+          iteration: 1,
+          result: {
+            status: 'cancelled',
+            messages: [],
+            cancellation: { kind: 'tool_approval', reason, toolCall },
+          },
+        },
+      ]));
+
+      const { runChatTurn } = await import('../../core/agent-runtime.js');
+      const result = await runChatTurn({
+        chat: { id: 'chat-1', messages: [] },
+        userMessage: 'hello',
+        stream: true,
+        builtInSystemPrompt: 'System prompt',
+        skillInventory: [],
+        agentConfig: { provider: 'openai', model: 'gpt-5' },
+      });
+
+      expect(result).toMatchObject({
+        status: 'cancelled',
+        assistantText: '',
+        cancellation: { kind: 'tool_approval', reason },
+      });
+      expect(streamComplete).toHaveBeenCalledTimes(1);
+      expect(complete).not.toHaveBeenCalled();
+    },
+  );
+
+  it('cancels human input without a tool result or another completion pass', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const toolCall = {
+      id: 'ask-cancel-1',
+      function: {
+        name: 'ask_user_input',
+        arguments: '{"questions":[{"header":"Scope","id":"scope","question":"Which scope?","options":[{"id":"all","label":"All"},{"id":"changed","label":"Changed"}]}]}',
+      },
+    };
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'assistant_message', iteration: 1, message: { role: 'assistant', content: '', tool_calls: [toolCall] } },
+      {
+        type: 'tool_calls',
+        iteration: 1,
+        result: { status: 'tool_calls', toolCalls: [toolCall], messages: [] },
+      },
+    ]));
+
+    const { runChatTurn } = await import('../../core/agent-runtime.js');
+    const onToolResult = vi.fn();
+    const result = await runChatTurn({
+      chat: { id: 'chat-1', messages: [] },
+      userMessage: 'hello',
+      stream: true,
+      builtInSystemPrompt: 'System prompt',
+      skillInventory: [],
+      agentConfig: { provider: 'openai', model: 'gpt-5' },
+      onToolResult,
+      handleToolCall: async () => ({
+        handled: true,
+        result: { status: 'cancelled', reason: 'skipped' },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: 'cancelled',
+      assistantText: '',
+      cancellation: {
+        kind: 'human_input',
+        reason: 'skipped',
+        toolCallId: 'ask-cancel-1',
+      },
+    });
+    expect(streamComplete).toHaveBeenCalledTimes(1);
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(result.messages.some((message) => message.role === 'tool')).toBe(false);
   });
 
   it('forwards CLI tool-call handlers to the runtime via onToolCall', async () => {

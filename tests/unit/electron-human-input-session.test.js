@@ -9,6 +9,7 @@
  * - Covers accepted answers, request-id normalization, missing renderers, renderer send failures, timeouts, and duplicate answers.
  *
  * Recent changes:
+ * - 2026-07-28: Covered canonical answered and explicit cancelled session outcomes.
  * - 2026-06-03: Added coverage for Electron `ask_user_input` session management.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -68,41 +69,44 @@ describe('HumanInputSessionManager', () => {
     ]);
     expect(manager.pendingCount).toBe(1);
     expect(manager.resolveAnswer({
-      ok: true,
       status: 'answered',
       requestId: 'generated-request',
+      answers: { 'question-1': 'yes' },
       selections: [],
+    })).toEqual({ ok: false });
+    expect(manager.resolveAnswer({
+      status: 'answered',
+      requestId: 'generated-request',
+      answers: { 'question-1': 'yes' },
     })).toEqual({ ok: true });
 
     await expect(pending).resolves.toEqual({
-      ok: true,
       status: 'answered',
       requestId: 'generated-request',
-      selections: [],
+      answers: { 'question-1': 'yes' },
     });
     expect(manager.pendingCount).toBe(0);
   });
 
-  it('accepts skipped and cancelled responses for pending requests', async () => {
-    for (const status of ['skipped', 'cancelled']) {
+  it('accepts skipped and dismissed cancellation responses for pending requests', async () => {
+    for (const reason of ['skipped', 'dismissed']) {
       const renderer = createRenderer();
       const manager = new HumanInputSessionManager({
         requestChannel: 'humanInput:request',
         timeoutMs: 1000,
       });
-      const pending = manager.requestInput(renderer, createRequest({ requestId: `request-${status}` }));
+      const pending = manager.requestInput(renderer, createRequest({ requestId: `request-${reason}` }));
 
       expect(manager.resolveAnswer({
-        ok: status === 'skipped',
-        status,
-        requestId: `request-${status}`,
-        selections: [],
+        status: 'cancelled',
+        reason,
+        requestId: `request-${reason}`,
       })).toEqual({ ok: true });
 
       await expect(pending).resolves.toEqual(expect.objectContaining({
-        ok: status === 'skipped',
-        status,
-        requestId: `request-${status}`,
+        status: 'cancelled',
+        reason,
+        requestId: `request-${reason}`,
       }));
     }
   });
@@ -115,8 +119,8 @@ describe('HumanInputSessionManager', () => {
     });
 
     await expect(manager.requestInput(undefined, createRequest({ requestId: '' }))).resolves.toEqual(expect.objectContaining({
-      ok: false,
-      status: 'unavailable',
+      status: 'cancelled',
+      reason: 'dismissed',
       requestId: 'generated-missing',
       message: 'Electron renderer is unavailable for ask_user_input.',
     }));
@@ -124,8 +128,8 @@ describe('HumanInputSessionManager', () => {
     const destroyedRenderer = createRenderer();
     destroyedRenderer.destroyed = true;
     await expect(manager.requestInput(destroyedRenderer, createRequest({ requestId: 'destroyed' }))).resolves.toEqual(expect.objectContaining({
-      ok: false,
-      status: 'unavailable',
+      status: 'cancelled',
+      reason: 'dismissed',
       requestId: 'destroyed',
     }));
 
@@ -136,8 +140,8 @@ describe('HumanInputSessionManager', () => {
       },
     };
     await expect(manager.requestInput(throwingRenderer, createRequest({ requestId: 'throws' }))).resolves.toEqual(expect.objectContaining({
-      ok: false,
-      status: 'unavailable',
+      status: 'cancelled',
+      reason: 'dismissed',
       requestId: 'throws',
     }));
     expect(manager.pendingCount).toBe(0);
@@ -160,16 +164,14 @@ describe('HumanInputSessionManager', () => {
       'generated-collision',
     ]);
     expect(manager.resolveAnswer({
-      ok: true,
       status: 'answered',
       requestId: 'same-id',
-      selections: [],
+      answers: { 'question-1': 'yes' },
     })).toEqual({ ok: true });
     expect(manager.resolveAnswer({
-      ok: true,
       status: 'answered',
       requestId: 'generated-collision',
-      selections: [],
+      answers: { 'question-1': 'yes' },
     })).toEqual({ ok: true });
 
     await expect(first).resolves.toEqual(expect.objectContaining({ requestId: 'same-id' }));
@@ -188,22 +190,26 @@ describe('HumanInputSessionManager', () => {
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(pending).resolves.toEqual(expect.objectContaining({
-      ok: false,
-      status: 'unavailable',
+      status: 'cancelled',
+      reason: 'timeout',
       requestId: 'timeout-request',
       message: 'Timed out waiting for ask_user_input response.',
     }));
     expect(manager.resolveAnswer({
-      ok: true,
       status: 'answered',
       requestId: 'timeout-request',
+      answers: { 'question-1': 'yes' },
+    })).toEqual({ ok: false });
+    expect(manager.resolveAnswer({
+      status: 'answered',
+      requestId: 'unknown-request',
+      answers: { 'question-1': 'yes' },
       selections: [],
     })).toEqual({ ok: false });
     expect(manager.resolveAnswer({
-      ok: true,
       status: 'answered',
       requestId: 'unknown-request',
-      selections: [],
+      answers: { 'question-1': 'yes' },
     })).toEqual({ ok: false });
     expect(manager.pendingCount).toBe(0);
   });

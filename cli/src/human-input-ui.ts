@@ -2,16 +2,19 @@
  * Agent CLI Human Input UI
  *
  * Purpose:
- * - Convert `ask_user_input`-style tool calls into terminal prompts and tool-result payloads.
+ * - Convert `ask_user_input` tool calls into terminal prompts and canonical runtime outcomes.
  *
  * Key features:
- * - Parses single-question and multi-question payloads.
- * - Supports option ids, numbered selections, freeform answers, and allowed skips.
- * - Returns structured answer artifacts that can be persisted as normal tool messages.
+ * - Strictly parses the `llm-runtime` 0.7 request schema without repairing malformed input.
+ * - Supports declared single/multiple selections and opt-in single-select free-form answers.
+ * - Returns answered or cancelled outcomes that the shared runtime validates before resume.
  *
  * Recent changes:
+ * - 2026-07-28: Migrated to strict `allowOther` requests, canonical 0.7 outcomes,
+ *   and collision-free terminal cancellation escaping.
  * - 2026-05-23: Added terminal UI handling for `ask_user_input` tool requests.
  */
+import type { AskUserInputRawResponse } from 'llm-runtime';
 
 export interface HumanInputPrompt {
   question(query: string): Promise<string>;
@@ -34,45 +37,25 @@ export interface HumanInputQuestion {
   id: string;
   question: string;
   options: HumanInputOption[];
-  allowFreeformInput?: boolean;
+  allowOther?: boolean;
 }
 
 export interface PendingHumanInputRequest {
-  toolName: string;
+  toolName: 'ask_user_input';
   requestId: string;
   type: HumanInputSelectionType;
   allowSkip: boolean;
   questions: HumanInputQuestion[];
 }
 
-export interface HumanInputSelection {
-  questionId: string;
-  questionText?: string;
-  skipped: boolean;
-  selectedOptions: HumanInputOption[];
-  enteredText?: string;
-}
-
-export interface HumanInputAnswerArtifact {
-  ok: boolean;
-  status: 'answered' | 'skipped' | 'cancelled' | 'unavailable';
-  requestId: string;
-  selections: HumanInputSelection[];
-  message?: string;
-}
-
 type JsonRecord = Record<string, unknown>;
 
-const EXIT_HUMAN_INPUT_TOKEN = '0';
-const HUMAN_INPUT_TOOL_NAMES = new Set([
-  'ask_user_input',
-  'ask_human_input',
-  'human_intervention_request',
-  'ask_user_question',
-]);
+const EXIT_HUMAN_INPUT_TOKEN = ':exit';
+const ESCAPE_HUMAN_INPUT_PREFIX = '\\';
+const HUMAN_INPUT_TOOL_NAME = 'ask_user_input';
 
 export function isHumanInputToolName(toolName: string): boolean {
-  return HUMAN_INPUT_TOOL_NAMES.has(toolName);
+  return toolName === HUMAN_INPUT_TOOL_NAME;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -96,8 +79,13 @@ function parseJsonRecord(value: unknown): JsonRecord | null {
   }
 }
 
-function readTrimmedString(record: JsonRecord | null, fieldName: string): string | null {
-  const value = record?.[fieldName];
+function hasOnlyKeys(record: JsonRecord, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(record).every((key) => allowed.has(key));
+}
+
+function readRequiredString(record: JsonRecord, fieldName: string): string | null {
+  const value = record[fieldName];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
@@ -105,65 +93,65 @@ function sanitizeDisplayText(value: string): string {
   return value.replace(/\s{2,}/g, ' ').trim();
 }
 
-function parseHumanInputOption(value: unknown, index: number): HumanInputOption | null {
-  if (typeof value === 'string' && value.trim()) {
-    return {
-      id: String(index + 1),
-      label: sanitizeDisplayText(value),
-    };
-  }
-
-  if (!isRecord(value)) {
+function parseHumanInputOption(value: unknown): HumanInputOption | null {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'label', 'description'])) {
     return null;
   }
 
-  const label = readTrimmedString(value, 'label') ?? readTrimmedString(value, 'text');
-  if (!label) {
+  const id = readRequiredString(value, 'id');
+  const label = readRequiredString(value, 'label');
+  const description = value.description;
+  if (!id || !label || (description !== undefined && typeof description !== 'string')) {
     return null;
   }
 
   return {
-    id: readTrimmedString(value, 'id') ?? String(index + 1),
+    id,
     label: sanitizeDisplayText(label),
-    ...(readTrimmedString(value, 'description') ? { description: sanitizeDisplayText(readTrimmedString(value, 'description') ?? '') } : {}),
+    ...(typeof description === 'string' && description.trim()
+      ? { description: sanitizeDisplayText(description) }
+      : {}),
   };
 }
 
-function parseHumanInputQuestion(value: unknown, index: number): HumanInputQuestion | null {
-  if (!isRecord(value)) {
+function parseHumanInputQuestion(
+  value: unknown,
+  selectionType: HumanInputSelectionType,
+): HumanInputQuestion | null {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['header', 'id', 'question', 'allowOther', 'options'])) {
     return null;
   }
 
-  const question = readTrimmedString(value, 'question') ?? readTrimmedString(value, 'prompt');
-  if (!question) {
+  const header = readRequiredString(value, 'header');
+  const id = readRequiredString(value, 'id');
+  const question = readRequiredString(value, 'question');
+  if (!header || !id || !question || !Array.isArray(value.options) || value.options.length < 2) {
+    return null;
+  }
+  if (value.allowOther !== undefined && typeof value.allowOther !== 'boolean') {
+    return null;
+  }
+  if (selectionType === 'multiple-select' && value.allowOther === true) {
     return null;
   }
 
-  const rawOptions = Array.isArray(value.options) ? value.options : [];
-  const options = rawOptions.map(parseHumanInputOption).filter((option): option is HumanInputOption => option !== null);
+  const options = value.options.map(parseHumanInputOption);
+  if (options.some((option) => option === null)) {
+    return null;
+  }
+
+  const normalizedOptions = options as HumanInputOption[];
+  if (new Set(normalizedOptions.map((option) => option.id)).size !== normalizedOptions.length) {
+    return null;
+  }
 
   return {
-    header: readTrimmedString(value, 'header') ?? 'Input',
-    id: readTrimmedString(value, 'id') ?? `question-${index + 1}`,
+    header: sanitizeDisplayText(header),
+    id,
     question: sanitizeDisplayText(question),
-    options,
-    ...(value.allowFreeformInput === false ? { allowFreeformInput: false } : {}),
+    options: normalizedOptions,
+    ...(value.allowOther === true ? { allowOther: true } : {}),
   };
-}
-
-function normalizeQuestions(record: JsonRecord): HumanInputQuestion[] {
-  if (Array.isArray(record.questions)) {
-    return record.questions
-      .map(parseHumanInputQuestion)
-      .filter((question): question is HumanInputQuestion => question !== null);
-  }
-
-  const singleQuestion = parseHumanInputQuestion(record, 0);
-  return singleQuestion ? [singleQuestion] : [];
-}
-
-function allowsFreeformInput(question: HumanInputQuestion): boolean {
-  return question.allowFreeformInput !== false;
 }
 
 export function parseHumanInputRequest(
@@ -176,102 +164,111 @@ export function parseHumanInputRequest(
   }
 
   const record = parseJsonRecord(payload);
-  if (!record) {
+  if (!record || !hasOnlyKeys(record, ['type', 'allowSkip', 'questions'])) {
     return null;
   }
 
   const rawType = record.type;
-  const type: HumanInputSelectionType = rawType === 'multiple-select' ? 'multiple-select' : 'single-select';
   if (rawType !== undefined && rawType !== 'single-select' && rawType !== 'multiple-select') {
     return null;
   }
+  if (record.allowSkip !== undefined && typeof record.allowSkip !== 'boolean') {
+    return null;
+  }
+  if (!Array.isArray(record.questions) || record.questions.length === 0) {
+    return null;
+  }
 
-  const questions = normalizeQuestions(record);
-  if (questions.length === 0) {
+  const type: HumanInputSelectionType = rawType === 'multiple-select'
+    ? 'multiple-select'
+    : 'single-select';
+  const questions = record.questions.map((value) => parseHumanInputQuestion(value, type));
+  if (questions.some((question) => question === null)) {
+    return null;
+  }
+
+  const normalizedQuestions = questions as HumanInputQuestion[];
+  if (new Set(normalizedQuestions.map((question) => question.id)).size !== normalizedQuestions.length) {
     return null;
   }
 
   return {
-    toolName,
-    requestId: readTrimmedString(record, 'requestId') ?? fallbackRequestId,
+    toolName: HUMAN_INPUT_TOOL_NAME,
+    requestId: fallbackRequestId,
     type,
     allowSkip: record.allowSkip === true,
-    questions,
+    questions: normalizedQuestions,
   };
 }
 
 function resolveHumanInputOption(question: HumanInputQuestion, token: string): HumanInputOption | null {
+  const exactOption = question.options.find((option) => option.id === token);
+  if (exactOption) {
+    return exactOption;
+  }
+
   const index = Number(token);
   if (Number.isInteger(index) && index >= 1 && index <= question.options.length) {
     return question.options[index - 1] ?? null;
   }
 
-  return question.options.find((option) => option.id === token) ?? null;
+  return null;
 }
 
-function parseSelection(
+function prepareHumanInputSelection(
+  question: HumanInputQuestion,
+  rawInput: string,
+): { cancelled: true } | { cancelled: false; value: string } {
+  const trimmedInput = rawInput.trim();
+
+  if (question.options.some((option) => option.id === trimmedInput)) {
+    return { cancelled: false, value: trimmedInput };
+  }
+  if (trimmedInput === EXIT_HUMAN_INPUT_TOKEN) {
+    return { cancelled: true };
+  }
+  if (trimmedInput.startsWith(ESCAPE_HUMAN_INPUT_PREFIX)) {
+    return { cancelled: false, value: trimmedInput.slice(ESCAPE_HUMAN_INPUT_PREFIX.length) };
+  }
+
+  return { cancelled: false, value: trimmedInput };
+}
+
+function parseAnswer(
   question: HumanInputQuestion,
   selectionType: HumanInputSelectionType,
-  allowSkip: boolean,
   rawInput: string,
-): HumanInputSelection | string {
+): string | string[] | { error: string } {
   const trimmedInput = rawInput.trim();
-  if (!trimmedInput) {
-    if (allowSkip) {
-      return {
-        questionId: question.id,
-        questionText: question.question,
-        skipped: true,
-        selectedOptions: [],
-      };
-    }
 
-    return 'Select an option before continuing.';
+  if (selectionType === 'single-select') {
+    const option = resolveHumanInputOption(question, trimmedInput);
+    if (option) {
+      return option.id;
+    }
+    if (question.allowOther === true) {
+      return trimmedInput;
+    }
+    if (trimmedInput.includes(',')) {
+      return { error: 'Select exactly one option.' };
+    }
+    return { error: `Unknown option: ${trimmedInput}` };
   }
 
   const tokens = trimmedInput.split(',').map((token) => token.trim()).filter(Boolean);
-  if (selectionType === 'single-select' && tokens.length !== 1) {
-    if (allowsFreeformInput(question)) {
-      return {
-        questionId: question.id,
-        questionText: question.question,
-        skipped: false,
-        selectedOptions: [],
-        enteredText: trimmedInput,
-      };
-    }
-
-    return 'Select exactly one option.';
-  }
-
-  const selectedOptions: HumanInputOption[] = [];
+  const selectedOptionIds: string[] = [];
   for (const token of tokens) {
     const option = resolveHumanInputOption(question, token);
     if (!option) {
-      if (allowsFreeformInput(question)) {
-        return {
-          questionId: question.id,
-          questionText: question.question,
-          skipped: false,
-          selectedOptions: [],
-          enteredText: trimmedInput,
-        };
-      }
-
-      return `Unknown option: ${token}`;
+      return { error: `Unknown option: ${token}` };
     }
-
-    if (!selectedOptions.some((selectedOption) => selectedOption.id === option.id)) {
-      selectedOptions.push(option);
+    if (selectedOptionIds.includes(option.id)) {
+      return { error: `Duplicate option: ${token}` };
     }
+    selectedOptionIds.push(option.id);
   }
 
-  return {
-    questionId: question.id,
-    questionText: question.question,
-    skipped: false,
-    selectedOptions,
-  };
+  return selectedOptionIds;
 }
 
 export function formatHumanInputCheckpoint(
@@ -295,62 +292,66 @@ export function formatHumanInputCheckpoint(
 }
 
 function createHumanInputPrompt(request: PendingHumanInputRequest, question: HumanInputQuestion): string {
-  const selectionHint = question.options.length === 0
-    ? 'Type your answer'
-    : request.type === 'multiple-select'
-      ? 'Select numbers or option ids separated by commas'
-      : 'Select a number or option id';
-  const freeformHint = allowsFreeformInput(question) ? ', or type a custom answer' : '';
+  const selectionHint = request.type === 'multiple-select'
+    ? 'Select numbers or option ids separated by commas'
+    : 'Select a number or option id';
+  const freeformHint = question.allowOther === true ? ', or type a custom answer' : '';
   const skipHint = request.allowSkip ? ', or press Enter to skip' : '';
-  return `${selectionHint}${freeformHint}${skipHint}. Enter ${EXIT_HUMAN_INPUT_TOKEN} to exit UI: `;
+  return `${selectionHint}${freeformHint}${skipHint}. Enter ${EXIT_HUMAN_INPUT_TOKEN} to exit UI; prefix it with \\ to answer literally: `;
 }
 
 export async function collectHumanInputAnswer(
   request: PendingHumanInputRequest,
   prompt: HumanInputPrompt | undefined,
   output: HumanInputOutput,
-): Promise<HumanInputAnswerArtifact> {
+): Promise<AskUserInputRawResponse> {
   if (!prompt) {
     return {
-      ok: false,
-      status: 'unavailable',
-      requestId: request.requestId,
-      selections: [],
+      status: 'cancelled',
+      reason: 'dismissed',
       message: 'Interactive input is unavailable for ask_user_input.',
     };
   }
 
-  const selections: HumanInputSelection[] = [];
+  const answers: Record<string, string | string[]> = {};
 
   for (const question of request.questions) {
     output.write(`\n${formatHumanInputCheckpoint(request, question)}`);
 
     while (true) {
       const rawSelection = await prompt.question(createHumanInputPrompt(request, question));
-      if (rawSelection.trim() === EXIT_HUMAN_INPUT_TOKEN) {
+      const preparedSelection = prepareHumanInputSelection(question, rawSelection);
+      if (!('value' in preparedSelection)) {
         return {
-          ok: false,
           status: 'cancelled',
-          requestId: request.requestId,
-          selections,
+          reason: 'dismissed',
           message: 'User cancelled input.',
         };
       }
+      if (!preparedSelection.value) {
+        if (request.allowSkip) {
+          return {
+            status: 'cancelled',
+            reason: 'skipped',
+            message: 'User skipped input.',
+          };
+        }
+        output.write('Select an option before continuing.\n');
+        continue;
+      }
 
-      const selection = parseSelection(question, request.type, request.allowSkip, rawSelection);
-      if (typeof selection !== 'string') {
-        selections.push(selection);
+      const answer = parseAnswer(question, request.type, preparedSelection.value);
+      if (!isRecord(answer) || !('error' in answer)) {
+        answers[question.id] = answer as string | string[];
         break;
       }
 
-      output.write(`${selection}\n`);
+      output.write(`${answer.error}\n`);
     }
   }
 
   return {
-    ok: true,
-    status: selections.every((selection) => selection.skipped) ? 'skipped' : 'answered',
-    requestId: request.requestId,
-    selections,
+    status: 'answered',
+    answers,
   };
 }

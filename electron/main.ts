@@ -12,6 +12,7 @@
  * - Sends external links to the operating system browser.
  *
  * Recent changes:
+ * - 2026-07-28: Returned explicit 0.7 cancellation outcomes and canonical human input.
  * - 2026-07-27: Persisted a rejected turn's sanitized transcript before reporting the rejection.
  * - 2026-07-27: Added the renderer tool-approval gate so `ask` tool permission prompts instead of auto-approving.
  * - 2026-07-27: Serialized workspace-touching IPC handlers so a workspace switch cannot repoint an in-flight turn.
@@ -56,6 +57,7 @@ import {
 } from '../cli/src/human-input-ui.js';
 import { HumanInputSessionManager } from './human-input-session.js';
 import { ToolApprovalSessionManager } from './tool-approval-session.js';
+import { serializeElectronTurnOutcome } from './turn-outcome.js';
 import { assertCompletedChatTurn, resolveRuntimeSelection, runChatTurn, selectPersistableMessages } from '../core/agent-runtime.js';
 import { WORKSPACE_ROOT } from '../core/paths.js';
 import { prepareWorkspaceEnvironment } from '../core/workspace-environment.js';
@@ -510,9 +512,11 @@ async function executeRuntimeTurn(params: {
         return { handled: false };
       }
 
+      const answer = await humanInputSessions.requestInput(params.rendererWebContents, humanInputRequest);
+      const { requestId: _requestId, ...outcome } = answer;
       return {
         handled: true,
-        result: await humanInputSessions.requestInput(params.rendererWebContents, humanInputRequest),
+        result: outcome,
       };
     },
   });
@@ -530,7 +534,7 @@ async function executeRuntimeTurn(params: {
   return {
     chatId: persistedChat.id,
     workspaceRoot: turnWorkspaceRoot,
-    assistantText: result.assistantText,
+    ...serializeElectronTurnOutcome(result),
     messages: persistedChat.messages,
     streamChunks,
     toolCalls,

@@ -10,8 +10,10 @@
  * - Leaves host-owned human-input tools ungated so they produce one prompt, not two.
  *
  * Recent changes:
+ * - 2026-07-28: Returned explicit 0.7 approve/cancel decisions with fail-closed reasons.
  * - 2026-07-27: Added the CLI approval gate so `--tool-permission ask` actually prompts.
  */
+import type { LLMRuntimeToolApprovalResponse } from 'llm-runtime';
 import { isHumanInputToolName } from './human-input-ui.js';
 import { summarizeToolCall } from './tool-trace-renderer.js';
 
@@ -27,11 +29,6 @@ export interface ToolApprovalRequest {
   toolCallId?: unknown;
   toolName?: unknown;
   arguments?: unknown;
-}
-
-export interface ToolApprovalDecision {
-  approved: boolean;
-  reason?: string;
 }
 
 export interface CreateCliApprovalGateOptions {
@@ -72,19 +69,20 @@ export function createToolApprovalPromptText(request: ToolApprovalRequest): stri
  */
 export function createCliApprovalGate(options: CreateCliApprovalGateOptions) {
   return {
-    async requestApproval(request: ToolApprovalRequest): Promise<ToolApprovalDecision> {
+    async requestApproval(request: ToolApprovalRequest): Promise<LLMRuntimeToolApprovalResponse> {
       const toolName = readToolApprovalName(request);
 
       // These are handled by the host `handleToolCall` hook, which runs its own
       // prompt. Gating them here would ask the user twice for one interaction.
       if (isHumanInputToolName(toolName)) {
-        return { approved: true };
+        return { decision: 'approve' };
       }
 
       if (!options.prompt) {
         return {
-          approved: false,
-          reason: `Tool execution denied: interactive approval is unavailable for ${toolName}.`,
+          decision: 'cancel',
+          reason: 'dismissed',
+          message: `Tool execution denied: interactive approval is unavailable for ${toolName}.`,
         };
       }
 
@@ -98,13 +96,14 @@ export function createCliApprovalGate(options: CreateCliApprovalGateOptions) {
           const answer = rawAnswer.trim().toLowerCase();
 
           if (APPROVE_TOKENS.has(answer)) {
-            return { approved: true };
+            return { decision: 'approve' };
           }
 
           if (DENY_TOKENS.has(answer)) {
             return {
-              approved: false,
-              reason: `Tool execution denied by user: ${toolName}.`,
+              decision: 'cancel',
+              reason: 'rejected',
+              message: `Tool execution denied by user: ${toolName}.`,
             };
           }
 

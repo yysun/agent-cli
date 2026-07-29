@@ -6,6 +6,7 @@
  * - Validate local CLI parsing, env-backed runtime config, AGENTS.md prompt loading, and chat persistence.
  *
  * Recent changes:
+ * - 2026-07-28: Updated CLI prompt fixtures for strict 0.7 `ask_user_input`.
  * - 2026-07-27: A rejected unresolved tool-call turn now keeps the user message; only the orphaned call is dropped.
  * - 2026-06-10: Covered unresolved host-owned tool calls failing before chat persistence.
  * - 2026-05-28: Covered verbose pending dots as a waiting-for-assistant-text indicator.
@@ -527,9 +528,15 @@ describe('agent-cli entrypoint', () => {
         toolCall: { id: 'input-1' },
         toolName: 'ask_user_input',
         arguments: JSON.stringify({
-          question: 'Continue?',
-          options: ['Yes'],
-          allowFreeformInput: false,
+          questions: [{
+            header: 'Continue',
+            id: 'continue',
+            question: 'Continue?',
+            options: [
+              { id: 'yes', label: 'Yes' },
+              { id: 'no', label: 'No' },
+            ],
+          }],
         }),
       });
 
@@ -552,7 +559,7 @@ describe('agent-cli entrypoint', () => {
     await main(['hello'], io, { interactivePrompt: inputPrompt });
 
     expect(io.getStdout()).toContain('partial');
-    expect(io.getStdout()).toContain('0. Exit UI\n\n...');
+    expect(io.getStdout()).toContain(':exit. Exit UI\n\n...');
     expect(io.getStdout()).toMatch(/\r\u001b\[2K {3}\r\u001b\[2K\n$/);
     expect(io.getStdout()).not.toMatch(/\.\.\.\n$/);
   });
@@ -572,19 +579,22 @@ describe('agent-cli entrypoint', () => {
         toolName: 'ask_user_input',
         arguments: JSON.stringify({
           type: 'single-select',
-          question: 'Select exactly one Agent World workflow pattern to initialize:',
-          options: [
-            'linear',
-            'router',
-            'supervisor',
-            'review-loop',
-            'multi-review',
-            'parallel-fanout',
-            'map-reduce',
-            'state-machine',
-            'single-agent',
-          ],
-          allowFreeformInput: false,
+          questions: [{
+            header: 'Workflow',
+            id: 'workflow',
+            question: 'Select exactly one Agent World workflow pattern to initialize:',
+            options: [
+              { id: 'linear', label: 'linear' },
+              { id: 'router', label: 'router' },
+              { id: 'supervisor', label: 'supervisor' },
+              { id: 'review-loop', label: 'review-loop' },
+              { id: 'multi-review', label: 'multi-review' },
+              { id: 'parallel-fanout', label: 'parallel-fanout' },
+              { id: 'map-reduce', label: 'map-reduce' },
+              { id: 'state-machine', label: 'state-machine' },
+              { id: 'single-agent', label: 'single-agent' },
+            ],
+          }],
         }),
       });
 
@@ -1291,9 +1301,15 @@ describe('agent-cli entrypoint', () => {
 
     const inputArgs = JSON.stringify({
       type: 'single-select',
-      question: 'Continue?',
-      options: ['Yes'],
-      allowFreeformInput: false,
+      questions: [{
+        header: 'Continue',
+        id: 'continue',
+        question: 'Continue?',
+        options: [
+          { id: 'yes', label: 'Yes' },
+          { id: 'no', label: 'No' },
+        ],
+      }],
     });
     const runChatTurn = vi.fn().mockImplementation(async ({ onToolCall, handleToolCall }) => {
       onToolCall?.({

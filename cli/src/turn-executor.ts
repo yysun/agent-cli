@@ -11,6 +11,7 @@
  * - Supplies the terminal tool-approval gate used when tool permission is `ask`.
  *
  * Recent changes:
+ * - 2026-07-28: Treated 0.7 runtime cancellation as a clean terminal CLI outcome.
  * - 2026-07-27: Persisted a rejected turn's sanitized transcript before reporting the rejection.
  * - 2026-07-27: Supplied a CLI approval gate so `ask` tool permission prompts instead of auto-approving.
  * - 2026-07-27: Treated an unset `pastMessages` as full history instead of truncating to zero messages.
@@ -44,6 +45,7 @@ import {
 } from './tool-trace-renderer.js';
 import type { CliIo } from './terminal-io.js';
 import { createVerboseDisplay } from './verbose-display.js';
+import type { LLMRuntimeToolApprovalResponse } from 'llm-runtime';
 
 export type { CliIo, WritableSink } from './terminal-io.js';
 
@@ -68,7 +70,7 @@ export interface PersistedChat {
 export interface ApprovalGate {
   requestApproval?: (
     request: Record<string, unknown>,
-  ) => Promise<{ approved?: boolean; reason?: string }>;
+  ) => Promise<LLMRuntimeToolApprovalResponse> | LLMRuntimeToolApprovalResponse;
 }
 
 export interface StreamTraceEvent {
@@ -527,7 +529,9 @@ export function createTurnExecutor(options: CreateTurnExecutorOptions) {
         });
       }
 
-      if (options.streamOff) {
+      if (turnResult.status === 'cancelled') {
+        pendingDisplay.clear();
+      } else if (options.streamOff) {
         pendingDisplay.clear();
         verboseDisplay.beforeAssistantText(lastStreamType);
         options.io.stdout.write(`${turnResult.assistantText}\n`);

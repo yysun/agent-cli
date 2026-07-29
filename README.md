@@ -76,8 +76,14 @@ npm run electron:start
 Tool permission modes:
 
 - `auto`: tools run without asking.
-- `ask`: each tool call is presented for approval first. The CLI prompts on the terminal; the Electron app renders an in-chat approval card. A denial is reported back to the model and the tool does not run. When no interactive prompt is available, the call is denied rather than silently approved.
+- `ask`: executable tool calls are presented for approval before any tool in the batch runs. The CLI prompts on the terminal; the Electron app renders an in-chat approval card. Denial, dismissal, timeout, malformed approval, or approval callback failure cancels the turn without executing the batch or returning to the model for a retry. When no interactive prompt is available, the turn is cancelled rather than silently approved.
 - `read`: the runtime restricts execution to read-only tools.
+
+`ask_user_input` is separate from executable approval. It collects clarification or
+preferences, supports custom single-select answers only when a question sets
+`allowOther: true`, and is validated before the model resumes. Skipping, dismissing,
+timing out, or submitting an invalid answer cancels the turn; it never authorizes a
+later tool call.
 
 `AGENT_CLI_PAST_MESSAGES` controls how many prior messages are sent to the model. When it is unset, the full persisted conversation is sent; set it to `0` to send none, or to `N` to send the last `N`.
 

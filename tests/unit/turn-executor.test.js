@@ -10,6 +10,8 @@
  * - Exercises the approval gate the executor supplies when tool permission is `ask`.
  *
  * Recent changes:
+ * - 2026-07-28: Covered explicit 0.7 approval decisions plus approval and
+ *   human-input cancellation composition.
  * - 2026-07-27: Added coverage for rejected-turn persistence.
  * - 2026-07-27: Added coverage for full-history default and terminal tool approval.
  */
@@ -20,7 +22,8 @@ const complete = vi.fn();
 const streamComplete = vi.fn();
 const runtimeDispose = vi.fn();
 
-vi.mock('llm-runtime', () => ({
+vi.mock('llm-runtime', async (importOriginal) => ({
+  ...await importOriginal(),
   complete,
   createRuntime,
   streamComplete,
@@ -234,6 +237,122 @@ describe('turn executor rejected turns', () => {
   });
 });
 
+describe('turn executor cancelled turns', () => {
+  it('persists sanitized history and emits no fabricated assistant answer', async () => {
+    const io = createIo();
+    const toolCall = {
+      id: 'tool-cancel-1',
+      type: 'function',
+      function: { name: 'load_skill', arguments: '{"skillId":"core"}' },
+    };
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'assistant_message', iteration: 1, message: { role: 'assistant', content: '', tool_calls: [toolCall] } },
+      {
+        type: 'cancelled',
+        iteration: 1,
+        result: {
+          status: 'cancelled',
+          messages: [],
+          cancellation: {
+            kind: 'tool_approval',
+            reason: 'approval_rejected',
+            toolCall,
+          },
+        },
+      },
+    ]));
+
+    const { createTurnExecutor } = await import('../../cli/src/turn-executor.js');
+    const executeTurn = createTurnExecutor({
+      io: io.io,
+      verbose: false,
+      streamOff: false,
+      agentConfig: { provider: 'openai', model: 'gpt-5', toolPermission: 'ask' },
+      skillInventory: [],
+    });
+    const result = await executeTurn({
+      chat: { id: 'chat-1', messages: [] },
+      message: 'hello',
+    });
+
+    expect(result).toMatchObject({
+      status: 'cancelled',
+      assistantText: '',
+      cancellation: { reason: 'approval_rejected' },
+    });
+    expect(io.stdoutChunks.join('')).not.toContain('undefined');
+    const persisted = persistCompletedChat.mock.calls[0][0].messages;
+    expect(persisted).toContainEqual(expect.objectContaining({ role: 'user', content: 'hello' }));
+    expect(persisted.some((message) => Array.isArray(message.tool_calls))).toBe(false);
+  });
+
+  it('cancels skipped CLI human input without a tool result or model retry', async () => {
+    const io = createIo();
+    const { asked, prompt } = createScriptedPrompt(['']);
+    const toolCall = {
+      id: 'ask-cli-cancel-1',
+      type: 'function',
+      function: {
+        name: 'ask_user_input',
+        arguments: JSON.stringify({
+          type: 'single-select',
+          allowSkip: true,
+          questions: [{
+            header: 'Route',
+            id: 'route',
+            question: 'Choose a route.',
+            options: [
+              { id: 'alpha', label: 'Alpha' },
+              { id: 'beta', label: 'Beta' },
+            ],
+          }],
+        }),
+      },
+    };
+    streamComplete.mockImplementation(() => eventStream([
+      { type: 'assistant_message', iteration: 1, message: { role: 'assistant', content: '', tool_calls: [toolCall] } },
+      {
+        type: 'tool_calls',
+        iteration: 1,
+        result: { status: 'tool_calls', toolCalls: [toolCall], messages: [] },
+      },
+    ]));
+
+    const { createTurnExecutor } = await import('../../cli/src/turn-executor.js');
+    const executeTurn = createTurnExecutor({
+      io: io.io,
+      verbose: false,
+      streamOff: false,
+      agentConfig: { provider: 'openai', model: 'gpt-5' },
+      skillInventory: [],
+    });
+    const result = await executeTurn({
+      chat: { id: 'chat-1', messages: [] },
+      message: 'ask me',
+      inputPrompt: prompt,
+    });
+
+    expect(result).toMatchObject({
+      status: 'cancelled',
+      assistantText: '',
+      cancellation: {
+        kind: 'human_input',
+        reason: 'skipped',
+        toolCallId: 'ask-cli-cancel-1',
+      },
+    });
+    expect(asked).toHaveLength(1);
+    expect(streamComplete).toHaveBeenCalledTimes(1);
+    expect(result.messages.some((message) => message.role === 'tool')).toBe(false);
+    expect(io.stdoutChunks.join('')).not.toContain('undefined');
+
+    const persisted = persistCompletedChat.mock.calls[0][0].messages;
+    expect(persisted).toContainEqual(expect.objectContaining({ role: 'user', content: 'ask me' }));
+    expect(persisted.some((message) => message.role === 'tool')).toBe(false);
+    expect(persisted.some((message) => Array.isArray(message.tool_calls))).toBe(false);
+  });
+});
+
 describe('turn executor tool approval', () => {
   /** @param {Record<string, any>} options */
   async function approve(options, request) {
@@ -256,7 +375,7 @@ describe('turn executor tool approval', () => {
       io,
     });
 
-    await expect(approve(options, loadSkillRequest)).resolves.toEqual({ approved: true });
+    await expect(approve(options, loadSkillRequest)).resolves.toEqual({ decision: 'approve' });
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain('load_skill');
     expect(io.stdoutChunks.join('')).toContain('Approve tool call: load_skill');
@@ -272,8 +391,9 @@ describe('turn executor tool approval', () => {
     });
 
     await expect(approve(options, loadSkillRequest)).resolves.toEqual({
-      approved: false,
-      reason: 'Tool execution denied by user: load_skill.',
+      decision: 'cancel',
+      reason: 'rejected',
+      message: 'Tool execution denied by user: load_skill.',
     });
   });
 
@@ -286,7 +406,10 @@ describe('turn executor tool approval', () => {
       io,
     });
 
-    await expect(approve(options, loadSkillRequest)).resolves.toMatchObject({ approved: false });
+    await expect(approve(options, loadSkillRequest)).resolves.toMatchObject({
+      decision: 'cancel',
+      reason: 'rejected',
+    });
   });
 
   it('re-asks on an unrecognized answer', async () => {
@@ -298,7 +421,7 @@ describe('turn executor tool approval', () => {
       io,
     });
 
-    await expect(approve(options, loadSkillRequest)).resolves.toEqual({ approved: true });
+    await expect(approve(options, loadSkillRequest)).resolves.toEqual({ decision: 'approve' });
     expect(asked).toHaveLength(2);
   });
 
@@ -311,8 +434,9 @@ describe('turn executor tool approval', () => {
     });
 
     await expect(approve(options, loadSkillRequest)).resolves.toEqual({
-      approved: false,
-      reason: 'Tool execution denied: interactive approval is unavailable for load_skill.',
+      decision: 'cancel',
+      reason: 'dismissed',
+      message: 'Tool execution denied: interactive approval is unavailable for load_skill.',
     });
   });
 
@@ -325,7 +449,7 @@ describe('turn executor tool approval', () => {
       io,
     });
 
-    await expect(approve(options, loadSkillRequest)).resolves.toEqual({ approved: true });
+    await expect(approve(options, loadSkillRequest)).resolves.toEqual({ decision: 'approve' });
     expect(asked).toHaveLength(0);
   });
 
@@ -339,10 +463,10 @@ describe('turn executor tool approval', () => {
     });
 
     await expect(approve(options, {
-      toolCall: { id: 'tool-2', function: { name: 'ask_user_question', arguments: '{}' } },
-      toolName: 'ask_user_question',
+      toolCall: { id: 'tool-2', function: { name: 'ask_user_input', arguments: '{}' } },
+      toolName: 'ask_user_input',
       parsedArguments: {},
-    })).resolves.toEqual({ approved: true });
+    })).resolves.toEqual({ decision: 'approve' });
     expect(asked).toHaveLength(0);
   });
 });

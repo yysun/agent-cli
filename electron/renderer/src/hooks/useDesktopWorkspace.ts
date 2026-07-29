@@ -10,6 +10,7 @@
  * - Keeps local-only UI settings together with the IPC-backed workspace state.
  *
  * Recent changes:
+ * - 2026-07-28: Reloaded and labeled terminal runtime cancellations separately from failures.
  * - 2026-07-27: Surfaced failed turns as an error log entry and reloaded the persisted transcript.
  * - 2026-07-27: Added tool-approval prompt state and blocked workspace/chat switches during a turn.
  * - 2026-07-27: Initialized tool-permission and reasoning controls from workspace runtime configuration.
@@ -24,6 +25,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { THEME_STORAGE_KEY } from '../constants/storage';
 import { accumulateTurnEvents, appendTurnEvent } from '../features/chat/transcript-events';
+import { resolveRendererTurnOutcome } from '../features/chat/turn-outcome';
 import type {
   AgentCliDesktopApi,
   AgentCliDesktopChatSummary,
@@ -357,7 +359,11 @@ export function useDesktopWorkspace() {
       setPendingToolApprovalRequest(null);
       clearEdit();
       await refreshChats();
-      log('info', wasEditing ? 'Edited message resent.' : 'Message sent.');
+      const outcome = resolveRendererTurnOutcome(response, wasEditing);
+      if (outcome.reloadTranscript && response.chatId) {
+        await loadMessages(response.chatId);
+      }
+      log('info', outcome.message);
     }).catch(async (error) => {
       // A failed turn still persists the work that completed, so reload from
       // storage instead of leaving the transcript showing pre-send state.
@@ -416,7 +422,7 @@ export function useDesktopWorkspace() {
     }
 
     setPendingToolApprovalRequest(null);
-    log('info', answer.approved ? 'Tool approved.' : 'Tool denied.');
+    log('info', answer.decision === 'approve' ? 'Tool approved.' : 'Tool denied.');
   }, [desktopApi, log]);
 
   useEffect(() => {

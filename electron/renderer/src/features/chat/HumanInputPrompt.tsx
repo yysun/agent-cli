@@ -9,6 +9,7 @@
  * - Returns the same structured answer artifact shape used by the CLI human-input UI.
  *
  * Recent changes:
+ * - 2026-07-28: Adopted `allowOther` and canonical answered/cancelled outcomes.
  * - 2026-06-03: Reused deterministic answer helpers and radio semantics for single-select prompts.
  * - 2026-06-03: Added in-chat prompt handling for Electron runtime turns.
  */
@@ -19,7 +20,7 @@ import type {
   AgentCliDesktopHumanInputRequest,
 } from '../../types/desktop-api';
 import {
-  allowsFreeformInput,
+  allowsOtherInput,
   buildCancelledHumanInputAnswer,
   buildHumanInputAnswer,
 } from './human-input-selection';
@@ -143,7 +144,7 @@ export default function HumanInputPrompt({ request, onSubmitAnswer }: HumanInput
                   })}
                 </div>
               ) : null}
-              {allowsFreeformInput(question) ? (
+              {allowsOtherInput(question) ? (
                 <Input
                   aria-label={`Freeform answer for ${question.question}`}
                   placeholder={question.options.length ? 'Custom answer' : 'Type your answer'}

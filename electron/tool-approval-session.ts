@@ -10,8 +10,10 @@
  * - Leaves host-owned human-input tools ungated so they produce one prompt, not two.
  *
  * Recent changes:
+ * - 2026-07-28: Migrated Electron approval sessions to explicit 0.7 decisions.
  * - 2026-07-27: Added the Electron approval session so `ask` tool permission actually prompts.
  */
+import type { LLMRuntimeToolApprovalResponse } from 'llm-runtime';
 import { isHumanInputToolName } from '../cli/src/human-input-ui.js';
 import {
   PendingRequestSessionManager,
@@ -25,11 +27,7 @@ export type PendingToolApprovalRequest = {
   argumentsSummary: string;
 };
 
-export type ToolApprovalAnswer = {
-  requestId: string;
-  approved: boolean;
-  reason?: string;
-};
+export type ToolApprovalAnswer = { requestId: string } & LLMRuntimeToolApprovalResponse;
 
 export type ToolApprovalRenderer = PendingRequestRenderer<PendingToolApprovalRequest>;
 
@@ -43,32 +41,59 @@ const MAX_ARGUMENTS_SUMMARY_WIDTH = 400;
 const RENDERER_UNAVAILABLE_MESSAGE = 'Electron renderer is unavailable for tool approval.';
 const TIMEOUT_MESSAGE = 'Timed out waiting for tool approval.';
 
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key));
+}
+
 export function normalizeToolApprovalAnswer(value: unknown): ToolApprovalAnswer | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
 
-  const answer = value as Partial<ToolApprovalAnswer>;
+  const answer = value as Record<string, unknown>;
   const requestId = String(answer.requestId ?? '').trim();
-  if (!requestId) {
+  if (!requestId || (answer.decision !== 'approve' && answer.decision !== 'cancel')) {
+    return null;
+  }
+
+  if (answer.decision === 'approve') {
+    if (!hasOnlyKeys(answer, ['requestId', 'decision'])) {
+      return null;
+    }
+    return { requestId, decision: 'approve' };
+  }
+  if (
+    (
+      answer.reason !== 'rejected'
+      && answer.reason !== 'dismissed'
+      && answer.reason !== 'timeout'
+    )
+    || !hasOnlyKeys(answer, ['requestId', 'decision', 'reason', 'message'])
+  ) {
     return null;
   }
 
   return {
     requestId,
-    approved: answer.approved === true,
-    ...(typeof answer.reason === 'string' && answer.reason.trim() ? { reason: answer.reason } : {}),
+    decision: 'cancel',
+    reason: answer.reason,
+    ...(typeof answer.message === 'string' && answer.message.trim()
+      ? { message: answer.message }
+      : {}),
   };
 }
 
 export function deniedToolApprovalAnswer(
   request: PendingToolApprovalRequest,
   message: string,
+  fallbackReason: 'unavailable' | 'timeout',
 ): ToolApprovalAnswer {
   return {
     requestId: request.requestId,
-    approved: false,
-    reason: message,
+    decision: 'cancel',
+    reason: fallbackReason === 'timeout' ? 'timeout' : 'dismissed',
+    message,
   };
 }
 
@@ -123,7 +148,7 @@ export class ToolApprovalSessionManager {
         // Handled by the main-process `handleToolCall` hook, which renders its
         // own prompt. Gating here would ask the user twice for one interaction.
         if (isHumanInputToolName(toolName)) {
-          return { approved: true };
+          return { decision: 'approve' } satisfies LLMRuntimeToolApprovalResponse;
         }
 
         const answer = await this.sessions.request(renderer, {
@@ -133,14 +158,8 @@ export class ToolApprovalSessionManager {
           argumentsSummary: summarizeToolApprovalArguments(request?.arguments),
         });
 
-        if (answer.approved) {
-          return { approved: true };
-        }
-
-        return {
-          approved: false,
-          reason: answer.reason || `Tool execution denied by user: ${toolName}.`,
-        };
+        const { requestId: _requestId, ...decision } = answer;
+        return decision;
       },
     };
   }

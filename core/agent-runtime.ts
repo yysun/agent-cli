@@ -11,6 +11,7 @@
  * - Keeps the system prompt outside persisted chats while preserving conversation and tool messages.
  *
  * Recent changes:
+ * - 2026-07-28: Migrated approval and human-input cancellation to `llm-runtime` 0.7.0.
  * - 2026-07-27: Added `selectPersistableMessages` so a rejected turn can be saved without orphaned tool calls.
  * - 2026-06-10: Added a shared host guard so unresolved tool-call results cannot be persisted as completed turns.
  * - 2026-06-04: Allowed hosts to pass filtered runtime skill roots so prompt inventory and `load_skill` stay aligned.
@@ -33,18 +34,24 @@
  */
 import {
   complete,
+  createAskUserInputResult,
   createRuntime,
+  normalizeAskUserInputOutcome,
   streamComplete,
 } from 'llm-runtime';
 import type {
+  AskUserInputCancellationReason,
   LLMChatMessage,
   LLMEnvironmentOptions,
   LLMProviderConfigs,
   LLMProviderName,
   LLMRuntimeCompleteOptions,
+  LLMRuntimeToolApprovalResponse,
   LLMToolExecutionContext,
+  PendingHumanInput,
   ProviderConfig,
   ReasoningEffort,
+  RuntimeToolApprovalCancellation,
   ToolPermission,
 } from 'llm-runtime';
 
@@ -68,10 +75,47 @@ type RuntimeSettings = {
   providers: LLMProviderConfigs;
 };
 
-type RuntimeToolHandlerResult = {
-  handled: boolean;
-  result?: unknown;
+type RuntimeToolHandlerResult =
+  | { handled: false }
+  | { handled: true; result: unknown };
+
+export type HumanInputCancellation = {
+  kind: 'human_input';
+  reason: AskUserInputCancellationReason;
+  toolCallId: string;
+  toolName: string;
+  message?: string;
 };
+
+export type ChatTurnCancellation =
+  | RuntimeToolApprovalCancellation
+  | HumanInputCancellation;
+
+type ChatTurnBase = {
+  messages: any[];
+};
+
+export type CompletedChatTurn = ChatTurnBase & {
+  status: 'completed';
+  assistantText: string;
+};
+
+export type PendingChatTurn = ChatTurnBase & {
+  status: 'tool_calls';
+  toolCalls: any[];
+  assistantText: string;
+};
+
+export type CancelledChatTurn = ChatTurnBase & {
+  status: 'cancelled';
+  assistantText: '';
+  cancellation: ChatTurnCancellation;
+};
+
+export type ChatTurnResult =
+  | CompletedChatTurn
+  | PendingChatTurn
+  | CancelledChatTurn;
 
 type RuntimeToolCallHandler = (request: {
   toolCall: any;
@@ -112,7 +156,11 @@ type RunChatTurnParams = {
   skillInventory: Array<{ skillId: string; description?: string }>;
   runtimeSkillRoots?: string[];
   agentConfig?: RuntimeAgentConfig;
-  approvalGate?: { requestApproval?: (request: Record<string, unknown>) => Promise<{ approved?: boolean; reason?: string }> };
+  approvalGate?: {
+    requestApproval?: (
+      request: Record<string, unknown>,
+    ) => Promise<LLMRuntimeToolApprovalResponse> | LLMRuntimeToolApprovalResponse;
+  };
   abortSignal?: AbortSignal;
 };
 
@@ -337,6 +385,7 @@ function buildBaseSystemMessages(builtInSystemPrompt, workspaceSystemPrompt, ski
 }
 
 const RUNTIME_CONTROL_TOOL_NAMES = new Set(['final_answer', 'need_user_input', 'blocked']);
+const RUNTIME_HUMAN_INPUT_TOOL_NAME = 'ask_user_input';
 const REJECTED_TEXT_RESPONSE_PREFIX = 'Assistant response did not complete the task with required evidence:';
 
 /**
@@ -636,7 +685,7 @@ export async function runChatTurn({
   approvalGate,
   agentConfig,
   abortSignal,
-}: RunChatTurnParams) {
+}: RunChatTurnParams): Promise<ChatTurnResult> {
   const runtimeAgentConfig: RuntimeAgentConfig = agentConfig ?? {};
   const runtimeSettings = validateRuntimeEnvironment(process.env, runtimeAgentConfig);
   const environmentDefaults = buildEnvironmentDefaults(runtimeAgentConfig);
@@ -670,6 +719,7 @@ export async function runChatTurn({
     let streamedAssistantText = '';
     let fallbackRejectedText = '';
     let failureError: string | null = null;
+    let turnCancellation: ChatTurnCancellation | null = null;
     let pendingToolCalls: any[] = [];
 
     const completionOptions: LLMRuntimeCompleteOptions = {
@@ -683,21 +733,21 @@ export async function runChatTurn({
       ...(typeof runtimeAgentConfig.maxToolTurns === 'number' ? { maxConsecutiveToolTurns: runtimeAgentConfig.maxToolTurns } : {}),
       ...(runtimeAgentConfig.webSearch !== undefined ? { webSearch: runtimeAgentConfig.webSearch } : {}),
       onToolApproval: async ({ toolCall, toolName, parsedArguments }) => {
-        if (executionContext.toolPermission !== 'ask' || typeof approvalGate?.requestApproval !== 'function') {
-          return { approved: true };
+        if (executionContext.toolPermission !== 'ask') {
+          return { decision: 'approve' };
         }
-        const decision = await approvalGate.requestApproval({
+        if (typeof approvalGate?.requestApproval !== 'function') {
+          return {
+            decision: 'cancel',
+            reason: 'dismissed',
+            message: `Tool execution denied: approval is unavailable for ${toolName}.`,
+          };
+        }
+        return approvalGate.requestApproval({
           toolCallId: toolCall.id,
           toolName,
           arguments: parsedArguments,
         });
-        if (decision?.approved) {
-          return { approved: true };
-        }
-        return {
-          approved: false,
-          reason: decision?.reason || `Tool execution rejected: ${toolName}`,
-        };
       },
       ...(typeof handleToolCall === 'function'
         ? {
@@ -719,10 +769,9 @@ export async function runChatTurn({
               context,
               executeDefault,
             });
-            return {
-              handled: Boolean(handlerResult?.handled),
-              result: handlerResult?.result,
-            };
+            return handlerResult?.handled
+              ? { handled: true, result: handlerResult.result }
+              : { handled: false };
           },
         }
         : {}),
@@ -769,6 +818,51 @@ export async function runChatTurn({
             message: `Tool "${toolName}" is host-owned and has no default executor.`,
           }),
         });
+
+        if (toolName === RUNTIME_HUMAN_INPUT_TOOL_NAME) {
+          const pendingHumanInput: PendingHumanInput = {
+            toolCallId: toolCall.id,
+            toolName,
+            request: parsedArguments,
+          };
+          const outcome = handlerResult?.handled
+            ? normalizeAskUserInputOutcome(pendingHumanInput, handlerResult.result)
+            : {
+              status: 'cancelled' as const,
+              reason: 'invalid' as const,
+              message: 'ask_user_input request was invalid or could not be rendered.',
+            };
+
+          if (outcome.status === 'cancelled') {
+            turnCancellation = {
+              kind: 'human_input',
+              reason: outcome.reason,
+              toolCallId: toolCall.id,
+              toolName,
+              ...(outcome.message ? { message: outcome.message } : {}),
+            };
+            return false;
+          }
+
+          const toolMessage = createAskUserInputResult(pendingHumanInput, outcome);
+          toolMessages.push(toolMessage);
+
+          if (typeof onToolResult === 'function') {
+            onToolResult({
+              id: toolCall.id,
+              name: toolName,
+              result: outcome,
+              arguments: toolCall.function?.arguments,
+              durationMs: Date.now() - startedAt,
+            });
+          }
+
+          persistedMessages.push({
+            ...toolMessage,
+            createdAt: new Date().toISOString(),
+          });
+          continue;
+        }
 
         if (!handlerResult?.handled) {
           return false;
@@ -821,6 +915,12 @@ export async function runChatTurn({
           }
         } else if (completionResult.status === 'tool_calls') {
           pendingToolCalls = completionResult.toolCalls ?? [];
+        } else if (completionResult.status === 'cancelled') {
+          if (completionResult.cancellation) {
+            turnCancellation = completionResult.cancellation;
+          } else {
+            failureError = 'LLM turn was cancelled without cancellation metadata.';
+          }
         } else if (completionResult.status === 'completed' && typeof completionResult.output === 'string') {
           finalText = completionResult.output;
         } else {
@@ -951,6 +1051,14 @@ export async function runChatTurn({
               }
               break;
             }
+            case 'cancelled':
+              emitModelResponse(onModelResponse, event.result.raw, undefined);
+              if (event.result.cancellation) {
+                turnCancellation = event.result.cancellation;
+              } else {
+                failureError = 'LLM turn was cancelled without cancellation metadata.';
+              }
+              break;
             case 'failed':
               emitModelResponse(onModelResponse, event.result.raw, undefined);
               {
@@ -968,7 +1076,7 @@ export async function runChatTurn({
         }
       }
 
-      if (failureError || pendingToolCalls.length === 0) {
+      if (failureError || turnCancellation || pendingToolCalls.length === 0) {
         break;
       }
 
@@ -977,7 +1085,7 @@ export async function runChatTurn({
       }
     }
 
-    if (!finalText.trim() && fallbackRejectedText) {
+    if (!turnCancellation && !finalText.trim() && fallbackRejectedText) {
       finalText = fallbackRejectedText;
       if (typeof onStreamChunk === 'function' && !streamedAssistantText) {
         streamedAssistantText = fallbackRejectedText;
@@ -992,6 +1100,15 @@ export async function runChatTurn({
 
     if (failureError) {
       throw new Error(failureError);
+    }
+
+    if (turnCancellation) {
+      return {
+        status: 'cancelled',
+        cancellation: turnCancellation,
+        assistantText: '',
+        messages: persistedMessages,
+      };
     }
 
     if (pendingToolCalls.length > 0) {

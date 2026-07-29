@@ -9,6 +9,7 @@
  * - Covers single-select, multiple-select, freeform, required-answer, skip, and cancel payloads.
  *
  * Recent changes:
+ * - 2026-07-28: Covered canonical 0.7 answers, `allowOther`, skip, and dismissal.
  * - 2026-06-03: Added coverage for Electron prompt answer construction.
  */
 import { describe, expect, it } from 'vitest';
@@ -57,17 +58,9 @@ describe('human-input-selection helpers', () => {
     expect(result).toEqual({
       ok: true,
       answer: {
-        ok: true,
-        status: 'answered',
         requestId: 'request-1',
-        selections: [
-          {
-            questionId: 'question-1',
-            questionText: 'Choose one.',
-            skipped: false,
-            selectedOptions: [{ id: 'a', label: 'A' }],
-          },
-        ],
+        status: 'answered',
+        answers: { 'question-1': 'a' },
       },
     });
   });
@@ -83,32 +76,30 @@ describe('human-input-selection helpers', () => {
       ok: true,
       answer: expect.objectContaining({
         status: 'answered',
-        selections: [
-          expect.objectContaining({
-            selectedOptions: [
-              { id: 'a', label: 'A' },
-              { id: 'b', label: 'B' },
-            ],
-          }),
-        ],
+        answers: { 'question-1': ['a', 'b'] },
       }),
     }));
   });
 
   it('builds freeform answers and rejects required unanswered prompts', () => {
-    expect(buildHumanInputAnswer(createRequest(), emptyState({
+    expect(buildHumanInputAnswer(createRequest({
+      questions: [
+        {
+          header: 'Input',
+          id: 'question-1',
+          question: 'Choose one.',
+          options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+          allowOther: true,
+        },
+      ],
+    }), emptyState({
       freeformTextByQuestion: {
         'question-1': 'Use the custom path',
       },
     }))).toEqual(expect.objectContaining({
       ok: true,
       answer: expect.objectContaining({
-        selections: [
-          expect.objectContaining({
-            selectedOptions: [],
-            enteredText: 'Use the custom path',
-          }),
-        ],
+        answers: { 'question-1': 'Use the custom path' },
       }),
     }));
 
@@ -118,8 +109,7 @@ describe('human-input-selection helpers', () => {
           header: 'Input',
           id: 'question-1',
           question: 'Choose one.',
-          options: [{ id: 'a', label: 'A' }],
-          allowFreeformInput: false,
+          options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
         },
       ],
     }), emptyState())).toEqual({
@@ -134,25 +124,17 @@ describe('human-input-selection helpers', () => {
     expect(buildHumanInputAnswer(request, emptyState(), true)).toEqual({
       ok: true,
       answer: {
-        ok: true,
-        status: 'skipped',
         requestId: 'request-1',
-        selections: [
-          {
-            questionId: 'question-1',
-            questionText: 'Choose one.',
-            skipped: true,
-            selectedOptions: [],
-          },
-        ],
+        status: 'cancelled',
+        reason: 'skipped',
+        message: 'User skipped input.',
       },
     });
 
     expect(buildCancelledHumanInputAnswer(request)).toEqual({
-      ok: false,
-      status: 'cancelled',
       requestId: 'request-1',
-      selections: [],
+      status: 'cancelled',
+      reason: 'dismissed',
       message: 'User cancelled input.',
     });
   });

@@ -11,6 +11,7 @@
  * - Avoids exposing Node.js or Electron primitives directly to web code.
  *
  * Recent changes:
+ * - 2026-07-28: Exposed explicit 0.7 turn, approval, and human-input outcomes.
  * - 2026-07-27: Exposed the tool-approval request subscription and answer bridge.
  * - 2026-07-27: Dropped renderer-supplied chat history from the runtime turn request.
  * - 2026-06-04: Exposed a current-turn runtime event subscription for Electron verbose mode.
@@ -68,13 +69,30 @@ export type AgentCliDesktopRunTurnRequest = {
 export type AgentCliDesktopRunTurnResponse = {
   chatId: string;
   workspaceRoot: string;
+  status: 'completed' | 'tool_calls' | 'cancelled';
   assistantText: string;
+  cancellation?: AgentCliDesktopCancellation;
   messages: AgentCliDesktopRuntimeMessage[];
   streamChunks: Array<Record<string, unknown>>;
   toolCalls: Array<Record<string, unknown>>;
   toolResults: Array<Record<string, unknown>>;
   turnEvents: AgentCliDesktopTurnEvent[];
 };
+
+export type AgentCliDesktopCancellation =
+  | {
+    kind: 'tool_approval';
+    reason: 'approval_rejected' | 'approval_dismissed' | 'approval_timeout' | 'approval_invalid' | 'approval_callback_error';
+    toolCall: Record<string, unknown>;
+    message?: string;
+  }
+  | {
+    kind: 'human_input';
+    reason: 'rejected' | 'skipped' | 'dismissed' | 'timeout' | 'invalid';
+    toolCallId: string;
+    toolName: string;
+    message?: string;
+  };
 
 export type AgentCliDesktopTurnEvent = {
   type: 'reasoning' | 'warning' | 'error' | 'model_response' | 'tool_call' | 'tool_result';
@@ -120,11 +138,14 @@ export type AgentCliDesktopToolApprovalRequest = {
   argumentsSummary: string;
 };
 
-export type AgentCliDesktopToolApprovalAnswer = {
-  requestId: string;
-  approved: boolean;
-  reason?: string;
-};
+export type AgentCliDesktopToolApprovalAnswer = { requestId: string } & (
+  | { decision: 'approve' }
+  | {
+    decision: 'cancel';
+    reason: 'rejected' | 'dismissed' | 'timeout';
+    message?: string;
+  }
+);
 
 export type AgentCliDesktopSkillSummary = {
   skillId: string;
@@ -155,7 +176,7 @@ export type AgentCliDesktopHumanInputQuestion = {
   id: string;
   question: string;
   options: AgentCliDesktopHumanInputOption[];
-  allowFreeformInput?: boolean;
+  allowOther?: boolean;
 };
 
 export type AgentCliDesktopHumanInputRequest = {
@@ -166,21 +187,17 @@ export type AgentCliDesktopHumanInputRequest = {
   questions: AgentCliDesktopHumanInputQuestion[];
 };
 
-export type AgentCliDesktopHumanInputSelection = {
-  questionId: string;
-  questionText?: string;
-  skipped: boolean;
-  selectedOptions: AgentCliDesktopHumanInputOption[];
-  enteredText?: string;
-};
-
-export type AgentCliDesktopHumanInputAnswer = {
-  ok: boolean;
-  status: 'answered' | 'skipped' | 'cancelled' | 'unavailable';
-  requestId: string;
-  selections: AgentCliDesktopHumanInputSelection[];
-  message?: string;
-};
+export type AgentCliDesktopHumanInputAnswer = { requestId: string } & (
+  | {
+    status: 'answered';
+    answers: Record<string, string | string[]>;
+  }
+  | {
+    status: 'cancelled';
+    reason: 'rejected' | 'skipped' | 'dismissed' | 'timeout';
+    message?: string;
+  }
+);
 
 export type AgentCliDesktopWorkspaceResponse = {
   canceled?: boolean;

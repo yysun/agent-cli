@@ -10,6 +10,7 @@
  * - Resolves a caller-supplied fallback answer for absent, destroyed, failing, and timed-out renderers.
  *
  * Recent changes:
+ * - 2026-07-28: Distinguished unavailable-renderer fallbacks from host timeouts.
  * - 2026-07-27: Extracted from `human-input-session.ts` so tool approval reuses one lifecycle.
  */
 import { randomUUID } from 'node:crypto';
@@ -32,7 +33,11 @@ export type PendingRequestSessionOptions<
   timeoutMs: number;
   createRequestId?: () => string;
   normalizeAnswer: (value: unknown) => TAnswer | null;
-  buildFallbackAnswer: (request: TRequest, message: string) => TAnswer;
+  buildFallbackAnswer: (
+    request: TRequest,
+    message: string,
+    reason: 'unavailable' | 'timeout',
+  ) => TAnswer;
   rendererUnavailableMessage: string;
   timeoutMessage: string;
 };
@@ -78,7 +83,7 @@ export class PendingRequestSessionManager<
 
     if (!renderer || renderer.isDestroyed()) {
       return Promise.resolve(
-        this.options.buildFallbackAnswer(rendererRequest, this.options.rendererUnavailableMessage),
+        this.options.buildFallbackAnswer(rendererRequest, this.options.rendererUnavailableMessage, 'unavailable'),
       );
     }
 
@@ -87,7 +92,7 @@ export class PendingRequestSessionManager<
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingAnswers.delete(requestId);
-        resolve(this.options.buildFallbackAnswer(rendererRequest, this.options.timeoutMessage));
+        resolve(this.options.buildFallbackAnswer(rendererRequest, this.options.timeoutMessage, 'timeout'));
       }, this.options.timeoutMs);
 
       this.pendingAnswers.set(requestId, { resolve, timeout });
@@ -98,7 +103,7 @@ export class PendingRequestSessionManager<
         clearTimeout(timeout);
         this.pendingAnswers.delete(requestId);
         resolve(
-          this.options.buildFallbackAnswer(rendererRequest, this.options.rendererUnavailableMessage),
+          this.options.buildFallbackAnswer(rendererRequest, this.options.rendererUnavailableMessage, 'unavailable'),
         );
       }
     });
